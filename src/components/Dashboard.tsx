@@ -3,11 +3,10 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { MessageSquare, FileText, User, Send, Upload, Download, Search } from 'lucide-react';
+import { MessageSquare, FileText, User, Send, Upload, Download, Search, Bell, Settings } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 interface Message {
@@ -148,63 +147,96 @@ const Dashboard = () => {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">WealthLink Portal</h1>
-            <p className="text-gray-600 mt-1">Streamlined client relationship management</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <Badge variant={userRole === 'advisor' ? 'default' : 'secondary'}>
-              {userRole === 'advisor' ? 'Advisor' : 'Client'} View
-            </Badge>
-            <Button
-              variant="outline"
-              onClick={() => setUserRole(userRole === 'advisor' ? 'client' : 'advisor')}
-            >
-              Switch to {userRole === 'advisor' ? 'Client' : 'Advisor'}
-            </Button>
+    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-sky-100">
+      {/* Header */}
+      <header className="bg-white border-b border-sky-100 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-sky-600 rounded-lg flex items-center justify-center">
+                <FileText className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-slate-900">WealthLink Portal</h1>
+                <p className="text-sm text-slate-600">Professional Client Management</p>
+              </div>
+            </div>
+            
+            <div className="flex items-center space-x-4">
+              <Button variant="ghost" size="sm" className="text-slate-600 hover:text-sky-600">
+                <Bell className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="sm" className="text-slate-600 hover:text-sky-600">
+                <Settings className="h-4 w-4" />
+              </Button>
+              <Badge 
+                variant={userRole === 'advisor' ? 'default' : 'secondary'}
+                className={userRole === 'advisor' ? 'bg-sky-600 hover:bg-sky-700' : 'bg-slate-100 text-slate-700'}
+              >
+                {userRole === 'advisor' ? 'Financial Advisor' : 'Client'}
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setUserRole(userRole === 'advisor' ? 'client' : 'advisor')}
+                className="border-sky-200 text-sky-700 hover:bg-sky-50"
+              >
+                Switch Role
+              </Button>
+            </div>
           </div>
         </div>
+      </header>
 
-        {/* Main Dashboard */}
-        <Tabs defaultValue="communications" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3 bg-white border shadow-sm">
-            <TabsTrigger value="communications" className="flex items-center gap-2">
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <Tabs defaultValue="communications" className="space-y-8">
+          <TabsList className="grid w-full grid-cols-3 bg-white border border-sky-100 shadow-sm h-12">
+            <TabsTrigger 
+              value="communications" 
+              className="flex items-center gap-2 data-[state=active]:bg-sky-50 data-[state=active]:text-sky-700 data-[state=active]:border-sky-200"
+            >
               <MessageSquare className="h-4 w-4" />
               Communications
             </TabsTrigger>
-            <TabsTrigger value="documents" className="flex items-center gap-2">
+            <TabsTrigger 
+              value="documents" 
+              className="flex items-center gap-2 data-[state=active]:bg-sky-50 data-[state=active]:text-sky-700 data-[state=active]:border-sky-200"
+            >
               <FileText className="h-4 w-4" />
-              Documents
+              Document Center
             </TabsTrigger>
-            <TabsTrigger value="updates" className="flex items-center gap-2">
+            <TabsTrigger 
+              value="updates" 
+              className="flex items-center gap-2 data-[state=active]:bg-sky-50 data-[state=active]:text-sky-700 data-[state=active]:border-sky-200"
+            >
               <User className="h-4 w-4" />
-              Client Updates
+              Activity Feed
             </TabsTrigger>
           </TabsList>
 
           {/* Communications Tab */}
           <TabsContent value="communications" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Messages</CardTitle>
+            <Card className="border-sky-100 shadow-lg">
+              <CardHeader className="bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
+                <CardTitle className="text-slate-800 flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5 text-sky-600" />
+                  Secure Messaging
+                </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-4 max-h-96 overflow-y-auto mb-4">
+              <CardContent className="p-6">
+                <div className="space-y-4 max-h-96 overflow-y-auto mb-6 bg-slate-50 rounded-lg p-4">
                   {messages.map((message) => (
                     <div key={message.id} className={`flex gap-3 ${message.role === userRole ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-md p-3 rounded-lg ${
+                      <div className={`max-w-md p-4 rounded-lg shadow-sm ${
                         message.role === userRole 
-                          ? 'bg-blue-500 text-white' 
-                          : 'bg-gray-100 text-gray-900'
+                          ? 'bg-gradient-to-r from-sky-500 to-sky-600 text-white' 
+                          : 'bg-white text-slate-900 border border-sky-100'
                       }`}>
-                        <div className="font-medium text-sm mb-1">{message.sender}</div>
-                        <p className="text-sm">{message.content}</p>
+                        <div className="font-medium text-sm mb-2">{message.sender}</div>
+                        <p className="text-sm leading-relaxed">{message.content}</p>
                         <div className={`text-xs mt-2 ${
-                          message.role === userRole ? 'text-blue-100' : 'text-gray-500'
+                          message.role === userRole ? 'text-sky-100' : 'text-slate-500'
                         }`}>
                           {message.timestamp.toLocaleString()}
                         </div>
@@ -213,16 +245,18 @@ const Dashboard = () => {
                   ))}
                 </div>
                 
-                {/* Message Input */}
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <Textarea
-                    placeholder="Type your message..."
+                    placeholder="Type your secure message..."
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    className="flex-1"
-                    rows={2}
+                    className="flex-1 border-sky-200 focus:border-sky-400 focus:ring-sky-400"
+                    rows={3}
                   />
-                  <Button onClick={handleSendMessage} className="bg-blue-500 hover:bg-blue-600">
+                  <Button 
+                    onClick={handleSendMessage} 
+                    className="bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 shadow-lg"
+                  >
                     <Send className="h-4 w-4" />
                   </Button>
                 </div>
@@ -232,28 +266,32 @@ const Dashboard = () => {
 
           {/* Documents Tab */}
           <TabsContent value="documents" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <span>Document Management</span>
-                  <div className="flex gap-2">
-                    <div className="relative">
-                      <Search className="h-4 w-4 absolute left-3 top-3 text-gray-400" />
-                      <Input
-                        placeholder="Search documents..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-10 w-64"
-                      />
-                    </div>
+            <Card className="border-sky-100 shadow-lg">
+              <CardHeader className="bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
+                <CardTitle className="flex items-center justify-between text-slate-800">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-sky-600" />
+                    Document Management Center
+                  </div>
+                  <div className="relative">
+                    <Search className="h-4 w-4 absolute left-3 top-3 text-slate-400" />
+                    <Input
+                      placeholder="Search documents..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="pl-10 w-64 border-sky-200 focus:border-sky-400"
+                    />
                   </div>
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-6">
                 {/* Upload Area */}
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center mb-6 hover:border-blue-400 transition-colors">
-                  <Upload className="h-8 w-8 mx-auto text-gray-400 mb-2" />
-                  <p className="text-gray-600">Drag and drop files here, or</p>
+                <div className="border-2 border-dashed border-sky-300 rounded-lg p-8 text-center mb-8 bg-gradient-to-br from-sky-25 to-white hover:border-sky-400 transition-all duration-200">
+                  <div className="w-16 h-16 bg-sky-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Upload className="h-8 w-8 text-sky-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-slate-800 mb-2">Secure Document Upload</h3>
+                  <p className="text-slate-600 mb-4">Drag and drop your files here, or click to browse</p>
                   <label className="cursor-pointer">
                     <input
                       type="file"
@@ -261,28 +299,35 @@ const Dashboard = () => {
                       multiple
                       onChange={handleFileUpload}
                     />
-                    <Button variant="outline" className="mt-2">Browse Files</Button>
+                    <Button variant="outline" className="border-sky-300 text-sky-700 hover:bg-sky-50">
+                      Choose Files
+                    </Button>
                   </label>
                 </div>
 
                 {/* Documents List */}
                 <div className="space-y-3">
                   {filteredDocuments.map((doc) => (
-                    <div key={doc.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                          <FileText className="h-5 w-5 text-blue-500" />
+                    <div key={doc.id} className="flex items-center justify-between p-4 border border-sky-100 rounded-lg hover:bg-sky-25 transition-colors bg-white shadow-sm">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-gradient-to-br from-sky-100 to-sky-200 rounded-lg flex items-center justify-center">
+                          <FileText className="h-6 w-6 text-sky-600" />
                         </div>
                         <div>
-                          <h4 className="font-medium">{doc.name}</h4>
-                          <p className="text-sm text-gray-500">
+                          <h4 className="font-semibold text-slate-800">{doc.name}</h4>
+                          <p className="text-sm text-slate-600">
                             {doc.folder} • {doc.size} • Uploaded by {doc.uploadedBy}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {doc.uploadedAt.toLocaleDateString()}
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{doc.folder}</Badge>
-                        <Button variant="ghost" size="sm">
+                      <div className="flex items-center gap-3">
+                        <Badge variant="outline" className="border-sky-200 text-sky-700 bg-sky-50">
+                          {doc.folder}
+                        </Badge>
+                        <Button variant="ghost" size="sm" className="text-sky-600 hover:text-sky-700 hover:bg-sky-50">
                           <Download className="h-4 w-4" />
                         </Button>
                       </div>
@@ -295,25 +340,28 @@ const Dashboard = () => {
 
           {/* Client Updates Tab */}
           <TabsContent value="updates" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Activity</CardTitle>
+            <Card className="border-sky-100 shadow-lg">
+              <CardHeader className="bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
+                <CardTitle className="text-slate-800 flex items-center gap-2">
+                  <User className="h-5 w-5 text-sky-600" />
+                  Recent Activity & Updates
+                </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-6">
                 <div className="space-y-4">
                   {activities.map((activity) => (
-                    <div key={activity.id} className="flex items-start gap-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        activity.type === 'message' ? 'bg-blue-100' :
-                        activity.type === 'document' ? 'bg-green-100' : 'bg-purple-100'
+                    <div key={activity.id} className="flex items-start gap-4 p-4 rounded-lg hover:bg-sky-25 transition-colors border border-sky-50 bg-white shadow-sm">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                        activity.type === 'message' ? 'bg-sky-100' :
+                        activity.type === 'document' ? 'bg-emerald-100' : 'bg-violet-100'
                       }`}>
-                        {activity.type === 'message' && <MessageSquare className="h-4 w-4 text-blue-500" />}
-                        {activity.type === 'document' && <FileText className="h-4 w-4 text-green-500" />}
-                        {activity.type === 'update' && <User className="h-4 w-4 text-purple-500" />}
+                        {activity.type === 'message' && <MessageSquare className="h-5 w-5 text-sky-600" />}
+                        {activity.type === 'document' && <FileText className="h-5 w-5 text-emerald-600" />}
+                        {activity.type === 'update' && <User className="h-5 w-5 text-violet-600" />}
                       </div>
                       <div className="flex-1">
-                        <p className="text-sm">{activity.description}</p>
-                        <p className="text-xs text-gray-500 mt-1">
+                        <p className="font-medium text-slate-800">{activity.description}</p>
+                        <p className="text-sm text-slate-600 mt-1">
                           {activity.timestamp.toLocaleString()} • {activity.user}
                         </p>
                       </div>
