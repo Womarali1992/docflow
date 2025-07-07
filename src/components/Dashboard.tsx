@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -144,31 +145,31 @@ const Dashboard = () => {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-sky-100">
+    <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="bg-white border-b border-sky-100 shadow-sm">
+      <header className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
-              <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-sky-600 rounded-lg flex items-center justify-center">
+              <div className="w-10 h-10 bg-slate-600 rounded-md flex items-center justify-center">
                 <FileText className="h-6 w-6 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-slate-900">WealthLink Portal</h1>
-                <p className="text-sm text-slate-600">Professional Client Management</p>
+                <h1 className="text-2xl font-semibold text-slate-900">WealthLink Portal</h1>
+                <p className="text-sm text-slate-500">Professional Client Management</p>
               </div>
             </div>
             
             <div className="flex items-center space-x-4">
-              <Button variant="ghost" size="sm" className="text-slate-600 hover:text-sky-600">
+              <Button variant="ghost" size="sm" className="text-slate-500 hover:text-slate-700 hover:bg-slate-100">
                 <Bell className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="sm" className="text-slate-600 hover:text-sky-600">
+              <Button variant="ghost" size="sm" className="text-slate-500 hover:text-slate-700 hover:bg-slate-100">
                 <Settings className="h-4 w-4" />
               </Button>
               <Badge 
                 variant={userRole === 'advisor' ? 'default' : 'secondary'}
-                className={userRole === 'advisor' ? 'bg-sky-600 hover:bg-sky-700' : 'bg-slate-100 text-slate-700'}
+                className={userRole === 'advisor' ? 'bg-slate-700 hover:bg-slate-800 text-white' : 'bg-slate-200 text-slate-800'}
               >
                 {userRole === 'advisor' ? 'Financial Advisor' : 'Client'}
               </Badge>
@@ -176,7 +177,7 @@ const Dashboard = () => {
                 variant="outline"
                 size="sm"
                 onClick={() => setUserRole(userRole === 'advisor' ? 'client' : 'advisor')}
-                className="border-sky-200 text-sky-700 hover:bg-sky-50"
+                className="border-slate-300 text-slate-700 hover:bg-slate-100"
               >
                 Switch Role
               </Button>
@@ -185,15 +186,81 @@ const Dashboard = () => {
         </div>
       </header>
 
-      {/* Main Content - All Widgets on One Page */}
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+        {/* Recent Activity - Horizontal Scroll Top */}
+        <Card className="border-slate-200 bg-white">
+          <CardHeader className="border-b border-slate-100 bg-slate-50">
+            <CardTitle className="text-slate-800 flex items-center gap-2">
+              <User className="h-5 w-5 text-slate-600" />
+              Recent Activity
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <div className="flex gap-4 overflow-x-auto pb-2">
+              {activities.map((activity) => (
+                <div key={activity.id} className="flex-shrink-0 w-80 p-4 rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="flex items-start gap-3">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                      activity.type === 'message' ? 'bg-blue-100' :
+                      activity.type === 'document' ? 'bg-green-100' : 'bg-purple-100'
+                    }`}>
+                      {activity.type === 'message' && <MessageSquare className="h-4 w-4 text-blue-600" />}
+                      {activity.type === 'document' && <FileText className="h-4 w-4 text-green-600" />}
+                      {activity.type === 'update' && <User className="h-4 w-4 text-purple-600" />}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-slate-800 text-sm">{activity.description}</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {activity.timestamp.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Main Content Row */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Communications Widget */}
-          <div className="lg:col-span-2">
-            <Card className="border-sky-100 shadow-lg h-full">
-              <CardHeader className="bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
+          {/* Document Upload - Left */}
+          <div>
+            <Card className="border-slate-200 bg-white">
+              <CardHeader className="border-b border-slate-100 bg-slate-50">
                 <CardTitle className="text-slate-800 flex items-center gap-2">
-                  <MessageSquare className="h-5 w-5 text-sky-600" />
+                  <Upload className="h-5 w-5 text-slate-600" />
+                  Document Upload
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center bg-slate-50 hover:border-slate-400 transition-colors">
+                  <div className="w-12 h-12 bg-slate-200 rounded-lg flex items-center justify-center mx-auto mb-4">
+                    <Upload className="h-6 w-6 text-slate-600" />
+                  </div>
+                  <h3 className="text-base font-medium text-slate-800 mb-2">Upload Documents</h3>
+                  <p className="text-slate-600 mb-4 text-sm">Drag files here or click to browse</p>
+                  <label className="cursor-pointer">
+                    <input
+                      type="file"
+                      className="hidden"
+                      multiple
+                      onChange={handleFileUpload}
+                    />
+                    <Button variant="outline" className="border-slate-300 text-slate-700 hover:bg-slate-100">
+                      Choose Files
+                    </Button>
+                  </label>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Secure Messaging - Center */}
+          <div className="lg:col-span-2">
+            <Card className="border-slate-200 bg-white">
+              <CardHeader className="border-b border-slate-100 bg-slate-50">
+                <CardTitle className="text-slate-800 flex items-center gap-2">
+                  <MessageSquare className="h-5 w-5 text-slate-600" />
                   Secure Messaging
                 </CardTitle>
               </CardHeader>
@@ -201,15 +268,15 @@ const Dashboard = () => {
                 <div className="space-y-4 max-h-80 overflow-y-auto mb-6 bg-slate-50 rounded-lg p-4">
                   {messages.map((message) => (
                     <div key={message.id} className={`flex gap-3 ${message.role === userRole ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-md p-4 rounded-lg shadow-sm ${
+                      <div className={`max-w-md p-4 rounded-lg ${
                         message.role === userRole 
-                          ? 'bg-gradient-to-r from-sky-500 to-sky-600 text-white' 
-                          : 'bg-white text-slate-900 border border-sky-100'
+                          ? 'bg-slate-700 text-white' 
+                          : 'bg-white text-slate-900 border border-slate-200'
                       }`}>
                         <div className="font-medium text-sm mb-2">{message.sender}</div>
                         <p className="text-sm leading-relaxed">{message.content}</p>
                         <div className={`text-xs mt-2 ${
-                          message.role === userRole ? 'text-sky-100' : 'text-slate-500'
+                          message.role === userRole ? 'text-slate-300' : 'text-slate-500'
                         }`}>
                           {message.timestamp.toLocaleString()}
                         </div>
@@ -223,12 +290,12 @@ const Dashboard = () => {
                     placeholder="Type your secure message..."
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    className="flex-1 border-sky-200 focus:border-sky-400 focus:ring-sky-400"
+                    className="flex-1 border-slate-300 focus:border-slate-500 focus:ring-slate-500"
                     rows={3}
                   />
                   <Button 
                     onClick={handleSendMessage} 
-                    className="bg-gradient-to-r from-sky-500 to-sky-600 hover:from-sky-600 hover:to-sky-700 shadow-lg"
+                    className="bg-slate-700 hover:bg-slate-800 text-white"
                   >
                     <Send className="h-4 w-4" />
                   </Button>
@@ -236,117 +303,58 @@ const Dashboard = () => {
               </CardContent>
             </Card>
           </div>
-
-          {/* Activity Feed Widget */}
-          <div>
-            <Card className="border-sky-100 shadow-lg h-full">
-              <CardHeader className="bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
-                <CardTitle className="text-slate-800 flex items-center gap-2">
-                  <User className="h-5 w-5 text-sky-600" />
-                  Recent Activity
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6">
-                <div className="space-y-4 max-h-80 overflow-y-auto">
-                  {activities.map((activity) => (
-                    <div key={activity.id} className="flex items-start gap-4 p-3 rounded-lg hover:bg-sky-25 transition-colors border border-sky-50 bg-white shadow-sm">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                        activity.type === 'message' ? 'bg-sky-100' :
-                        activity.type === 'document' ? 'bg-emerald-100' : 'bg-violet-100'
-                      }`}>
-                        {activity.type === 'message' && <MessageSquare className="h-4 w-4 text-sky-600" />}
-                        {activity.type === 'document' && <FileText className="h-4 w-4 text-emerald-600" />}
-                        {activity.type === 'update' && <User className="h-4 w-4 text-violet-600" />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-medium text-slate-800 text-sm">{activity.description}</p>
-                        <p className="text-xs text-slate-600 mt-1">
-                          {activity.timestamp.toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
         </div>
 
-        {/* Document Management Widget */}
-        <div className="mt-8">
-          <Card className="border-sky-100 shadow-lg">
-            <CardHeader className="bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
-              <CardTitle className="flex items-center justify-between text-slate-800">
-                <div className="flex items-center gap-2">
-                  <FileText className="h-5 w-5 text-sky-600" />
-                  Document Management Center
-                </div>
-                <div className="relative">
-                  <Search className="h-4 w-4 absolute left-3 top-3 text-slate-400" />
-                  <Input
-                    placeholder="Search documents..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 w-64 border-sky-200 focus:border-sky-400"
-                  />
-                </div>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Upload Area */}
-                <div className="border-2 border-dashed border-sky-300 rounded-lg p-6 text-center bg-gradient-to-br from-sky-25 to-white hover:border-sky-400 transition-all duration-200">
-                  <div className="w-12 h-12 bg-sky-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <Upload className="h-6 w-6 text-sky-600" />
-                  </div>
-                  <h3 className="text-base font-semibold text-slate-800 mb-2">Secure Document Upload</h3>
-                  <p className="text-slate-600 mb-3 text-sm">Drag and drop your files here, or click to browse</p>
-                  <label className="cursor-pointer">
-                    <input
-                      type="file"
-                      className="hidden"
-                      multiple
-                      onChange={handleFileUpload}
-                    />
-                    <Button variant="outline" className="border-sky-300 text-sky-700 hover:bg-sky-50">
-                      Choose Files
-                    </Button>
-                  </label>
-                </div>
-
-                {/* Documents List */}
-                <div className="space-y-3 max-h-80 overflow-y-auto">
-                  {filteredDocuments.map((doc) => (
-                    <div key={doc.id} className="flex items-center justify-between p-3 border border-sky-100 rounded-lg hover:bg-sky-25 transition-colors bg-white shadow-sm">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gradient-to-br from-sky-100 to-sky-200 rounded-lg flex items-center justify-center">
-                          <FileText className="h-5 w-5 text-sky-600" />
-                        </div>
-                        <div>
-                          <h4 className="font-semibold text-slate-800 text-sm">{doc.name}</h4>
-                          <p className="text-xs text-slate-600">
-                            {doc.folder} • {doc.size} • {doc.uploadedBy}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {doc.uploadedAt.toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline" className="border-sky-200 text-sky-700 bg-sky-50 text-xs">
-                          {doc.folder}
-                        </Badge>
-                        <Button variant="ghost" size="sm" className="text-sky-600 hover:text-sky-700 hover:bg-sky-50">
-                          <Download className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+        {/* Document Slider - Bottom */}
+        <Card className="border-slate-200 bg-white">
+          <CardHeader className="border-b border-slate-100 bg-slate-50">
+            <CardTitle className="flex items-center justify-between text-slate-800">
+              <div className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-slate-600" />
+                Document Library
               </div>
-            </CardContent>
-          </Card>
-        </div>
+              <div className="relative">
+                <Search className="h-4 w-4 absolute left-3 top-3 text-slate-400" />
+                <Input
+                  placeholder="Search documents..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10 w-64 border-slate-300 focus:border-slate-500"
+                />
+              </div>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <div className="flex gap-4 overflow-x-auto pb-2">
+              {filteredDocuments.map((doc) => (
+                <div key={doc.id} className="flex-shrink-0 w-72 p-4 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-slate-200 rounded-lg flex items-center justify-center">
+                      <FileText className="h-5 w-5 text-slate-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-medium text-slate-800 text-sm truncate">{doc.name}</h4>
+                      <p className="text-xs text-slate-500">
+                        {doc.folder} • {doc.size}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {doc.uploadedAt.toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="border-slate-300 text-slate-700 bg-white text-xs">
+                        {doc.folder}
+                      </Badge>
+                      <Button variant="ghost" size="sm" className="text-slate-600 hover:text-slate-800 hover:bg-slate-200">
+                        <Download className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
