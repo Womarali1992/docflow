@@ -41,21 +41,21 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-sky-50 to-indigo-50">
+    <div className="min-h-screen bg-gray-50">
       <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Unified Container Shell */}
-        <div className="bg-white border-2 border-blue-300 rounded-lg shadow-lg overflow-hidden">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
           {/* Recent Activity - Top Section */}
-          <div className="border-b border-gray-200">
+          <div className="border-b border-gray-100">
             <RecentActivity activities={mockActivities} />
           </div>
 
           {/* Middle Row - Document Upload and Secure Messaging */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 border-b border-gray-200">
+          <div className="grid grid-cols-1 lg:grid-cols-3 border-b border-gray-100">
             {/* Document Upload - Left (Wider) */}
-            <div className="lg:col-span-2 border-r border-gray-200 lg:border-r lg:border-gray-200">
+            <div className="lg:col-span-2 border-r border-gray-100 lg:border-r lg:border-gray-100">
               <DocumentUpload onFileUpload={handleFileUpload} />
             </div>
 
