@@ -41,26 +41,39 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
       <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        {/* Unified Container Shell */}
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-          {/* Recent Activity - Top Section */}
-          <div className="border-b border-gray-100">
-            <RecentActivity activities={mockActivities} />
+      <div className="max-w-7xl mx-auto p-6">
+        {/* Hero Section */}
+        <div className="mb-8">
+          <div className="text-center py-12 bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl text-white shadow-xl">
+            <h2 className="text-3xl font-bold mb-3">Welcome to WealthLink Portal</h2>
+            <p className="text-blue-100 text-lg max-w-2xl mx-auto">
+              Your comprehensive platform for secure financial collaboration and document management
+            </p>
+          </div>
+        </div>
+
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-12 gap-6">
+          {/* Recent Activity - Full Width */}
+          <div className="col-span-12">
+            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 overflow-hidden">
+              <RecentActivity activities={mockActivities} />
+            </div>
           </div>
 
-          {/* Middle Row - Document Upload and Secure Messaging */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 border-b border-gray-100">
-            {/* Document Upload - Left (Wider) */}
-            <div className="lg:col-span-2 border-r border-gray-100 lg:border-r lg:border-gray-100">
+          {/* Document Upload - 8 columns */}
+          <div className="col-span-12 lg:col-span-8">
+            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 h-full">
               <DocumentUpload onFileUpload={handleFileUpload} />
             </div>
+          </div>
 
-            {/* Secure Messaging - Right (Thinner) */}
-            <div className="lg:col-span-1">
+          {/* Secure Messaging - 4 columns */}
+          <div className="col-span-12 lg:col-span-4">
+            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 h-full">
               <SecureMessaging 
                 messages={mockMessages}
                 userRole={userRole}
@@ -71,13 +84,15 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Document Library - Bottom Section */}
-          <div>
-            <DocumentLibrary 
-              documents={mockDocuments}
-              searchTerm={searchTerm}
-              onSearchChange={setSearchTerm}
-            />
+          {/* Document Library - Full Width */}
+          <div className="col-span-12">
+            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 overflow-hidden">
+              <DocumentLibrary 
+                documents={mockDocuments}
+                searchTerm={searchTerm}
+                onSearchChange={setSearchTerm}
+              />
+            </div>
           </div>
         </div>
       </div>
