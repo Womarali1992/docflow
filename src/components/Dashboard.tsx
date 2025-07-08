@@ -44,35 +44,42 @@ const Dashboard = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-sky-50 to-indigo-50">
       <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
 
-      <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        {/* Recent Activity - Horizontal Scroll Top */}
-        <RecentActivity activities={mockActivities} />
-
-        {/* Main Content Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-          {/* Document Upload - Left (Wider) */}
-          <div className="lg:col-span-3">
-            <DocumentUpload onFileUpload={handleFileUpload} />
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        {/* Unified Container Shell */}
+        <div className="bg-white border-2 border-blue-300 rounded-lg shadow-lg overflow-hidden">
+          {/* Recent Activity - Top Section */}
+          <div className="border-b border-gray-200">
+            <RecentActivity activities={mockActivities} />
           </div>
 
-          {/* Secure Messaging - Right (Thinner) */}
-          <div className="lg:col-span-2">
-            <SecureMessaging 
-              messages={mockMessages}
-              userRole={userRole}
-              newMessage={newMessage}
-              onMessageChange={setNewMessage}
-              onSendMessage={handleSendMessage}
+          {/* Middle Row - Document Upload and Secure Messaging */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 border-b border-gray-200">
+            {/* Document Upload - Left (Wider) */}
+            <div className="lg:col-span-2 border-r border-gray-200 lg:border-r lg:border-gray-200">
+              <DocumentUpload onFileUpload={handleFileUpload} />
+            </div>
+
+            {/* Secure Messaging - Right (Thinner) */}
+            <div className="lg:col-span-1">
+              <SecureMessaging 
+                messages={mockMessages}
+                userRole={userRole}
+                newMessage={newMessage}
+                onMessageChange={setNewMessage}
+                onSendMessage={handleSendMessage}
+              />
+            </div>
+          </div>
+
+          {/* Document Library - Bottom Section */}
+          <div>
+            <DocumentLibrary 
+              documents={mockDocuments}
+              searchTerm={searchTerm}
+              onSearchChange={setSearchTerm}
             />
           </div>
         </div>
-
-        {/* Document Library - Bottom */}
-        <DocumentLibrary 
-          documents={mockDocuments}
-          searchTerm={searchTerm}
-          onSearchChange={setSearchTerm}
-        />
       </div>
     </div>
   );
