@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Badge } from '@/components/ui/badge';
 import { MessageSquare, FileText, User, Clock } from 'lucide-react';
@@ -6,9 +5,10 @@ import { Activity } from '@/types/dashboard';
 
 interface RecentActivityProps {
   activities: Activity[];
+  onDocumentSelect: (documentName: string) => void;
 }
 
-const RecentActivity = ({ activities }: RecentActivityProps) => {
+const RecentActivity = ({ activities, onDocumentSelect }: RecentActivityProps) => {
   const getActivityIcon = (type: string) => {
     switch (type) {
       case 'message':
@@ -35,6 +35,14 @@ const RecentActivity = ({ activities }: RecentActivityProps) => {
     }
   };
 
+  const handleActivityClick = (activity: Activity) => {
+    if (activity.type === 'document' && activity.description.includes('uploaded')) {
+      // Extract document name from description
+      const documentName = activity.description.split(' ')[0];
+      onDocumentSelect(documentName);
+    }
+  };
+
   return (
     <div className="p-6">
       <div className="flex items-center gap-2 mb-6">
@@ -48,7 +56,10 @@ const RecentActivity = ({ activities }: RecentActivityProps) => {
         {activities.map((activity) => (
           <div 
             key={activity.id} 
-            className="group p-4 rounded-lg border border-slate-100 bg-white hover:border-slate-200 hover:shadow-sm transition-all duration-200"
+            className={`group p-4 rounded-lg border border-slate-100 bg-white hover:border-slate-200 hover:shadow-sm transition-all duration-200 ${
+              activity.type === 'document' ? 'cursor-pointer hover:bg-blue-50/50' : ''
+            }`}
+            onClick={() => handleActivityClick(activity)}
           >
             <div className="flex items-start gap-3">
               <div className={`w-7 h-7 rounded-md flex items-center justify-center ${getActivityColor(activity.type)}`}>

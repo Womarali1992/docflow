@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { UserRole } from '@/types/dashboard';
+import { UserRole, Document } from '@/types/dashboard';
 import { mockMessages, mockDocuments, mockActivities } from '@/utils/mockData';
 import DashboardHeader from './DashboardHeader';
 import RecentActivity from './RecentActivity';
@@ -13,14 +13,19 @@ const Dashboard = () => {
   const [userRole, setUserRole] = useState<UserRole>('advisor');
   const [newMessage, setNewMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
   const { toast } = useToast();
 
   const handleSendMessage = () => {
     if (!newMessage.trim()) return;
     
+    const contextText = selectedDocument 
+      ? `Message sent regarding ${selectedDocument.name}`
+      : 'Message sent successfully';
+    
     toast({
       title: 'Message Sent',
-      description: 'Your message has been delivered successfully.',
+      description: contextText,
     });
     
     setNewMessage('');
@@ -38,6 +43,21 @@ const Dashboard = () => {
 
   const handleRoleSwitch = () => {
     setUserRole(userRole === 'advisor' ? 'client' : 'advisor');
+  };
+
+  const handleDocumentSelect = (documentName: string) => {
+    const document = mockDocuments.find(doc => doc.name === documentName);
+    if (document) {
+      setSelectedDocument(document);
+      toast({
+        title: 'Document Selected',
+        description: `Now viewing ${document.name}`,
+      });
+    }
+  };
+
+  const handleClearSelection = () => {
+    setSelectedDocument(null);
   };
 
   return (
@@ -60,14 +80,21 @@ const Dashboard = () => {
           {/* Recent Activity - Full Width */}
           <div className="col-span-12">
             <div className="bg-white rounded-2xl shadow-lg border border-blue-100 overflow-hidden">
-              <RecentActivity activities={mockActivities} />
+              <RecentActivity 
+                activities={mockActivities} 
+                onDocumentSelect={handleDocumentSelect}
+              />
             </div>
           </div>
 
           {/* Document Upload - 8 columns */}
           <div className="col-span-12 lg:col-span-8">
             <div className="bg-white rounded-2xl shadow-lg border border-blue-100 h-full">
-              <DocumentUpload onFileUpload={handleFileUpload} />
+              <DocumentUpload 
+                onFileUpload={handleFileUpload}
+                selectedDocument={selectedDocument}
+                onClearSelection={handleClearSelection}
+              />
             </div>
           </div>
 
@@ -80,6 +107,7 @@ const Dashboard = () => {
                 newMessage={newMessage}
                 onMessageChange={setNewMessage}
                 onSendMessage={handleSendMessage}
+                selectedDocument={selectedDocument}
               />
             </div>
           </div>

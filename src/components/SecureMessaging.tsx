@@ -2,8 +2,8 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { MessageSquare, Send, Shield } from 'lucide-react';
-import { Message, UserRole } from '@/types/dashboard';
+import { MessageSquare, Send, Shield, FileText } from 'lucide-react';
+import { Message, UserRole, Document } from '@/types/dashboard';
 
 interface SecureMessagingProps {
   messages: Message[];
@@ -11,9 +11,17 @@ interface SecureMessagingProps {
   newMessage: string;
   onMessageChange: (value: string) => void;
   onSendMessage: () => void;
+  selectedDocument?: Document | null;
 }
 
-const SecureMessaging = ({ messages, userRole, newMessage, onMessageChange, onSendMessage }: SecureMessagingProps) => {
+const SecureMessaging = ({ 
+  messages, 
+  userRole, 
+  newMessage, 
+  onMessageChange, 
+  onSendMessage,
+  selectedDocument 
+}: SecureMessagingProps) => {
   return (
     <div className="p-6 h-full flex flex-col">
       <div className="flex items-center gap-3 mb-6">
@@ -21,13 +29,25 @@ const SecureMessaging = ({ messages, userRole, newMessage, onMessageChange, onSe
           <MessageSquare className="h-4 w-4 text-blue-600" />
         </div>
         <div className="flex-1">
-          <h3 className="text-xl font-semibold text-gray-900">Secure Messaging</h3>
+          <h3 className="text-xl font-semibold text-gray-900">
+            {selectedDocument ? 'Document Discussion' : 'Secure Messaging'}
+          </h3>
           <div className="flex items-center gap-1 text-xs text-green-600 mt-1">
             <Shield className="h-3 w-3" />
             End-to-end encrypted
           </div>
         </div>
       </div>
+
+      {selectedDocument && (
+        <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+          <div className="flex items-center gap-2 mb-1">
+            <FileText className="h-4 w-4 text-blue-600" />
+            <span className="text-sm font-medium text-blue-800">Discussing:</span>
+          </div>
+          <p className="text-sm text-blue-700 truncate">{selectedDocument.name}</p>
+        </div>
+      )}
       
       <div className="flex-1 space-y-4 max-h-64 overflow-y-auto mb-4 bg-gray-50 rounded-xl p-4">
         {messages.map((message) => (
@@ -55,7 +75,10 @@ const SecureMessaging = ({ messages, userRole, newMessage, onMessageChange, onSe
       
       <div className="flex gap-3">
         <Textarea
-          placeholder="Type your secure message..."
+          placeholder={selectedDocument 
+            ? `Discuss ${selectedDocument.name}...` 
+            : "Type your secure message..."
+          }
           value={newMessage}
           onChange={(e) => onMessageChange(e.target.value)}
           className="flex-1 text-sm border-gray-200 rounded-xl resize-none focus:border-blue-300 focus:ring-blue-300"
