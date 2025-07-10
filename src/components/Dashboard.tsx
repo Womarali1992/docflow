@@ -95,21 +95,11 @@ const Dashboard = () => {
       <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
 
       <div className="max-w-7xl mx-auto p-6">
-        {/* Hero Section */}
-        <div className="mb-8">
-          <div className="text-center py-12 bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl text-white shadow-xl">
-            <h2 className="text-3xl font-bold mb-3">Welcome to WealthLink Portal</h2>
-            <p className="text-blue-100 text-lg max-w-2xl mx-auto">
-              Your comprehensive platform for secure financial collaboration and document management
-            </p>
-          </div>
-        </div>
-
         {/* Main Content Grid */}
         <div className="grid grid-cols-12 gap-6">
-          {/* Recent Activity - Full Width */}
+          {/* Recent Activity - Full Width with reduced height */}
           <div className="col-span-12">
-            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl shadow-xl overflow-hidden">
               <RecentActivity 
                 activities={mockActivities} 
                 onDocumentSelect={handleDocumentSelect}
