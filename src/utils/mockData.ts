@@ -28,7 +28,7 @@ export const mockMessages: Message[] = [
 export const mockDocuments: Document[] = [
   {
     id: '1',
-    name: 'Q3_Portfolio_Analysis.pdf',
+    name: 'Q3 Portfolio Analysis.pdf',
     type: 'pdf',
     size: '2.4 MB',
     uploadedBy: 'John Smith',
@@ -37,7 +37,7 @@ export const mockDocuments: Document[] = [
   },
   {
     id: '2',
-    name: 'Bank_Statement_June.pdf',
+    name: 'Bank Statement June.pdf',
     type: 'pdf',
     size: '890 KB',
     uploadedBy: 'Sarah Johnson',
@@ -46,7 +46,7 @@ export const mockDocuments: Document[] = [
   },
   {
     id: '3',
-    name: 'Investment_Contract_Amendment.docx',
+    name: 'Investment Contract Amendment.docx',
     type: 'docx',
     size: '156 KB',
     uploadedBy: 'John Smith',
@@ -59,22 +59,29 @@ export const mockActivities: Activity[] = [
   {
     id: '1',
     type: 'document',
-    description: 'Q3 Portfolio Analysis uploaded',
+    description: 'Q3 Portfolio Analysis.pdf uploaded by John Smith',
     timestamp: new Date(2024, 6, 7, 9, 0),
     user: 'John Smith'
   },
   {
     id: '2',
     type: 'message',
-    description: 'New message received',
+    description: 'New message received from Sarah Johnson',
     timestamp: new Date(2024, 6, 7, 11, 15),
     user: 'Sarah Johnson'
   },
   {
     id: '3',
     type: 'update',
-    description: 'Portfolio rebalancing recommendations',
+    description: 'Portfolio rebalancing recommendations updated',
     timestamp: new Date(2024, 6, 6, 15, 45),
     user: 'System'
+  },
+  {
+    id: '4',
+    type: 'document',
+    description: 'Bank Statement June.pdf shared with advisor',
+    timestamp: new Date(2024, 6, 5, 14, 30),
+    user: 'Sarah Johnson'
   }
 ];

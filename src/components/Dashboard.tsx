@@ -46,12 +46,42 @@ const Dashboard = () => {
   };
 
   const handleDocumentSelect = (documentName: string) => {
-    const document = mockDocuments.find(doc => doc.name === documentName);
+    console.log('Looking for document:', documentName);
+    console.log('Available documents:', mockDocuments.map(d => d.name));
+    
+    // Try exact match first
+    let document = mockDocuments.find(doc => doc.name === documentName);
+    
+    // If no exact match, try partial match
+    if (!document) {
+      document = mockDocuments.find(doc => 
+        doc.name.toLowerCase().includes(documentName.toLowerCase()) ||
+        documentName.toLowerCase().includes(doc.name.toLowerCase())
+      );
+    }
+    
+    // If still no match, try matching without file extension
+    if (!document) {
+      const nameWithoutExt = documentName.replace(/\.[^/.]+$/, "");
+      document = mockDocuments.find(doc => 
+        doc.name.toLowerCase().includes(nameWithoutExt.toLowerCase()) ||
+        nameWithoutExt.toLowerCase().includes(doc.name.replace(/\.[^/.]+$/, "").toLowerCase())
+      );
+    }
+    
+    console.log('Found document:', document);
+    
     if (document) {
       setSelectedDocument(document);
       toast({
         title: 'Document Selected',
         description: `Now viewing ${document.name}`,
+      });
+    } else {
+      toast({
+        title: 'Document Not Found',
+        description: `Could not find document: ${documentName}`,
+        variant: 'destructive'
       });
     }
   };
