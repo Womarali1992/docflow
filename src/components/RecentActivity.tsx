@@ -53,7 +53,7 @@ const RecentActivity = ({
       onDocumentSelect(documentName);
     }
   };
-  return <div className="p-4">
+  return <div className="p-4 bg-slate-700">
       <div className="flex items-center gap-3 mb-4">
         <div className="w-8 h-8 bg-white/20 rounded-xl flex items-center justify-center">
           <Clock className="h-4 w-4 text-white" />
