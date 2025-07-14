@@ -8,6 +8,7 @@ import RecentActivity from './RecentActivity';
 import DocumentUpload from './DocumentUpload';
 import SecureMessaging from './SecureMessaging';
 import DocumentLibrary from './DocumentLibrary';
+import AdvisorDashboard from './AdvisorDashboard';
 
 const Dashboard = () => {
   const [userRole, setUserRole] = useState<UserRole>('advisor');
@@ -89,6 +90,16 @@ const Dashboard = () => {
   const handleClearSelection = () => {
     setSelectedDocument(null);
   };
+
+  // Show different dashboards based on user role
+  if (userRole === 'advisor') {
+    return (
+      <>
+        <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
+        <AdvisorDashboard />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
