@@ -175,10 +175,28 @@ const AdvisorDashboard = () => {
               </div>
               
               <div className="flex items-center gap-4">
-                <Button variant="outline" size="sm" className="flex items-center gap-2">
-                  <Upload className="h-4 w-4" />
-                  Upload Document
-                </Button>
+                <div 
+                  className="relative flex items-center justify-center w-48 h-16 border-2 border-dashed border-blue-300 rounded-lg bg-blue-50/50 hover:bg-blue-100/50 transition-colors cursor-pointer group"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    toast({
+                      title: "File Drop",
+                      description: "File upload functionality would be implemented here",
+                    });
+                  }}
+                  onClick={() => {
+                    toast({
+                      title: "Upload Click",
+                      description: "File browser would open here",
+                    });
+                  }}
+                >
+                  <div className="text-center">
+                    <Upload className="h-5 w-5 text-blue-600 mx-auto mb-1 group-hover:text-blue-700" />
+                    <span className="text-xs text-blue-700 font-medium">Drop files or click</span>
+                  </div>
+                </div>
               </div>
               
               <div className="flex gap-4">
