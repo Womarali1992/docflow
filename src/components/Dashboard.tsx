@@ -8,6 +8,7 @@ import RecentActivity from './RecentActivity';
 import DocumentUpload from './DocumentUpload';
 import SecureMessaging from './SecureMessaging';
 import DocumentLibrary from './DocumentLibrary';
+import AdminDashboard from './AdminDashboard';
 
 const Dashboard = () => {
   const [userRole, setUserRole] = useState<UserRole>('advisor');
@@ -90,6 +91,17 @@ const Dashboard = () => {
     setSelectedDocument(null);
   };
 
+  // Show different views based on user role
+  if (userRole === 'advisor') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
+        <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
+        <AdminDashboard />
+      </div>
+    );
+  }
+
+  // Client view
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
       <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
