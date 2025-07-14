@@ -174,6 +174,13 @@ const AdvisorDashboard = () => {
                 </Button>
               </div>
               
+              <div className="flex items-center gap-4">
+                <Button variant="outline" size="sm" className="flex items-center gap-2">
+                  <Upload className="h-4 w-4" />
+                  Upload Document
+                </Button>
+              </div>
+              
               <div className="flex gap-4">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-blue-900">{currentClient.documentsCount}</div>
