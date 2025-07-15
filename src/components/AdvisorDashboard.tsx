@@ -165,6 +165,7 @@ const AdvisorDashboard = () => {
   const [currentClientIndex, setCurrentClientIndex] = useState(0);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [newMessage, setNewMessage] = useState('');
+  const [messages, setMessages] = useState<Message[]>(mockMessages);
   const { toast } = useToast();
   
   const currentClient = mockClients[currentClientIndex];
@@ -199,16 +200,24 @@ const AdvisorDashboard = () => {
 
   const handleSendMessage = () => {
     if (newMessage.trim() && selectedDocumentId) {
+      const newMsg: Message = {
+        id: Date.now().toString(),
+        text: newMessage.trim(),
+        sender: 'advisor',
+        timestamp: new Date(),
+        documentId: selectedDocumentId
+      };
+      setMessages(prev => [...prev, newMsg]);
+      setNewMessage('');
       toast({
         title: "Message Sent",
         description: "Your message has been sent to the client",
       });
-      setNewMessage('');
     }
   };
 
   const selectedDocument = mockClientDocuments.find(doc => doc.id === selectedDocumentId);
-  const documentMessages = mockMessages.filter(msg => msg.documentId === selectedDocumentId);
+  const documentMessages = messages.filter(msg => msg.documentId === selectedDocumentId);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
@@ -303,51 +312,53 @@ const AdvisorDashboard = () => {
               {/* Documents List */}
               <div className="space-y-4">
                 {mockClientDocuments.map((doc) => (
-                  <div key={doc.id} className={`flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
+                  <div key={doc.id} className={`p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
                     selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
                   }`}>
-                    <div className="flex items-center gap-3">
-                      <FileText className="h-5 w-5 text-blue-600" />
-                      <div>
-                        <h4 className="font-medium text-gray-900">{doc.name}</h4>
-                        <p className="text-sm text-gray-500">
-                          {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
-                        </p>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
+                          <p className="text-sm text-gray-500">
+                            {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <Badge className={getStatusBadgeColor(doc.status)}>
+                          {doc.status.replace('_', ' ')}
+                        </Badge>
                       </div>
                     </div>
                     
-                    <div className="flex items-center gap-3">
-                      <Badge className={getStatusBadgeColor(doc.status)}>
-                        {doc.status.replace('_', ' ')}
-                      </Badge>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Button 
+                        size="sm" 
+                        variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                        onClick={() => setSelectedDocumentId(selectedDocumentId === doc.id ? null : doc.id)}
+                      >
+                        <MessageSquare className="h-4 w-4 mr-1" />
+                        Messages
+                      </Button>
                       
-                      <div className="flex gap-2">
-                        <Button 
-                          size="sm" 
-                          variant={selectedDocumentId === doc.id ? "default" : "outline"}
-                          onClick={() => setSelectedDocumentId(selectedDocumentId === doc.id ? null : doc.id)}
-                        >
-                          <MessageSquare className="h-4 w-4 mr-1" />
-                          Messages
-                        </Button>
-                        
+                      <Button 
+                        size="sm" 
+                        variant="outline"
+                        onClick={() => handleDocumentAction(doc.id, 'reviewed')}
+                      >
+                        Review
+                      </Button>
+                      {doc.status === 'needs_update' && (
                         <Button 
                           size="sm" 
                           variant="outline"
-                          onClick={() => handleDocumentAction(doc.id, 'reviewed')}
+                          onClick={() => handleDocumentAction(doc.id, 'requested update')}
                         >
-                          Review
+                          Request Update
                         </Button>
-                        {doc.status === 'needs_update' && (
-                          <Button 
-                            size="sm" 
-                            variant="outline"
-                            onClick={() => handleDocumentAction(doc.id, 'requested update')}
-                          >
-                            Request Update
-                          </Button>
-                        )}
-                      </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -355,7 +366,7 @@ const AdvisorDashboard = () => {
 
               {/* Messages Panel */}
               {selectedDocumentId && (
-                <div className="border-l border-gray-200 pl-6">
+                <div className="border-l border-gray-200 pl-6 flex flex-col h-96">
                   <div className="flex items-center gap-2 mb-4">
                     <MessageSquare className="h-5 w-5 text-blue-600" />
                     <h3 className="font-medium text-gray-900">
@@ -363,8 +374,8 @@ const AdvisorDashboard = () => {
                     </h3>
                   </div>
                   
-                  {/* Message History */}
-                  <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
+                  {/* Message History - Takes up most space */}
+                  <div className="flex-1 space-y-3 overflow-y-auto mb-4 pr-2">
                     {documentMessages.length > 0 ? (
                       documentMessages.map((message) => (
                         <div 
@@ -387,14 +398,14 @@ const AdvisorDashboard = () => {
                         </div>
                       ))
                     ) : (
-                      <p className="text-sm text-gray-500 text-center py-4">
+                      <p className="text-sm text-gray-500 text-center py-8">
                         No messages yet for this document.
                       </p>
                     )}
                   </div>
                   
-                  {/* New Message Input */}
-                  <div className="space-y-3">
+                  {/* New Message Input - Fixed at bottom */}
+                  <div className="border-t pt-4 space-y-3">
                     <Textarea 
                       placeholder="Type your message about this document..."
                       value={newMessage}
