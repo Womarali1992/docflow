@@ -26,6 +26,14 @@ interface ClientDocument {
   status: 'pending' | 'reviewed' | 'needs_update';
 }
 
+interface Message {
+  id: string;
+  text: string;
+  sender: 'advisor' | 'client';
+  timestamp: Date;
+  documentId: string;
+}
+
 interface Report {
   id: string;
   title: string;
@@ -91,6 +99,44 @@ const mockClientDocuments: ClientDocument[] = [
   }
 ];
 
+const mockMessages: Message[] = [
+  {
+    id: '1',
+    text: 'Could you please review this bank statement? I noticed some unusual transactions.',
+    sender: 'advisor',
+    timestamp: new Date(2024, 6, 5, 15, 0),
+    documentId: '1'
+  },
+  {
+    id: '2',
+    text: 'I can explain those transactions. They were for my new business setup.',
+    sender: 'client',
+    timestamp: new Date(2024, 6, 5, 16, 30),
+    documentId: '1'
+  },
+  {
+    id: '3',
+    text: 'Thank you for the clarification. Could you provide documentation for the business expenses?',
+    sender: 'advisor',
+    timestamp: new Date(2024, 6, 6, 9, 15),
+    documentId: '1'
+  },
+  {
+    id: '4',
+    text: 'The tax return looks good overall, but we need to discuss the capital gains section.',
+    sender: 'advisor',
+    timestamp: new Date(2024, 6, 3, 11, 0),
+    documentId: '2'
+  },
+  {
+    id: '5',
+    text: 'Please update your investment goals to reflect our recent discussion about risk tolerance.',
+    sender: 'advisor',
+    timestamp: new Date(2024, 6, 2, 17, 0),
+    documentId: '3'
+  }
+];
+
 const mockReports: Report[] = [
   {
     id: '1',
@@ -117,6 +163,8 @@ const mockReports: Report[] = [
 
 const AdvisorDashboard = () => {
   const [currentClientIndex, setCurrentClientIndex] = useState(0);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [newMessage, setNewMessage] = useState('');
   const { toast } = useToast();
   
   const currentClient = mockClients[currentClientIndex];
@@ -148,6 +196,19 @@ const AdvisorDashboard = () => {
       description: `Document ${action} successfully`,
     });
   };
+
+  const handleSendMessage = () => {
+    if (newMessage.trim() && selectedDocumentId) {
+      toast({
+        title: "Message Sent",
+        description: "Your message has been sent to the client",
+      });
+      setNewMessage('');
+    }
+  };
+
+  const selectedDocument = mockClientDocuments.find(doc => doc.id === selectedDocumentId);
+  const documentMessages = mockMessages.filter(msg => msg.documentId === selectedDocumentId);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
@@ -225,79 +286,133 @@ const AdvisorDashboard = () => {
             <CardTitle className="flex items-center gap-2 text-blue-900">
               <Upload className="h-5 w-5" />
               Client Document Uploads
+              {selectedDocumentId && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => setSelectedDocumentId(null)}
+                  className="ml-auto"
+                >
+                  Close Messages
+                </Button>
+              )}
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="space-y-4">
-              {mockClientDocuments.map((doc) => (
-                <div key={doc.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <FileText className="h-5 w-5 text-blue-600" />
-                    <div>
-                      <h4 className="font-medium text-gray-900">{doc.name}</h4>
-                      <p className="text-sm text-gray-500">
-                        {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
-                      </p>
+            <div className={`grid gap-6 ${selectedDocumentId ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              {/* Documents List */}
+              <div className="space-y-4">
+                {mockClientDocuments.map((doc) => (
+                  <div key={doc.id} className={`flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
+                    selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <FileText className="h-5 w-5 text-blue-600" />
+                      <div>
+                        <h4 className="font-medium text-gray-900">{doc.name}</h4>
+                        <p className="text-sm text-gray-500">
+                          {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-3">
+                      <Badge className={getStatusBadgeColor(doc.status)}>
+                        {doc.status.replace('_', ' ')}
+                      </Badge>
+                      
+                      <div className="flex gap-2">
+                        <Button 
+                          size="sm" 
+                          variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                          onClick={() => setSelectedDocumentId(selectedDocumentId === doc.id ? null : doc.id)}
+                        >
+                          <MessageSquare className="h-4 w-4 mr-1" />
+                          Messages
+                        </Button>
+                        
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => handleDocumentAction(doc.id, 'reviewed')}
+                        >
+                          Review
+                        </Button>
+                        {doc.status === 'needs_update' && (
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            onClick={() => handleDocumentAction(doc.id, 'requested update')}
+                          >
+                            Request Update
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
+                ))}
+              </div>
+
+              {/* Messages Panel */}
+              {selectedDocumentId && (
+                <div className="border-l border-gray-200 pl-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <MessageSquare className="h-5 w-5 text-blue-600" />
+                    <h3 className="font-medium text-gray-900">
+                      Messages: {selectedDocument?.name}
+                    </h3>
+                  </div>
                   
-                  <div className="flex items-center gap-3">
-                    <Badge className={getStatusBadgeColor(doc.status)}>
-                      {doc.status.replace('_', ' ')}
-                    </Badge>
-                    
-                     <div className="flex gap-2">
-                       <DropdownMenu>
-                         <DropdownMenuTrigger asChild>
-                           <Button size="sm" variant="outline">
-                             <MessageSquare className="h-4 w-4 mr-1" />
-                             Message
-                           </Button>
-                         </DropdownMenuTrigger>
-                         <DropdownMenuContent className="w-80 p-4">
-                           <div className="space-y-3">
-                             <h4 className="font-medium text-sm">Message about {doc.name}</h4>
-                             <Textarea 
-                               placeholder="Type your message about this document..."
-                               className="min-h-[80px] resize-none"
-                             />
-                             <Button 
-                               size="sm" 
-                               className="w-full"
-                               onClick={() => {
-                                 toast({
-                                   title: "Message Sent",
-                                   description: "Your message has been sent to the client",
-                                 });
-                               }}
-                             >
-                               <Send className="h-4 w-4 mr-1" />
-                               Send Message
-                             </Button>
-                           </div>
-                         </DropdownMenuContent>
-                       </DropdownMenu>
-                       
-                       <Button 
-                         size="sm" 
-                         variant="outline"
-                         onClick={() => handleDocumentAction(doc.id, 'reviewed')}
-                       >
-                         Review
-                       </Button>
-                       {doc.status === 'needs_update' && (
-                         <Button 
-                           size="sm" 
-                           variant="outline"
-                           onClick={() => handleDocumentAction(doc.id, 'requested update')}
-                         >
-                           Request Update
-                         </Button>
-                       )}
-                     </div>
+                  {/* Message History */}
+                  <div className="space-y-3 mb-4 max-h-64 overflow-y-auto">
+                    {documentMessages.length > 0 ? (
+                      documentMessages.map((message) => (
+                        <div 
+                          key={message.id} 
+                          className={`p-3 rounded-lg ${
+                            message.sender === 'advisor' 
+                              ? 'bg-blue-100 ml-4' 
+                              : 'bg-gray-100 mr-4'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-gray-600">
+                              {message.sender === 'advisor' ? 'You' : 'Client'}
+                            </span>
+                            <span className="text-xs text-gray-500">
+                              {message.timestamp.toLocaleDateString()} {message.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-800">{message.text}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-gray-500 text-center py-4">
+                        No messages yet for this document.
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* New Message Input */}
+                  <div className="space-y-3">
+                    <Textarea 
+                      placeholder="Type your message about this document..."
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      className="min-h-[80px] resize-none"
+                    />
+                    <Button 
+                      size="sm" 
+                      className="w-full"
+                      onClick={handleSendMessage}
+                      disabled={!newMessage.trim()}
+                    >
+                      <Send className="h-4 w-4 mr-1" />
+                      Send Message
+                    </Button>
                   </div>
                 </div>
-              ))}
+              )}
             </div>
           </CardContent>
         </Card>
