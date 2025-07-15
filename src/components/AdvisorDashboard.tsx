@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Calendar } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Textarea } from '@/components/ui/textarea';
+import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Calendar, Send } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 interface Client {
@@ -244,24 +246,55 @@ const AdvisorDashboard = () => {
                       {doc.status.replace('_', ' ')}
                     </Badge>
                     
-                    <div className="flex gap-2">
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => handleDocumentAction(doc.id, 'reviewed')}
-                      >
-                        Review
-                      </Button>
-                      {doc.status === 'needs_update' && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => handleDocumentAction(doc.id, 'requested update')}
-                        >
-                          Request Update
-                        </Button>
-                      )}
-                    </div>
+                     <div className="flex gap-2">
+                       <DropdownMenu>
+                         <DropdownMenuTrigger asChild>
+                           <Button size="sm" variant="outline">
+                             <MessageSquare className="h-4 w-4 mr-1" />
+                             Message
+                           </Button>
+                         </DropdownMenuTrigger>
+                         <DropdownMenuContent className="w-80 p-4">
+                           <div className="space-y-3">
+                             <h4 className="font-medium text-sm">Message about {doc.name}</h4>
+                             <Textarea 
+                               placeholder="Type your message about this document..."
+                               className="min-h-[80px] resize-none"
+                             />
+                             <Button 
+                               size="sm" 
+                               className="w-full"
+                               onClick={() => {
+                                 toast({
+                                   title: "Message Sent",
+                                   description: "Your message has been sent to the client",
+                                 });
+                               }}
+                             >
+                               <Send className="h-4 w-4 mr-1" />
+                               Send Message
+                             </Button>
+                           </div>
+                         </DropdownMenuContent>
+                       </DropdownMenu>
+                       
+                       <Button 
+                         size="sm" 
+                         variant="outline"
+                         onClick={() => handleDocumentAction(doc.id, 'reviewed')}
+                       >
+                         Review
+                       </Button>
+                       {doc.status === 'needs_update' && (
+                         <Button 
+                           size="sm" 
+                           variant="outline"
+                           onClick={() => handleDocumentAction(doc.id, 'requested update')}
+                         >
+                           Request Update
+                         </Button>
+                       )}
+                     </div>
                   </div>
                 </div>
               ))}
