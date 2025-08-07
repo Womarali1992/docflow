@@ -102,7 +102,7 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
+    <div className="slate-theme min-h-screen bg-gradient-to-br from-slate-50 via-background to-slate-50">
       <DashboardHeader userRole={userRole} onRoleSwitch={handleRoleSwitch} />
 
       <div className="max-w-7xl mx-auto p-6">
@@ -110,7 +110,7 @@ const Dashboard = () => {
         <div className="grid grid-cols-12 gap-6">
           {/* Recent Activity - Full Width with reduced height */}
           <div className="col-span-12">
-            <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl shadow-xl overflow-hidden">
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl shadow-xl overflow-hidden">
               <RecentActivity 
                 activities={mockActivities} 
                 onDocumentSelect={handleDocumentSelect}
@@ -120,7 +120,7 @@ const Dashboard = () => {
 
           {/* Document Upload - 8 columns */}
           <div className="col-span-12 lg:col-span-8">
-            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 h-full">
+            <div className="bg-card rounded-2xl shadow-lg border border-border h-full">
               <DocumentUpload 
                 onFileUpload={handleFileUpload}
                 selectedDocument={selectedDocument}
@@ -131,7 +131,7 @@ const Dashboard = () => {
 
           {/* Secure Messaging - 4 columns */}
           <div className="col-span-12 lg:col-span-4">
-            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 h-full">
+            <div className="bg-card rounded-2xl shadow-lg border border-border h-full">
               <SecureMessaging 
                 messages={mockMessages}
                 userRole={userRole}
@@ -145,7 +145,7 @@ const Dashboard = () => {
 
           {/* Document Library - Full Width */}
           <div className="col-span-12">
-            <div className="bg-white rounded-2xl shadow-lg border border-blue-100 overflow-hidden">
+            <div className="bg-card rounded-2xl shadow-lg border border-border overflow-hidden">
               <DocumentLibrary 
                 documents={mockDocuments}
                 searchTerm={searchTerm}
