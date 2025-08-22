@@ -1,5 +1,5 @@
 
-import { Message, Document, Activity } from '@/types/dashboard';
+import { Message, Document, Activity, Client } from '@/types/dashboard';
 
 export const mockMessages: Message[] = [
   {
@@ -25,6 +25,36 @@ export const mockMessages: Message[] = [
   }
 ];
 
+export const mockClients: Client[] = [
+  {
+    id: '1',
+    name: 'Sarah Johnson',
+    email: 'sarah.johnson@email.com',
+    lastActivity: new Date(2024, 6, 7, 11, 15),
+    documentsCount: 8,
+    pendingUpdates: 2,
+    unreadMessages: 3
+  },
+  {
+    id: '2',
+    name: 'Michael Chen',
+    email: 'michael.chen@email.com',
+    lastActivity: new Date(2024, 6, 6, 14, 30),
+    documentsCount: 12,
+    pendingUpdates: 0,
+    unreadMessages: 1
+  },
+  {
+    id: '3',
+    name: 'Emily Davis',
+    email: 'emily.davis@email.com',
+    lastActivity: new Date(2024, 6, 5, 9, 45),
+    documentsCount: 6,
+    pendingUpdates: 1,
+    unreadMessages: 0
+  }
+];
+
 export const mockDocuments: Document[] = [
   {
     id: '1',
@@ -33,7 +63,9 @@ export const mockDocuments: Document[] = [
     size: '2.4 MB',
     uploadedBy: 'John Smith',
     uploadedAt: new Date(2024, 6, 7, 9, 0),
-    folder: 'Reports'
+    folder: 'Reports',
+    requestFrequency: 'quarterly',
+    clientId: '1'
   },
   {
     id: '2',
@@ -42,7 +74,9 @@ export const mockDocuments: Document[] = [
     size: '890 KB',
     uploadedBy: 'Sarah Johnson',
     uploadedAt: new Date(2024, 6, 5, 14, 30),
-    folder: 'Statements'
+    folder: 'Statements',
+    requestFrequency: 'monthly',
+    clientId: '1'
   },
   {
     id: '3',
@@ -51,7 +85,40 @@ export const mockDocuments: Document[] = [
     size: '156 KB',
     uploadedBy: 'John Smith',
     uploadedAt: new Date(2024, 6, 3, 16, 20),
-    folder: 'Contracts'
+    folder: 'Contracts',
+    clientId: '2'
+  },
+  {
+    id: '4',
+    name: 'Tax Returns 2023.pdf',
+    type: 'pdf',
+    size: '3.2 MB',
+    uploadedBy: 'Sarah Johnson',
+    uploadedAt: new Date(2024, 2, 15, 14, 30), // Uploaded in March
+    folder: 'Documents',
+    url: '/mock-tax-returns-2023.pdf',
+    hasUpdateRequest: true,
+    updateRequestedBy: 'John Smith',
+    updateRequestedAt: new Date(2024, 6, 8, 10, 0),
+    updateRequestDescription: 'Please upload your complete tax returns for 2024 including all schedules and supporting documents.',
+    requestedVersion: '2024',
+    requestFrequency: 'yearly',
+    clientId: '1'
+  },
+  {
+    id: '5',
+    name: 'Insurance Policy Documents',
+    type: 'pdf',
+    size: '',
+    uploadedBy: '',
+    uploadedAt: new Date(),
+    folder: 'Documents',
+    isRequested: true,
+    requestedBy: 'John Smith',
+    requestedAt: new Date(2024, 6, 8, 11, 30),
+    description: 'Current life and disability insurance policy documents for portfolio planning.',
+    requestFrequency: 'yearly',
+    clientId: '3'
   }
 ];
 

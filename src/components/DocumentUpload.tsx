@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Upload, File, Plus, X, FileText } from 'lucide-react';
 import { Document } from '@/types/dashboard';
@@ -11,6 +11,8 @@ interface DocumentUploadProps {
 }
 
 const DocumentUpload = ({ onFileUpload, selectedDocument, onClearSelection }: DocumentUploadProps) => {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
@@ -24,6 +26,17 @@ const DocumentUpload = ({ onFileUpload, selectedDocument, onClearSelection }: Do
         target: { files }
       } as React.ChangeEvent<HTMLInputElement>;
       onFileUpload(event);
+    }
+  };
+
+  const handleDownload = () => {
+    if (selectedDocument?.url) {
+      const link = document.createElement('a');
+      link.href = selectedDocument.url;
+      link.download = selectedDocument.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
@@ -69,18 +82,26 @@ const DocumentUpload = ({ onFileUpload, selectedDocument, onClearSelection }: Do
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             <div className="h-96 overflow-auto">
               {selectedDocument.name.toLowerCase().endsWith('.pdf') ? (
-                <div className="h-full flex items-center justify-center bg-gray-50">
-                  <div className="text-center">
-                    <FileText className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600 font-medium">PDF Viewer</p>
-                    <p className="text-sm text-gray-500 mt-2">
-                      {selectedDocument.name}
-                    </p>
-                    <Button variant="outline" className="mt-4">
-                      Download to View
-                    </Button>
+                selectedDocument.url ? (
+                  <iframe
+                    src={selectedDocument.url}
+                    className="w-full h-full border-0"
+                    title={`PDF Viewer - ${selectedDocument.name}`}
+                  />
+                ) : (
+                  <div className="h-full flex items-center justify-center bg-gray-50">
+                    <div className="text-center">
+                      <FileText className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+                      <p className="text-gray-600 font-medium">PDF Viewer</p>
+                      <p className="text-sm text-gray-500 mt-2">
+                        {selectedDocument.name}
+                      </p>
+                      <Button variant="outline" className="mt-4" onClick={handleDownload}>
+                        Download to View
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                )
               ) : selectedDocument.name.toLowerCase().includes('bank') || selectedDocument.name.toLowerCase().includes('statement') ? (
                 <div className="p-6 font-mono text-sm">
                   <div className="border-b border-gray-200 pb-4 mb-4">
@@ -244,6 +265,7 @@ const DocumentUpload = ({ onFileUpload, selectedDocument, onClearSelection }: Do
           className="border-2 border-dashed border-blue-200 rounded-2xl p-8 text-center hover:border-blue-300 hover:bg-blue-50/50 transition-all duration-200"
           onDragOver={handleDragOver}
           onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
         >
           <div className="w-16 h-16 bg-gradient-to-br from-blue-100 to-blue-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <File className="h-8 w-8 text-blue-600" />
@@ -259,7 +281,9 @@ const DocumentUpload = ({ onFileUpload, selectedDocument, onClearSelection }: Do
               type="file"
               className="hidden"
               multiple
+              accept=".pdf,.doc,.docx,.xls,.xlsx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={onFileUpload}
+              ref={fileInputRef}
             />
             <Button className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-6 py-2 font-medium shadow-lg hover:shadow-xl transition-all duration-200">
               <Plus className="h-4 w-4 mr-2" />

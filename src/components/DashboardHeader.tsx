@@ -1,8 +1,9 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Bell, Settings, User } from 'lucide-react';
+import { FileText, Bell, Settings, User, LayoutDashboard } from 'lucide-react';
 import { UserRole } from '@/types/dashboard';
+import { useNavigate } from 'react-router-dom';
 interface DashboardHeaderProps {
   userRole: UserRole;
   onRoleSwitch: () => void;
@@ -11,6 +12,7 @@ const DashboardHeader = ({
   userRole,
   onRoleSwitch
 }: DashboardHeaderProps) => {
+  const navigate = useNavigate();
   return <header className="bg-white border-b border-blue-100 shadow-sm sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
@@ -25,10 +27,13 @@ const DashboardHeader = ({
           </div>
           
           <div className="flex items-center space-x-3">
+            <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl" onClick={() => navigate('/overview')}>
+              <LayoutDashboard className="h-4 w-4 mr-1" /> Overview
+            </Button>
             <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl">
               <Bell className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl">
+            <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-xl" onClick={() => navigate('/settings')}>
               <Settings className="h-4 w-4" />
             </Button>
             
