@@ -49,7 +49,7 @@ const inferFrequencyFromLabel = (label: string): RequestFrequency => {
 
 const PreparedMaterials = ({ clientId, advisorName }: PreparedMaterialsProps) => {
   const { toast } = useToast();
-  const { setDocuments } = useDocumentsStore();
+  const { documents, setDocuments } = useDocumentsStore();
 
   const [bins, setBins] = React.useState<Bin[]>([
     { id: 'bin-1', label: 'Monthly Materials', items: [] },
@@ -102,7 +102,7 @@ const PreparedMaterials = ({ clientId, advisorName }: PreparedMaterialsProps) =>
 
     toast({
       title: 'Material Added',
-      description: `${name} added to Prepared Materials (${frequency}).`,
+      description: `${name} added to Deliverables (${frequency}).`,
     });
   };
 
@@ -122,7 +122,7 @@ const PreparedMaterials = ({ clientId, advisorName }: PreparedMaterialsProps) =>
         <CardHeader className="bg-gradient-to-r from-green-100 to-green-50 border-b border-green-200">
           <CardTitle className="flex items-center gap-2 text-green-900">
             <FileText className="h-5 w-5" />
-            Prepared Materials
+            Prepared materials
             <CollapsibleTrigger asChild>
               <Button variant="ghost" size="sm" className="ml-auto inline-flex items-center gap-1 text-green-900">
                 <span className="text-sm">{isOpen ? 'Hide' : 'Show'}</span>
@@ -158,7 +158,7 @@ const PreparedMaterials = ({ clientId, advisorName }: PreparedMaterialsProps) =>
                     <div key={item.id} className="flex items-center justify-between gap-2 p-2 bg-white border border-green-100 rounded-md">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-sm text-gray-800 truncate">{item.name}</span>
-                        <Badge className="text-xs bg-emerald-200 text-emerald-800">Prepared</Badge>
+                        <Badge className="text-xs bg-green-200 text-green-800">Prepared</Badge>
                       </div>
                       <Button variant="ghost" size="icon" className="h-6 w-6 text-gray-500 hover:text-red-600" onClick={() => handleRemove(bin.id, item.id)}>
                         <X className="h-3 w-3" />
@@ -187,6 +187,7 @@ const PreparedMaterials = ({ clientId, advisorName }: PreparedMaterialsProps) =>
             ))}
           </div>
         </div>
+
           </CardContent>
         </CollapsibleContent>
       </Card>

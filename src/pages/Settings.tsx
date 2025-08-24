@@ -95,8 +95,8 @@ const Settings = () => {
             {bins.map((bin) => (
               <div
                 key={bin.id}
-                className={`rounded-lg p-3 min-h-[120px] border-2 border-dashed transition-colors bg-indigo-50/20 ${
-                  bin.isDragOver ? 'border-indigo-400 bg-indigo-50/60' : 'border-indigo-300'
+                className={`rounded-lg p-3 min-h-[120px] border-2 border-dashed transition-colors bg-blue-50/20 ${
+                  bin.isDragOver ? 'border-blue-400 bg-blue-50/60' : 'border-blue-300'
                 }`}
                 onDragOver={(e) => { e.preventDefault(); toggleDragOver(bin.id, true); }}
                 onDragLeave={() => toggleDragOver(bin.id, false)}
@@ -113,10 +113,10 @@ const Settings = () => {
                     <p className="text-xs text-gray-500">Drag document types here</p>
                   ) : (
                     bin.items.map((item) => (
-                      <div key={item.id} className="flex items-center justify-between gap-2 p-2 bg-white border border-indigo-100 rounded-md">
+                      <div key={item.id} className="flex items-center justify-between gap-2 p-2 bg-white border border-blue-100 rounded-md">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-sm text-gray-800 truncate">{item.name}</span>
-                          <Badge className="text-xs bg-indigo-200 text-indigo-800">Preset</Badge>
+                          <Badge className="text-xs bg-blue-200 text-blue-800">Preset</Badge>
                         </div>
                         <Button variant="ghost" size="icon" className="h-6 w-6 text-gray-500 hover:text-red-600" onClick={() => handleRemove(bin.id, item.id)}>
                           ×
@@ -149,9 +149,9 @@ const Settings = () => {
       </Card>
 
       <Card className="border-blue-200 shadow-lg">
-        <CardHeader className="bg-gradient-to-r from-indigo-100 to-indigo-50 border-b border-blue-200">
+        <CardHeader className="bg-gradient-to-r from-blue-100 to-blue-50 border-b border-blue-200">
           <CardTitle className="flex items-center gap-2 text-blue-900">
-            Your Presets
+            Document Presets
           </CardTitle>
         </CardHeader>
         <CardContent className="p-6 space-y-3">

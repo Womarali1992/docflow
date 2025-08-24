@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Send, Plus, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Send, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import RequestDocumentPopup from './RequestDocumentPopup';
 import PreparedMaterials from './PreparedMaterials';
@@ -14,6 +14,7 @@ import { DocumentRequest, RequestFrequency, Client } from '@/types/dashboard';
 import { useDocumentsStore } from '@/context/DocumentsContext';
 import { Button as UIButton } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 // Client interface moved to shared types
 
@@ -131,6 +132,7 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<any>(null);
   const [clientDocuments, setClientDocuments] = useState<ClientDocument[]>(mockClientDocuments);
+  const [isRequestedDocumentsOpen, setIsRequestedDocumentsOpen] = useState(true);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
@@ -259,8 +261,30 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
 
   // Calendar removed from AdvisorDashboard; lives on /overview page
 
-  const selectedDocument = clientDocuments.find(doc => doc.id === selectedDocumentId);
+  const selectedDocument = clientDocuments.find(doc => doc.id === selectedDocumentId) || 
+                          documents.find(doc => doc.id === selectedDocumentId);
   const documentMessages = messages.filter(msg => msg.documentId === selectedDocumentId);
+
+  // Debug logging for selectedDocumentId
+  React.useEffect(() => {
+    console.log('Selected Document ID changed:', selectedDocumentId);
+    console.log('Selected Document object:', selectedDocument);
+    console.log('Document Messages:', documentMessages);
+  }, [selectedDocumentId, selectedDocument, documentMessages]);
+
+  // Additional debugging for component re-renders
+  React.useEffect(() => {
+    console.log('AdvisorDashboard component rendered');
+  });
+
+  // Auto-collapse requested documents when messages are open
+  React.useEffect(() => {
+    if (selectedDocumentId) {
+      setIsRequestedDocumentsOpen(false);
+    } else {
+      setIsRequestedDocumentsOpen(true);
+    }
+  }, [selectedDocumentId]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
@@ -378,274 +402,348 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6">
-            <div className={`grid gap-6 ${selectedDocumentId ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              {/* Left column: documents list + requested docs */}
-              <div className="space-y-6">
-                {/* Documents List */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {clientDocuments.map((doc) => (
-                    <div key={doc.id} className={`p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
-                      selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
-                    }`}>
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
-                            <p className="text-sm text-gray-500">
-                              {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
-                            </p>
-                            {doc.hasUpdateRequest && (
-                              <div className="mt-2">
-                                <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
-                                  Update requested for {doc.requestedVersion} version
-                                </Badge>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <Badge className={getStatusBadgeColor(doc.status)}>
-                            {doc.status.replace('_', ' ')}
-                          </Badge>
+            <div className="space-y-6">
+              {/* Documents List */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {clientDocuments.map((doc) => (
+                  <div key={doc.id} className={`p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
+                    selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
+                  }`}>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
+                          <p className="text-sm text-gray-500">
+                            {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
+                          </p>
+                          {doc.hasUpdateRequest && (
+                            <div className="mt-2">
+                              <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
+                                Update requested for {doc.requestedVersion} version
+                              </Badge>
+                            </div>
+                          )}
                         </div>
                       </div>
                       
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        <Button 
-                          size="sm" 
-                          variant={selectedDocumentId === doc.id ? "default" : "outline"}
-                          onClick={() => setSelectedDocumentId(selectedDocumentId === doc.id ? null : doc.id)}
-                        >
-                          <MessageSquare className="h-4 w-4 mr-1" />
-                          Messages
-                        </Button>
-                        
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => handleDocumentAction(doc.id, 'reviewed')}
-                        >
-                          Review
-                        </Button>
-                        {doc.status === 'needs_update' && (
-                          <Button 
-                            size="sm" 
-                            variant="outline"
-                            onClick={() => handleRequestUpdate(doc)}
-                          >
-                            Request Update
-                          </Button>
-                        )}
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => { setRequestInitialName(doc.name.replace(/\.[^/.]+$/, '')); setIsRequestPopupOpen(true); }}
-                        >
-                          Add Request
-                        </Button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <Badge className={getStatusBadgeColor(doc.status)}>
+                          {doc.status.replace('_', ' ')}
+                        </Badge>
                       </div>
                     </div>
-                  ))}
-                </div>
-
-                {/* Requested Documents Admin View */}
-                <div className="space-y-4">
-                  {documents.filter(d => d.isRequested && !d.url).map((doc) => (
-                    <div key={doc.id} className="p-4 border rounded-lg bg-orange-50/40 border-orange-200">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <FileText className="h-5 w-5 text-orange-600 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <h4 className="font-medium text-orange-900 truncate">{doc.name}</h4>
-                            <p className="text-sm text-orange-700">Requested {doc.requestedAt?.toLocaleDateString()} by {doc.requestedBy}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <Badge className="bg-orange-200 text-orange-800">
-                            {doc.requestFrequency ? doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1) : 'One-time'}
-                          </Badge>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="outline" size="sm">⋮</Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'monthly')}>Monthly</DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'quarterly')}>Quarterly</DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'yearly')}>Yearly</DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem 
-                                onClick={() => handleDeleteClick(doc)}
-                                className="text-red-600 focus:text-red-600 focus:bg-red-50"
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete Request
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </div>
-                      {doc.description && (
-                        <p className="text-sm text-orange-800 mt-2">{doc.description}</p>
+                    
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Button 
+                        size="sm" 
+                        variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                        onClick={() => {
+                          console.log('Message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
+                          const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
+                          console.log('Setting selectedDocumentId to:', newSelectedId);
+                          setSelectedDocumentId(newSelectedId);
+                        }}
+                      >
+                        <MessageSquare className="h-4 w-4 mr-1" />
+                        Messages
+                      </Button>
+                      
+                      <Button 
+                        size="sm" 
+                        variant="outline"
+                        onClick={() => handleDocumentAction(doc.id, 'reviewed')}
+                      >
+                        Review
+                      </Button>
+                      {doc.status === 'needs_update' && (
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => handleRequestUpdate(doc)}
+                        >
+                          Request Update
+                        </Button>
                       )}
+                      <Button 
+                        size="sm" 
+                        variant="outline"
+                        onClick={() => { setRequestInitialName(doc.name.replace(/\.[^/.]+$/, '')); setIsRequestPopupOpen(true); }}
+                      >
+                        Add Request
+                      </Button>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
 
-              {/* Right column: Messages Panel */}
-              {selectedDocumentId && (
-                <div className="border-l border-gray-200 pl-6 flex flex-col h-[70vh] md:h-96">
-                  <div className="flex items-center gap-2 mb-4">
-                    <MessageSquare className="h-5 w-5 text-blue-600" />
-                    <h3 className="font-medium text-gray-900">
-                      Messages: {selectedDocument?.name}
-                    </h3>
-                  </div>
-                  
-                  {/* Message History - Takes up most space */}
-                  <div className="flex-1 space-y-3 overflow-y-auto mb-4 pr-2">
-                    {documentMessages.length > 0 ? (
-                      documentMessages.map((message) => (
-                        <div 
-                          key={message.id} 
-                          className={`p-3 rounded-lg ${
-                            message.sender === 'advisor' 
-                              ? 'bg-blue-100 ml-4' 
-                              : 'bg-gray-100 mr-4'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-medium text-gray-600">
-                              {message.sender === 'advisor' ? 'You' : 'Client'}
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              {message.timestamp.toLocaleDateString()} {message.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-800">{message.text}</p>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-gray-500 text-center py-8">
-                        No messages yet for this document.
-                      </p>
-                    )}
-                  </div>
-                  
-                  {/* New Message Input - Fixed at bottom */}
-                  <div className="border-t pt-4 space-y-3">
-                    <Textarea 
-                      placeholder="Type your message about this document..."
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      className="min-h-[80px] resize-none"
-                    />
-                    <Button 
-                      size="sm" 
-                      className="w-full"
-                      onClick={handleSendMessage}
-                      disabled={!newMessage.trim()}
-                    >
-                      <Send className="h-4 w-4 mr-1" />
-                      Send Message
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="mt-6">
-              <DocumentsNeeded clientId={currentClient.id} advisorName="John Smith" />
+                                                           {/* Requested Documents Admin View */}
+                <div className="space-y-4">
+                  <Collapsible open={isRequestedDocumentsOpen} onOpenChange={setIsRequestedDocumentsOpen}>
+                    <CollapsibleTrigger asChild>
+                      <Button 
+                        variant="ghost" 
+                        className="w-full justify-between p-0 h-auto hover:bg-transparent"
+                      >
+                        <h3 className="text-lg font-semibold text-gray-900">Requested Documents</h3>
+                        <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${isRequestedDocumentsOpen ? 'rotate-180' : ''}`} />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-4 mt-4">
+                      {documents.filter(d => d.isRequested && !d.url).map((doc) => (
+                       <div key={doc.id} className="p-4 border rounded-lg bg-orange-50/40 border-orange-200">
+                         {/* Requested Document Header */}
+                         <div className="mb-3 pb-2 border-b border-orange-200">
+                           <p className="text-xs font-medium text-orange-700 uppercase tracking-wide">
+                             Requested {doc.requestedAt?.toLocaleDateString()} by {doc.requestedBy}
+                           </p>
+                         </div>
+                         <div className="flex items-start justify-between gap-4">
+                           <div className="flex items-center gap-3 min-w-0 flex-1">
+                             <FileText className="h-5 w-5 text-orange-600 flex-shrink-0" />
+                             <div className="min-w-0">
+                               <h4 className="font-medium text-orange-900 truncate">{doc.name}</h4>
+                               <p className="text-sm text-orange-700">Requested {doc.requestedAt?.toLocaleDateString()} by {doc.requestedBy}</p>
+                             </div>
+                           </div>
+                           <div className="flex items-center gap-2 flex-shrink-0">
+                             <Badge className="bg-orange-200 text-orange-800">
+                               {doc.requestFrequency ? doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1) : 'One-time'}
+                             </Badge>
+                             <DropdownMenu>
+                               <DropdownMenuTrigger asChild>
+                                 <Button variant="outline" size="sm">⋮</Button>
+                               </DropdownMenuTrigger>
+                               <DropdownMenuContent align="end">
+                                 <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'monthly')}>Monthly</DropdownMenuItem>
+                                 <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'quarterly')}>Quarterly</DropdownMenuItem>
+                                 <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'yearly')}>Yearly</DropdownMenuItem>
+                                 <DropdownMenuSeparator />
+                                 <DropdownMenuItem 
+                                   onClick={() => handleDeleteClick(doc)}
+                                   className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                                 >
+                                   <Trash2 className="h-4 w-4 mr-2" />
+                                   Delete Request
+                                 </DropdownMenuItem>
+                               </DropdownMenuContent>
+                             </DropdownMenu>
+                           </div>
+                         </div>
+                         {doc.description && (
+                           <p className="text-sm text-orange-800 mt-2">{doc.description}</p>
+                         )}
+                       </div>
+                     ))}
+                    </CollapsibleContent>
+                  </Collapsible>
+               </div>
             </div>
           </CardContent>
         </Card>
 
-        
+        {/* Messages Section - Now independent and always visible when document is selected */}
+        {selectedDocumentId && selectedDocument ? (
+          <Card className="mb-6 border-blue-200 shadow-lg relative z-10 bg-white" 
+                style={{ 
+                  display: 'block', 
+                  position: 'relative', 
+                  zIndex: 10,
+                  visibility: 'visible',
+                  opacity: 1
+                }}>
+            <CardHeader className="bg-gradient-to-r from-blue-100 to-blue-50 border-b border-blue-200">
+              <CardTitle className="flex items-center gap-2 text-blue-900">
+                <MessageSquare className="h-5 w-5" />
+                Messages: {selectedDocument.name}
+                {selectedDocument && documents.find(d => d.id === selectedDocumentId) && (
+                  <Badge className="text-xs bg-green-100 text-green-700 border-green-300">
+                    Deliverable
+                  </Badge>
+                )}
+                <div className="ml-auto">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => {
+                      console.log('Close messages button clicked, setting selectedDocumentId to null');
+                      setSelectedDocumentId(null);
+                    }}
+                    className="bg-white hover:bg-blue-50 border-blue-200 text-blue-700"
+                  >
+                    Close Messages
+                  </Button>
+                </div>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="flex flex-col h-[70vh] md:h-96">
+                {/* Message History - Takes up most space */}
+                <div className="flex-1 space-y-3 overflow-y-auto mb-4 pr-2">
+                  {documentMessages.length > 0 ? (
+                    documentMessages.map((message) => (
+                      <div 
+                        key={message.id} 
+                        className={`p-3 rounded-lg ${
+                          message.sender === 'advisor' 
+                            ? 'bg-blue-100 ml-4' 
+                            : 'bg-gray-100 mr-4'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-medium text-gray-600">
+                            {message.sender === 'advisor' ? 'You' : 'Client'}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {message.timestamp.toLocaleDateString()} {message.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-800">{message.text}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-500 text-center py-8">
+                      No messages yet for this document.
+                    </p>
+                  )}
+                </div>
+                
+                {/* New Message Input - Fixed at bottom */}
+                <div className="border-t pt-4 space-y-3">
+                  <Textarea 
+                    placeholder={`Type your message about ${selectedDocument.name}...`}
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    className="min-h-[80px] resize-none"
+                  />
+                  <Button 
+                    size="sm" 
+                    className="w-full"
+                    onClick={handleSendMessage}
+                    disabled={!newMessage.trim()}
+                  >
+                    <Send className="h-4 w-4 mr-1" />
+                    Send Message
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          /* Fallback when no document is selected */
+          <div className="mb-6 p-4 text-center text-gray-500 text-sm">
+            Select a document to view messages
+          </div>
+        )}
+
+
+
+        {/* Documents Needed Section - Now independent */}
+        <div className="mb-6">
+          <DocumentsNeeded clientId={currentClient.id} advisorName="John Smith" />
+        </div>
 
         {/* Generated Reports - Bottom Section */}
         <Card className="border-blue-200 shadow-lg">
           <CardHeader className="bg-gradient-to-r from-green-100 to-green-50 border-b border-green-200">
             <CardTitle className="flex items-center gap-2 text-green-900">
               <FileText className="h-5 w-5" />
-              Prepared materials
+              Deliverables
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="grid gap-6 md:grid-cols-2">
-              {/* Prepared Materials - Reports grid */}
-              <div>
-                <div className="grid gap-4 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-                  {documents.filter(d => d.folder === 'Reports').map((doc) => (
-                    <Card key={doc.id} className="border border-gray-200 hover:shadow-md transition-shadow">
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between mb-2">
-                          <h4 className="font-medium text-gray-900 text-sm truncate">{doc.name}</h4>
-                          <Badge variant="outline" className="text-xs">report</Badge>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2 mb-3">
-                          <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300">
-                            Generated {doc.uploadedAt.toLocaleDateString()}
-                          </Badge>
-                          {getNextDueDate(doc.uploadedAt, doc.requestFrequency) && (
-                            <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
-                              Due {getNextDueDate(doc.uploadedAt, doc.requestFrequency)!.toLocaleDateString()}
-                            </Badge>
-                          )}
-                        </div>
-
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="outline" className="text-xs">
-                            View
-                          </Button>
-                          <Button size="sm" variant="outline" className="text-xs">
-                            Download
-                          </Button>
-                          <Button size="sm" variant="outline" className="text-xs">
-                            Share
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-
-              {/* Documents Due - Update requests */}
-              <div>
-                <h3 className="text-sm font-semibold text-gray-800 mb-3">Documents Due</h3>
-                <div className="space-y-4">
-                  {documents.filter(d => d.hasUpdateRequest).length === 0 && (
-                    <p className="text-sm text-gray-500">No documents are currently due.</p>
-                  )}
-                  {documents.filter(d => d.hasUpdateRequest).map((doc) => (
-                    <div key={doc.id} className="p-4 border rounded-lg bg-red-50/40 border-red-200">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <FileText className="h-5 w-5 text-red-600 flex-shrink-0" />
-                          <div className="min-w-0">
-                            <h4 className="font-medium text-red-900 truncate">{doc.name}</h4>
-                            <p className="text-xs text-red-700">
-                              {doc.size || '—'} • Uploaded {doc.uploadedAt.toLocaleDateString()} • {doc.folder}
-                            </p>
-                            <div className="mt-1 text-xs text-red-800">
-                              {doc.uploadedBy && <span className="font-medium">{doc.uploadedBy}</span>} {doc.requestedVersion ? `Requesting ${doc.requestedVersion} version` : 'Update requested'}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <Badge className="bg-red-200 text-red-800">Update Request</Badge>
+            {/* Deliverable Cards - Matching Client Document Upload Style */}
+            <div>
+              <div className="grid gap-4 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
+                                 {documents.filter(d => d.folder === 'Reports').map((doc) => (
+                   <div key={doc.id} className={`p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
+                     selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
+                   }`}>
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
+                          <p className="text-sm text-gray-500">
+                            report
+                          </p>
                         </div>
                       </div>
-                      <div className="text-xs text-red-800 mt-2">
-                        Requested by {doc.updateRequestedBy || '—'} on {doc.updateRequestedAt ? doc.updateRequestedAt.toLocaleDateString() : '—'}
+                      
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300">
+                          report
+                        </Badge>
                       </div>
                     </div>
-                  ))}
-                </div>
+                    
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300">
+                        Generated {doc.uploadedAt.toLocaleDateString()}
+                      </Badge>
+                      {getNextDueDate(doc.uploadedAt, doc.requestFrequency) && (
+                        <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
+                          Due {getNextDueDate(doc.uploadedAt, doc.requestFrequency)!.toLocaleDateString()}
+                        </Badge>
+                      )}
+                    </div>
+                    
+                                         <div className="flex flex-wrap gap-2 mt-3">
+                       <Button 
+                         size="sm" 
+                         variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                         onClick={() => {
+                           console.log('Deliverable message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
+                           const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
+                           console.log('Setting selectedDocumentId to:', newSelectedId);
+                           setSelectedDocumentId(newSelectedId);
+                         }}
+                         className="text-xs"
+                       >
+                         <MessageSquare className="h-4 w-4 mr-1" />
+                         Messages
+                       </Button>
+                       <Button size="sm" variant="outline" className="text-xs">
+                         View
+                       </Button>
+                       <Button size="sm" variant="outline" className="text-xs">
+                         Download
+                       </Button>
+                       <Button size="sm" variant="outline" className="text-xs">
+                         Share
+                       </Button>
+                     </div>
+                  </div>
+                ))}
               </div>
             </div>
+
+                         {/* Documents Due Section */}
+             <div className="mb-6">
+               <h3 className="text-xs font-semibold text-gray-800 mb-3">Documents Due</h3>
+               <div className="p-4 border rounded-lg bg-red-50/40 border-red-200">
+                 <div className="flex items-start justify-between gap-4">
+                   <div className="flex items-center gap-3 min-w-0 flex-1">
+                     <FileText className="h-5 w-5 text-red-600 flex-shrink-0" />
+                     <div className="min-w-0">
+                       <h4 className="font-medium text-red-900 truncate">Tax Returns 2023.pdf</h4>
+                       <p className="text-xs text-red-700">
+                         3.2 MB • Uploaded 3/15/2024 • Documents
+                       </p>
+                       <div className="mt-1 text-xs text-red-800">
+                         <span className="font-medium">Sarah Johnson</span> Requesting 2024 version
+                       </div>
+                     </div>
+                   </div>
+                   <div className="flex items-center gap-2 flex-shrink-0">
+                     <Badge className="bg-red-200 text-red-800">Update Request</Badge>
+                   </div>
+                 </div>
+                 <div className="text-xs text-red-800 mt-2">
+                   Requested by John Smith on 7/8/2024
+                 </div>
+               </div>
+             </div>
 
             <div className="mt-6">
               <PreparedMaterials clientId={currentClient.id} advisorName="John Smith" />

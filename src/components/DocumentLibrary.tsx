@@ -307,241 +307,340 @@ const DocumentLibrary = ({
         </div>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {filteredDocuments.map(doc => {
-          const isRequested = doc.isRequested && !doc.url;
-          const hasUpdateRequest = doc.hasUpdateRequest && doc.url; // Has existing file but update requested
-          
-          return (
-            <div 
-              key={doc.id} 
-              className={`p-4 rounded-xl transition-all duration-200 cursor-pointer ${
-                isRequested 
-                  ? 'border-2 border-dashed border-orange-300 bg-orange-50/30 hover:bg-orange-50/50' 
-                  : hasUpdateRequest
-                  ? 'border border-blue-200 bg-blue-50/30 hover:bg-blue-50/50'
-                  : 'border border-gray-200 bg-gray-50 hover:bg-white hover:shadow-md'
-              }`}
-              onClick={() => onSelectDocument && onSelectDocument(doc)}
-            >
-              <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 mb-3">
-                <div className={`w-10 h-10 rounded-lg shadow-sm flex items-center justify-center ${
-                  isRequested ? 'bg-orange-100' : hasUpdateRequest ? 'bg-blue-100' : 'bg-white'
-                }`}>
-                  <FileText className={`h-5 w-5 ${isRequested ? 'text-orange-600' : hasUpdateRequest ? 'text-blue-600' : 'text-blue-600'}`} />
-                </div>
-                <div className="flex items-center justify-center gap-2">
-                  {doc.requestFrequency && !(isRequested && !doc.url) ? (
-                    doc.requestFrequency === 'monthly' ? (
-                      getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
-                        const active = selectedPeriodByDoc[doc.id] === m;
-                        const isOrange = isRequested;
-                        const cls = isOrange
-                          ? `cursor-pointer ${active ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-800'}`
-                          : `cursor-pointer ${active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-800'}`;
-                        return (
-                          <Badge
-                            key={m}
-                            onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : m })); }}
-                            className={cls}
-                          >
-                            {m}
-                          </Badge>
-                        );
-                      })
-                    ) : (
-                      getPeriodsForDoc(doc).map((p) => {
-                        const active = selectedPeriodByDoc[doc.id] === p;
-                        const isOrange = isRequested;
-                        const cls = isOrange
-                          ? `cursor-pointer ${active ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-800'}`
-                          : `cursor-pointer ${active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-800'}`;
-                        return (
-                          <Badge
-                            key={p}
-                            onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : p })); }}
-                            className={cls}
-                          >
-                            {p}
-                          </Badge>
-                        );
-                      })
-                    )
-                  ) : null}
-                </div>
-                <div className="justify-self-end">
-                  {!isRequested ? (
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg p-2"
-                      onClick={(e) => handleDownload(doc, e)}
-                    >
-                      <Download className="h-4 w-4" />
-                    </Button>
-                  ) : canManageRequests ? (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-600 hover:text-orange-700 hover:bg-orange-100/50">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); updateRequestFrequency(doc.id, 'monthly'); }}>Monthly</DropdownMenuItem>
-                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); updateRequestFrequency(doc.id, 'quarterly'); }}>Quarterly</DropdownMenuItem>
-                        <DropdownMenuItem onClick={(e) => { e.stopPropagation(); updateRequestFrequency(doc.id, 'yearly'); }}>Yearly</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem 
-                          onClick={(e) => handleDeleteClick(doc, e)}
-                          className="text-red-600 focus:text-red-600 focus:bg-red-50"
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Delete Request
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  ) : null}
-                </div>
-              </div>
-              {doc.requestFrequency && !(isRequested && !doc.url) ? (
-                <>
-                  <div className="mt-1 flex items-center justify-center mb-3">
-                    {doc.requestFrequency === 'monthly' ? (
-                      <QuarterCarousel docId={doc.id} tone={isRequested ? 'orange' : 'blue'} initialQuarter={getInitialQuarterForDoc(doc)} />
-                    ) : (
-                      <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone={isRequested ? 'orange' : 'blue'} />
-                    )}
-                  </div>
-                </>
-              ) : null}
-              
-              
-              <div className="space-y-2">
-                <h4 className={`text-sm font-semibold line-clamp-2 ${
-                  isRequested ? 'text-orange-800' : 'text-gray-800'
-                }`}>
-                  {getDisplayName(doc)}
-                </h4>
-                
-                {isRequested ? (
-                  <>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
-                        Requested document
-                      </Badge>
-                      {doc.requestFrequency && (
-                        <Badge variant="secondary" className="text-xs bg-orange-200 text-orange-800">
-                          {doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1)}
-                        </Badge>
-                      )}
-                    </div>
-                    <p className="text-xs text-orange-600">
-                      Requested by {doc.requestedBy}
-                    </p>
-                    {doc.requestedAt && (
-                      <p className="text-xs text-orange-500">
-                        {doc.requestedAt.toLocaleDateString()}
-                      </p>
-                    )}
-                    {doc.description && (
-                      <p className="text-xs text-gray-600 line-clamp-2 mt-2">
-                        {doc.description}
-                      </p>
-                    )}
-                    {null}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-xs text-gray-500">{doc.size}</p>
-                    <p className="text-xs text-gray-500">{doc.uploadedAt.toLocaleDateString()}</p>
-                    
-                    <div className="space-y-1 pt-2">
-                      <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
-                        <Folder className="h-3 w-3" />
-                        {doc.folder}
-                      </Badge>
-                      <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
-                        {doc.uploadedBy}
-                      </Badge>
-                      {hasUpdateRequest && (
-                        <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
-                          Requesting {doc.requestedVersion} version
-                        </Badge>
-                      )}
-                    </div>
-
-                    {null}
-
-                    {hasUpdateRequest && (
+      {/* Separate uploaded documents and requested documents */}
+      {(() => {
+        const uploadedDocs = filteredDocuments.filter(doc => !(doc.isRequested && !doc.url) && !(doc.hasUpdateRequest && doc.url));
+        const requestedDocs = filteredDocuments.filter(doc => (doc.isRequested && !doc.url) || (doc.hasUpdateRequest && doc.url));
+        
+        return (
+          <div className="space-y-6">
+            {/* Uploaded Documents - 2 columns even on mobile */}
+            {uploadedDocs.length > 0 && (
+              <div>
+                <h4 className="text-lg font-medium text-gray-700 mb-4">Uploaded Documents</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  {uploadedDocs.map(doc => {
+                    return (
                       <div 
-                        className="mt-2 p-3 bg-orange-50/50 rounded-lg border-2 border-dashed border-orange-300 hover:border-orange-400 hover:bg-orange-50/70 transition-all duration-200 cursor-pointer relative"
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          e.currentTarget.classList.add('border-orange-500', 'bg-orange-100/80');
-                        }}
-                        onDragLeave={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          e.currentTarget.classList.remove('border-orange-500', 'bg-orange-100/80');
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          e.currentTarget.classList.remove('border-orange-500', 'bg-orange-100/80');
-                          // Handle file upload here
-                          const files = Array.from(e.dataTransfer.files);
-                          if (files.length > 0) {
-                            console.log('Files dropped for update request:', files);
-                            // You can add actual upload logic here
-                          }
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Create a hidden file input and trigger it
-                          const input = document.createElement('input');
-                          input.type = 'file';
-                          input.multiple = true;
-                          input.accept = '.pdf,.doc,.docx,.jpg,.jpeg,.png';
-                          input.onchange = (event) => {
-                            const files = Array.from((event.target as HTMLInputElement).files || []);
-                            if (files.length > 0) {
-                              console.log('Files selected for update request:', files);
-                              // You can add actual upload logic here
-                            }
-                          };
-                          input.click();
-                        }}
+                        key={doc.id} 
+                        className="p-4 rounded-xl transition-all duration-200 cursor-pointer border border-gray-200 bg-gray-50 hover:bg-white hover:shadow-md"
+                        onClick={() => onSelectDocument && onSelectDocument(doc)}
                       >
-                        <div className="text-center">
-                          <p className="text-xs text-orange-700 font-medium mb-1">Update Request</p>
-                          <p className="text-xs text-orange-600">
-                            Requested by {doc.updateRequestedBy}
-                          </p>
-                          {doc.updateRequestedAt && (
-                            <p className="text-xs text-orange-500 mb-2">
-                              {doc.updateRequestedAt.toLocaleDateString()}
-                            </p>
-                          )}
-                          {doc.updateRequestDescription && (
-                            <p className="text-xs text-gray-600 line-clamp-2 mb-3">
-                              {doc.updateRequestDescription}
-                            </p>
-                          )}
-                          <div className="border-t border-orange-200 pt-2 mt-2">
-                            <p className="text-xs text-orange-600 font-medium">📁 Drop files here or click to upload</p>
-                            <p className="text-xs text-orange-500 mt-1">Supports PDF, DOC, DOCX, JPG, PNG</p>
+                        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 mb-3">
+                          <div className="w-10 h-10 rounded-lg shadow-sm flex items-center justify-center bg-white">
+                            <FileText className="h-5 w-5 text-blue-600" />
+                          </div>
+                          <div className="flex items-center justify-center gap-2">
+                            {doc.requestFrequency ? (
+                              doc.requestFrequency === 'monthly' ? (
+                                getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
+                                  const active = selectedPeriodByDoc[doc.id] === m;
+                                  const cls = `cursor-pointer ${active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-800'}`;
+                                  return (
+                                    <Badge
+                                      key={m}
+                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : m })); }}
+                                      className={cls}
+                                    >
+                                      {m}
+                                    </Badge>
+                                  );
+                                })
+                              ) : (
+                                getPeriodsForDoc(doc).map((p) => {
+                                  const active = selectedPeriodByDoc[doc.id] === p;
+                                  const cls = `cursor-pointer ${active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-800'}`;
+                                  return (
+                                    <Badge
+                                      key={p}
+                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : p })); }}
+                                      className={cls}
+                                    >
+                                      {p}
+                                    </Badge>
+                                  );
+                                })
+                              )
+                            ) : null}
+                          </div>
+                          <div className="justify-self-end">
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg p-2"
+                              onClick={(e) => handleDownload(doc, e)}
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        
+                        {doc.requestFrequency ? (
+                          <>
+                            <div className="mt-1 flex items-center justify-center mb-3">
+                              {doc.requestFrequency === 'monthly' ? (
+                                <QuarterCarousel docId={doc.id} tone="blue" initialQuarter={getInitialQuarterForDoc(doc)} />
+                              ) : (
+                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="orange" />
+                              )}
+                            </div>
+                          </>
+                        ) : null}
+                        
+                        <div className="space-y-2">
+                          <h4 className="text-sm font-semibold line-clamp-2 text-gray-800">
+                            {getDisplayName(doc)}
+                          </h4>
+                          
+                          <p className="text-xs text-gray-500">{doc.size}</p>
+                          <p className="text-xs text-gray-500">{doc.uploadedAt.toLocaleDateString()}</p>
+                          
+                          <div className="space-y-1 pt-2">
+                            <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
+                              <Folder className="h-3 w-3" />
+                              {doc.folder}
+                            </Badge>
+                            <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
+                              {doc.uploadedBy}
+                            </Badge>
                           </div>
                         </div>
                       </div>
-                    )}
-                  </>
-                )}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            )}
+
+            {/* Requested Documents - 1 column (includes both requested and update requests) */}
+            {requestedDocs.length > 0 && (
+              <div>
+                <h4 className="text-lg font-medium text-gray-700 mb-4">Requested Documents</h4>
+                <div className="grid grid-cols-1 gap-4">
+                  {requestedDocs.map(doc => {
+                    const isRequested = doc.isRequested && !doc.url;
+                    const hasUpdateRequest = doc.hasUpdateRequest && doc.url;
+                    
+                    return (
+                      <div 
+                        key={doc.id} 
+                        className={`p-4 rounded-xl transition-all duration-200 cursor-pointer ${
+                          isRequested 
+                            ? 'border-2 border-dashed border-orange-300 bg-orange-50/30 hover:bg-orange-50/50'
+                            : 'border border-orange-200 bg-orange-50/20 hover:bg-orange-50/40'
+                        }`}
+                        onClick={() => onSelectDocument && onSelectDocument(doc)}
+                      >
+                        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 mb-3">
+                          <div className={`w-10 h-10 rounded-lg shadow-sm flex items-center justify-center ${
+                            isRequested ? 'bg-orange-100' : 'bg-orange-50'
+                          }`}>
+                            <FileText className={`h-5 w-5 ${isRequested ? 'text-orange-600' : 'text-orange-500'}`} />
+                          </div>
+                          <div className="flex items-center justify-center gap-2">
+                            {doc.requestFrequency ? (
+                              doc.requestFrequency === 'monthly' ? (
+                                getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
+                                  const active = selectedPeriodByDoc[doc.id] === m;
+                                  const cls = `cursor-pointer ${active ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-800'}`;
+                                  return (
+                                    <Badge
+                                      key={m}
+                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : m })); }}
+                                      className={cls}
+                                    >
+                                      {m}
+                                    </Badge>
+                                  );
+                                })
+                              ) : (
+                                getPeriodsForDoc(doc).map((p) => {
+                                  const active = selectedPeriodByDoc[doc.id] === p;
+                                  const cls = `cursor-pointer ${active ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-800'}`;
+                                  return (
+                                    <Badge
+                                      key={p}
+                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : p })); }}
+                                      className={cls}
+                                    >
+                                      {p}
+                                    </Badge>
+                                  );
+                                })
+                              )
+                            ) : null}
+                          </div>
+                          <div className="justify-self-end">
+                            {isRequested && canManageRequests ? (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-600 hover:text-orange-700 hover:bg-orange-100/50">
+                                    <MoreVertical className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); updateRequestFrequency(doc.id, 'monthly'); }}>Monthly</DropdownMenuItem>
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); updateRequestFrequency(doc.id, 'quarterly'); }}>Quarterly</DropdownMenuItem>
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); updateRequestFrequency(doc.id, 'yearly'); }}>Yearly</DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem 
+                                    onClick={(e) => handleDeleteClick(doc, e)}
+                                    className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                                  >
+                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    Delete Request
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            ) : hasUpdateRequest ? (
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg p-2"
+                                onClick={(e) => handleDownload(doc, e)}
+                              >
+                                <Download className="h-4 w-4" />
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                        
+                        {doc.requestFrequency ? (
+                          <>
+                            <div className="mt-1 flex items-center justify-center mb-3">
+                              {doc.requestFrequency === 'monthly' ? (
+                                <QuarterCarousel docId={doc.id} tone="orange" initialQuarter={getInitialQuarterForDoc(doc)} />
+                              ) : (
+                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="orange" />
+                              )}
+                            </div>
+                          </>
+                        ) : null}
+                        
+                        <div className="space-y-2">
+                          <h4 className={`text-sm font-semibold line-clamp-2 ${
+                            isRequested ? 'text-orange-800' : 'text-orange-700'
+                          }`}>
+                            {getDisplayName(doc)}
+                          </h4>
+                          
+                          {isRequested ? (
+                            <>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
+                                  Requested document
+                                </Badge>
+                                {doc.requestFrequency && (
+                                  <Badge variant="secondary" className="text-xs bg-orange-200 text-orange-800">
+                                    {doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1)}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-xs text-orange-600">
+                                Requested by {doc.requestedBy}
+                              </p>
+                              {doc.requestedAt && (
+                                <p className="text-xs text-orange-500">
+                                  {doc.requestedAt.toLocaleDateString()}
+                                </p>
+                              )}
+                              {doc.description && (
+                                <p className="text-xs text-gray-600 line-clamp-2 mt-2">
+                                  {doc.description}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-xs text-gray-500">{doc.size}</p>
+                              <p className="text-xs text-gray-500">{doc.uploadedAt.toLocaleDateString()}</p>
+                              
+                              <div className="space-y-1 pt-2">
+                                <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
+                                  <Folder className="h-3 w-3" />
+                                  {doc.folder}
+                                </Badge>
+                                <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
+                                  {doc.uploadedBy}
+                                </Badge>
+                                <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
+                                  Update requested for {doc.requestedVersion} version
+                                </Badge>
+                              </div>
+
+                              <div 
+                                className="mt-2 p-3 bg-orange-50/50 rounded-lg border-2 border-dashed border-orange-300 hover:border-orange-400 hover:bg-orange-50/70 transition-all duration-200 cursor-pointer relative"
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  e.currentTarget.classList.add('border-orange-500', 'bg-orange-100/80');
+                                }}
+                                onDragLeave={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  e.currentTarget.classList.remove('border-orange-500', 'bg-orange-100/80');
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  e.currentTarget.classList.remove('border-orange-500', 'bg-orange-100/80');
+                                  // Handle file upload here
+                                  const files = Array.from(e.dataTransfer.files);
+                                  if (files.length > 0) {
+                                    console.log('Files dropped for update request:', files);
+                                    // You can add actual upload logic here
+                                  }
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  // Create a hidden file input and trigger it
+                                  const input = document.createElement('input');
+                                  input.type = 'file';
+                                  input.multiple = true;
+                                  input.accept = '.pdf,.doc,.docx,.jpg,.jpeg,.png';
+                                  input.onchange = (event) => {
+                                    const files = Array.from((event.target as HTMLInputElement).files || []);
+                                    if (files.length > 0) {
+                                      console.log('Files selected for update request:', files);
+                                      // You can add actual upload logic here
+                                    }
+                                  };
+                                  input.click();
+                                }}
+                              >
+                                <div className="text-center">
+                                  <p className="text-xs text-orange-700 font-medium mb-1">Update Request</p>
+                                  <p className="text-xs text-orange-600">
+                                    Requested by {doc.updateRequestedBy}
+                                  </p>
+                                  {doc.updateRequestedAt && (
+                                    <p className="text-xs text-orange-500 mb-2">
+                                      {doc.updateRequestedAt.toLocaleDateString()}
+                                    </p>
+                                  )}
+                                  {doc.updateRequestDescription && (
+                                    <p className="text-xs text-gray-600 line-clamp-2 mb-3">
+                                      {doc.updateRequestDescription}
+                                    </p>
+                                  )}
+                                  <div className="border-t border-orange-200 pt-2 mt-2">
+                                    <p className="text-xs text-orange-600 font-medium">📁 Drop files here or click to upload</p>
+                                    <p className="text-xs text-orange-500 mt-1">Supports PDF, DOC, DOCX, JPG, PNG</p>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
