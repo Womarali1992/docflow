@@ -198,47 +198,7 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Reports Made For You - Full Width */}
-          <div className="col-span-12">
-            <Card className="border border-border">
-              <CardHeader className="bg-gradient-to-r from-emerald-100 to-emerald-50 border-b">
-                <CardTitle className="flex items-center gap-2 text-emerald-900">
-                  <FileText className="h-5 w-5" />
-                  Reports Made For You
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6">
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {documents.filter(d => d.folder === 'Reports').map(doc => (
-                    <Card key={doc.id} className="border border-gray-200">
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between mb-2">
-                          <h4 className="font-medium text-gray-900 text-sm truncate">{doc.name}</h4>
-                          <Badge variant="outline" className="text-xs">report</Badge>
-                        </div>
-                        <div className="flex gap-2">
-                          <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300">
-                            Generated {doc.uploadedAt.toLocaleDateString()}
-                          </Badge>
-                          {doc.requestFrequency && doc.requestFrequency !== 'one-time' && (
-                            <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
-                              {(() => {
-                                const next = new Date(doc.uploadedAt);
-                                if (doc.requestFrequency === 'monthly') next.setMonth(next.getMonth() + 1);
-                                else if (doc.requestFrequency === 'quarterly') next.setMonth(next.getMonth() + 3);
-                                else if (doc.requestFrequency === 'yearly') next.setFullYear(next.getFullYear() + 1);
-                                return `Due ${next.toLocaleDateString()}`;
-                              })()}
-                            </Badge>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+
 
           {/* Document Upload - 8 columns */}
           <div className="col-span-12 lg:col-span-8">

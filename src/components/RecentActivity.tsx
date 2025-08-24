@@ -58,7 +58,7 @@ const RecentActivity = ({
         <div className="w-8 h-8 bg-white/20 rounded-xl flex items-center justify-center">
           <Clock className="h-4 w-4 text-white" />
         </div>
-        <h3 className="text-xl font-semibold text-white">Reports Made For You</h3>
+        <h3 className="text-xl font-semibold text-white">Recent Activity</h3>
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">

@@ -314,6 +314,8 @@ const DocumentLibrary = ({
         
         return (
           <div className="space-y-6">
+
+
             {/* Uploaded Documents - 2 columns even on mobile */}
             {uploadedDocs.length > 0 && (
               <div>
@@ -381,7 +383,7 @@ const DocumentLibrary = ({
                               {doc.requestFrequency === 'monthly' ? (
                                 <QuarterCarousel docId={doc.id} tone="blue" initialQuarter={getInitialQuarterForDoc(doc)} />
                               ) : (
-                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="orange" />
+                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="blue" />
                               )}
                             </div>
                           </>
@@ -427,15 +429,15 @@ const DocumentLibrary = ({
                         className={`p-4 rounded-xl transition-all duration-200 cursor-pointer ${
                           isRequested 
                             ? 'border-2 border-dashed border-orange-300 bg-orange-50/30 hover:bg-orange-50/50'
-                            : 'border border-orange-200 bg-orange-50/20 hover:bg-orange-50/40'
+                            : 'border border-gray-200 bg-gray-50 hover:bg-white hover:shadow-md'
                         }`}
                         onClick={() => onSelectDocument && onSelectDocument(doc)}
                       >
                         <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 mb-3">
                           <div className={`w-10 h-10 rounded-lg shadow-sm flex items-center justify-center ${
-                            isRequested ? 'bg-orange-100' : 'bg-orange-50'
+                            isRequested ? 'bg-orange-100' : 'bg-white'
                           }`}>
-                            <FileText className={`h-5 w-5 ${isRequested ? 'text-orange-600' : 'text-orange-500'}`} />
+                            <FileText className={`h-5 w-5 ${isRequested ? 'text-orange-600' : 'text-blue-600'}`} />
                           </div>
                           <div className="flex items-center justify-center gap-2">
                             {doc.requestFrequency ? (
@@ -511,7 +513,7 @@ const DocumentLibrary = ({
                               {doc.requestFrequency === 'monthly' ? (
                                 <QuarterCarousel docId={doc.id} tone="orange" initialQuarter={getInitialQuarterForDoc(doc)} />
                               ) : (
-                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="orange" />
+                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="blue" />
                               )}
                             </div>
                           </>
@@ -519,7 +521,7 @@ const DocumentLibrary = ({
                         
                         <div className="space-y-2">
                           <h4 className={`text-sm font-semibold line-clamp-2 ${
-                            isRequested ? 'text-orange-800' : 'text-orange-700'
+                            isRequested ? 'text-black' : 'text-black'
                           }`}>
                             {getDisplayName(doc)}
                           </h4>

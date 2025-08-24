@@ -119,6 +119,77 @@ export const mockDocuments: Document[] = [
     description: 'Current life and disability insurance policy documents for portfolio planning.',
     requestFrequency: 'yearly',
     clientId: '3'
+  },
+  {
+    id: '6',
+    name: 'Tax Returns 2025.pdf',
+    type: 'pdf',
+    size: '3.2 MB',
+    uploadedBy: 'Sarah Johnson',
+    uploadedAt: new Date(2024, 2, 15, 14, 30), // March 15, 2024
+    folder: 'Documents',
+    url: '/mock-tax-returns-2025.pdf',
+    clientId: '1'
+  },
+  {
+    id: '7',
+    name: 'Q1 Financial Report',
+    type: 'pdf',
+    size: '',
+    uploadedBy: '',
+    uploadedAt: new Date(),
+    folder: 'Reports',
+    isRequested: true,
+    requestedBy: 'John Smith',
+    requestedAt: new Date(2024, 6, 8, 12, 0),
+    description: 'Quarterly financial reports and analysis',
+    requestFrequency: 'quarterly',
+    clientId: '1'
+  },
+  {
+    id: '8',
+    name: 'Q2 Financial Report',
+    type: 'pdf',
+    size: '',
+    uploadedBy: '',
+    uploadedAt: new Date(),
+    folder: 'Reports',
+    isRequested: true,
+    requestedBy: 'John Smith',
+    requestedAt: new Date(2024, 6, 8, 12, 0),
+    description: 'Quarterly financial reports and analysis',
+    requestFrequency: 'quarterly',
+    clientId: '1'
+  },
+  {
+    id: '9',
+    name: 'Q3 Financial Report',
+    type: 'pdf',
+    size: '',
+    uploadedBy: '',
+    uploadedAt: new Date(),
+    folder: 'Reports',
+    isRequested: true,
+    requestedBy: 'John Smith',
+    requestedAt: new Date(2024, 6, 8, 12, 0),
+    description: 'Quarterly financial reports and analysis',
+    requestFrequency: 'quarterly',
+    clientId: '1'
+  },
+  {
+    id: '10',
+    name: 'Q4 Financial Report',
+    type: 'pdf',
+    size: '',
+    uploadedBy: '',
+    uploadedAt: new Date(),
+    folder: 'Reports',
+    isRequested: true,
+    requestedBy: 'John Smith',
+    requestedAt: new Date(2024, 6, 8, 12, 0),
+    description: 'Quarterly financial reports and analysis',
+    requestFrequency: 'quarterly',
+    clientId: '1'
   }
 ];
 

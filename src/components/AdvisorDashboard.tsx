@@ -131,8 +131,8 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
   const [requestInitialName, setRequestInitialName] = useState<string | undefined>(undefined);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<any>(null);
-  const [clientDocuments, setClientDocuments] = useState<ClientDocument[]>(mockClientDocuments);
   const [isRequestedDocumentsOpen, setIsRequestedDocumentsOpen] = useState(true);
+  const [clientDocuments, setClientDocuments] = useState<ClientDocument[]>(mockClientDocuments);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
@@ -277,14 +277,14 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
     console.log('AdvisorDashboard component rendered');
   });
 
-  // Auto-collapse requested documents when messages are open
+  // Auto-expand Requested Documents when no document is selected
   React.useEffect(() => {
-    if (selectedDocumentId) {
-      setIsRequestedDocumentsOpen(false);
-    } else {
+    if (!selectedDocumentId) {
       setIsRequestedDocumentsOpen(true);
     }
   }, [selectedDocumentId]);
+
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
@@ -389,15 +389,19 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                 >
                   Presets
                 </UIButton>
-                {selectedDocumentId && (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => setSelectedDocumentId(null)}
-                  >
-                    Close Messages
-                  </Button>
-                )}
+                                 {selectedDocumentId && (
+                   <Button 
+                     variant="outline" 
+                     size="sm" 
+                     onClick={() => {
+                       setSelectedDocumentId(null);
+                       // Auto-expand the Requested Documents section when closing messages
+                       setIsRequestedDocumentsOpen(true);
+                     }}
+                   >
+                     Close Messages
+                   </Button>
+                 )}
               </div>
             </CardTitle>
           </CardHeader>
@@ -435,16 +439,20 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                     </div>
                     
                     <div className="flex flex-wrap gap-2 mt-3">
-                      <Button 
-                        size="sm" 
-                        variant={selectedDocumentId === doc.id ? "default" : "outline"}
-                        onClick={() => {
-                          console.log('Message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
-                          const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
-                          console.log('Setting selectedDocumentId to:', newSelectedId);
-                          setSelectedDocumentId(newSelectedId);
-                        }}
-                      >
+                                             <Button 
+                         size="sm" 
+                         variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                         onClick={() => {
+                           console.log('Message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
+                           const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
+                           console.log('Setting selectedDocumentId to:', newSelectedId);
+                           setSelectedDocumentId(newSelectedId);
+                           // Auto-collapse the Requested Documents section when opening messages
+                           if (newSelectedId) {
+                             setIsRequestedDocumentsOpen(false);
+                           }
+                         }}
+                       >
                         <MessageSquare className="h-4 w-4 mr-1" />
                         Messages
                       </Button>
@@ -475,9 +483,9 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                     </div>
                   </div>
                 ))}
-              </div>
+                             </div>
 
-                                                           {/* Requested Documents Admin View */}
+                               {/* Requested Documents Admin View */}
                 <div className="space-y-4">
                   <Collapsible open={isRequestedDocumentsOpen} onOpenChange={setIsRequestedDocumentsOpen}>
                     <CollapsibleTrigger asChild>
@@ -537,8 +545,13 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                      ))}
                     </CollapsibleContent>
                   </Collapsible>
-               </div>
-            </div>
+                </div>
+
+                {/* Documents Needed Section - Now at bottom of Client Document Uploads */}
+                <div className="mt-6">
+                  <DocumentsNeeded clientId={currentClient.id} advisorName="John Smith" />
+                </div>
+             </div>
           </CardContent>
         </Card>
 
@@ -562,15 +575,17 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                   </Badge>
                 )}
                 <div className="ml-auto">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={() => {
-                      console.log('Close messages button clicked, setting selectedDocumentId to null');
-                      setSelectedDocumentId(null);
-                    }}
-                    className="bg-white hover:bg-blue-50 border-blue-200 text-blue-700"
-                  >
+                                     <Button 
+                     variant="outline" 
+                     size="sm" 
+                     onClick={() => {
+                       console.log('Close messages button clicked, setting selectedDocumentId to null');
+                       setSelectedDocumentId(null);
+                       // Auto-expand the Requested Documents section when closing messages
+                       setIsRequestedDocumentsOpen(true);
+                     }}
+                     className="bg-white hover:bg-blue-50 border-blue-200 text-blue-700"
+                   >
                     Close Messages
                   </Button>
                 </div>
@@ -638,11 +653,6 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
 
 
 
-        {/* Documents Needed Section - Now independent */}
-        <div className="mb-6">
-          <DocumentsNeeded clientId={currentClient.id} advisorName="John Smith" />
-        </div>
-
         {/* Generated Reports - Bottom Section */}
         <Card className="border-blue-200 shadow-lg">
           <CardHeader className="bg-gradient-to-r from-green-100 to-green-50 border-b border-green-200">
@@ -661,7 +671,7 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                    }`}>
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                        <FileText className="h-5 w-5 text-green-600 flex-shrink-0" />
                         <div className="min-w-0">
                           <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
                           <p className="text-sm text-gray-500">
@@ -671,14 +681,14 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                       </div>
                       
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300">
+                        <Badge className="text-xs bg-green-100 text-green-700 border-green-300">
                           report
                         </Badge>
                       </div>
                     </div>
                     
                     <div className="flex flex-wrap gap-2 mt-3">
-                      <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300">
+                      <Badge className="text-xs bg-green-100 text-green-700 border-green-300">
                         Generated {doc.uploadedAt.toLocaleDateString()}
                       </Badge>
                       {getNextDueDate(doc.uploadedAt, doc.requestFrequency) && (
@@ -689,36 +699,40 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                     </div>
                     
                                          <div className="flex flex-wrap gap-2 mt-3">
-                       <Button 
-                         size="sm" 
-                         variant={selectedDocumentId === doc.id ? "default" : "outline"}
-                         onClick={() => {
-                           console.log('Deliverable message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
-                           const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
-                           console.log('Setting selectedDocumentId to:', newSelectedId);
-                           setSelectedDocumentId(newSelectedId);
-                         }}
-                         className="text-xs"
-                       >
+                                               <Button 
+                          size="sm" 
+                          variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                          onClick={() => {
+                            console.log('Deliverable message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
+                            const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
+                            console.log('Setting selectedDocumentId to:', newSelectedId);
+                            setSelectedDocumentId(newSelectedId);
+                            // Auto-collapse the Requested Documents section when opening messages
+                            if (newSelectedId) {
+                              setIsRequestedDocumentsOpen(false);
+                            }
+                          }}
+                          className={`text-xs ${selectedDocumentId === doc.id ? '' : 'hover:bg-green-100 hover:text-green-700 hover:border-green-300'}`}
+                        >
                          <MessageSquare className="h-4 w-4 mr-1" />
                          Messages
                        </Button>
-                       <Button size="sm" variant="outline" className="text-xs">
-                         View
-                       </Button>
-                       <Button size="sm" variant="outline" className="text-xs">
-                         Download
-                       </Button>
-                       <Button size="sm" variant="outline" className="text-xs">
-                         Share
-                       </Button>
+                                               <Button size="sm" variant="outline" className="text-xs hover:bg-green-100 hover:text-green-700 hover:border-green-300">
+                          View
+                        </Button>
+                        <Button size="sm" variant="outline" className="text-xs hover:bg-green-100 hover:text-green-700 hover:border-green-300">
+                          Download
+                        </Button>
+                        <Button size="sm" variant="outline" className="text-xs hover:bg-green-100 hover:text-green-700 hover:border-green-300">
+                          Share
+                        </Button>
                      </div>
                   </div>
                 ))}
               </div>
-            </div>
+                         </div>
 
-                         {/* Documents Due Section */}
+             {/* Documents Due Section */}
              <div className="mb-6">
                <h3 className="text-xs font-semibold text-gray-800 mb-3">Documents Due</h3>
                <div className="p-4 border rounded-lg bg-red-50/40 border-red-200">
@@ -745,7 +759,7 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                </div>
              </div>
 
-            <div className="mt-6">
+             <div className="mt-6">
               <PreparedMaterials clientId={currentClient.id} advisorName="John Smith" />
             </div>
           </CardContent>
