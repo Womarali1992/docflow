@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Send, Plus, Trash2, ChevronDown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Send, Plus, Trash2, ChevronDown, CheckCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import RequestDocumentPopup from './RequestDocumentPopup';
 import PreparedMaterials from './PreparedMaterials';
@@ -15,6 +15,8 @@ import { useDocumentsStore } from '@/context/DocumentsContext';
 import { Button as UIButton } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from '@/components/ui/carousel';
+import { groupDocumentsByBaseNameMap } from '@/utils/documentGrouping';
 
 // Client interface moved to shared types
 
@@ -45,29 +47,72 @@ interface Message {
 import { mockClients } from '@/utils/mockData';
 
 const mockClientDocuments: ClientDocument[] = [
+  // Bank Statements - Multiple years
   {
     id: '1',
-    name: 'Bank Statement June.pdf',
+    name: 'Bank Statement June 2024.pdf',
     type: 'pdf',
-    uploadedAt: new Date(2024, 6, 5, 14, 30),
+    uploadedAt: new Date(2024, 5, 5, 14, 30),
     size: '890 KB',
     status: 'pending'
   },
   {
+    id: '1a',
+    name: 'Bank Statement June 2023.pdf',
+    type: 'pdf',
+    uploadedAt: new Date(2023, 5, 5, 14, 30),
+    size: '850 KB',
+    status: 'reviewed'
+  },
+  {
+    id: '1b',
+    name: 'Bank Statement June 2025.pdf',
+    type: 'pdf',
+    uploadedAt: new Date(2025, 5, 5, 14, 30),
+    size: '920 KB',
+    status: 'reviewed'
+  },
+  // Tax Returns - Multiple years
+  {
     id: '2',
-    name: 'Tax Return 2023.pdf',
+    name: 'Tax Return 2024.pdf',
     type: 'pdf',
     uploadedAt: new Date(2024, 6, 3, 10, 15),
     size: '1.2 MB',
     status: 'reviewed'
   },
   {
+    id: '2a',
+    name: 'Tax Return 2023.pdf',
+    type: 'pdf',
+    uploadedAt: new Date(2023, 6, 3, 10, 15),
+    size: '1.1 MB',
+    status: 'reviewed'
+  },
+  {
+    id: '2b',
+    name: 'Tax Return 2025.pdf',
+    type: 'pdf',
+    uploadedAt: new Date(2025, 6, 3, 10, 15),
+    size: '1.3 MB',
+    status: 'pending'
+  },
+  // Investment Goals - Multiple years
+  {
     id: '3',
-    name: 'Investment Goals.docx',
+    name: 'Investment Goals 2024.docx',
     type: 'docx',
     uploadedAt: new Date(2024, 6, 2, 16, 20),
     size: '245 KB',
     status: 'needs_update'
+  },
+  {
+    id: '3a',
+    name: 'Investment Goals 2023.docx',
+    type: 'docx',
+    uploadedAt: new Date(2023, 6, 2, 16, 20),
+    size: '230 KB',
+    status: 'reviewed'
   }
 ];
 
@@ -133,11 +178,71 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
   const [documentToDelete, setDocumentToDelete] = useState<any>(null);
   const [isRequestedDocumentsOpen, setIsRequestedDocumentsOpen] = useState(true);
   const [clientDocuments, setClientDocuments] = useState<ClientDocument[]>(mockClientDocuments);
+  const [selectedYearByDoc, setSelectedYearByDoc] = useState<Record<string, number>>({});
+  const [selectedPeriodByDoc, setSelectedPeriodByDoc] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   
   const currentClient = mockClients[currentClientIndex];
+
+  // Time period navigation component for document groups
+  const TimeNavigation = ({ baseName, docs, tone }: { baseName: string; docs: any[]; tone: 'blue' | 'green' | 'orange' }) => {
+    const years = [...new Set(docs.map(doc => {
+      const date = doc.uploadedAt || doc.requestedAt;
+      return new Date(date).getFullYear();
+    }))].sort((a, b) => b - a);
+    const currentYear = selectedYearByDoc[baseName] || years[0];
+    const currentIndex = years.indexOf(currentYear);
+    
+    const goToPreviousYear = () => {
+      if (currentIndex < years.length - 1) {
+        setSelectedYearByDoc(prev => ({ ...prev, [baseName]: years[currentIndex + 1] }));
+      }
+    };
+    
+    const goToNextYear = () => {
+      if (currentIndex > 0) {
+        setSelectedYearByDoc(prev => ({ ...prev, [baseName]: years[currentIndex - 1] }));
+      }
+    };
+
+    const buttonClass = tone === 'blue' 
+      ? 'border-blue-300 text-blue-700 hover:bg-blue-50' 
+      : tone === 'green'
+      ? 'border-green-300 text-green-700 hover:bg-green-50'
+      : 'border-orange-300 text-orange-700 hover:bg-orange-50';
+
+    return (
+      <div className="flex items-center gap-1 md:gap-2">
+        <Button
+          variant="outline"
+          size="icon"
+          className={`h-7 w-7 md:h-8 md:w-8 rounded-full ${buttonClass}`}
+          onClick={goToPreviousYear}
+          disabled={currentIndex >= years.length - 1}
+        >
+          <ChevronLeft className={`h-3 w-3 md:h-4 md:w-4 ${tone === 'blue' ? 'text-blue-600' : tone === 'green' ? 'text-green-600' : 'text-orange-600'}`} />
+        </Button>
+        
+        <div className={`px-2 md:px-3 py-0.5 md:py-1 rounded-full text-xs md:text-sm ${
+          tone === 'blue' ? 'bg-blue-100 text-blue-800' : tone === 'green' ? 'bg-green-100 text-green-800' : 'bg-orange-100 text-orange-800'
+        }`}>
+          {currentYear}
+        </div>
+        
+        <Button
+          variant="outline"
+          size="icon"
+          className={`h-7 w-7 md:h-8 md:w-8 rounded-full ${buttonClass}`}
+          onClick={goToNextYear}
+          disabled={currentIndex <= 0}
+        >
+          <ChevronRight className={`h-3 w-3 md:h-4 md:w-4 ${tone === 'blue' ? 'text-blue-600' : tone === 'green' ? 'text-green-600' : 'text-orange-600'}`} />
+        </Button>
+      </div>
+    );
+  };
 
   const nextClient = () => {
     setCurrentClientIndex((prev) => (prev + 1) % mockClients.length);
@@ -371,6 +476,9 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
             <CardTitle className="flex items-center gap-2 text-blue-900">
               <Upload className="h-5 w-5" />
               Client Document Uploads
+              <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300 ml-2">
+                Files uploaded by clients
+              </Badge>
               <div className="ml-auto flex items-center gap-2">
                 <Button 
                   variant="outline" 
@@ -407,83 +515,126 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
           </CardHeader>
           <CardContent className="p-6">
             <div className="space-y-6">
-              {/* Documents List */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {clientDocuments.map((doc) => (
-                  <div key={doc.id} className={`p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
-                    selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
-                  }`}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <FileText className="h-5 w-5 text-blue-600 flex-shrink-0" />
-                        <div className="min-w-0">
-                          <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
-                          <p className="text-sm text-gray-500">
-                            {doc.size} • Uploaded {doc.uploadedAt.toLocaleDateString()}
-                          </p>
-                          {doc.hasUpdateRequest && (
-                            <div className="mt-2">
-                              <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
-                                Update requested for {doc.requestedVersion} version
-                              </Badge>
+              {/* Client Document Uploads Carousel - Grouped by type */}
+              <div className="space-y-4">
+                {Array.from(groupDocumentsByBaseNameMap(clientDocuments).entries()).length > 0 ? (
+                  <Carousel
+                    opts={{
+                      align: "start",
+                      loop: false,
+                    }}
+                    className="w-full"
+                  >
+                    <CarouselContent className="-ml-4">
+                      {Array.from(groupDocumentsByBaseNameMap(clientDocuments).entries()).map(([baseName, docs]) => {
+                        const sortedDocs = docs.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+                        return (
+                          <CarouselItem key={baseName} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
+                            <div className="border rounded-lg overflow-hidden bg-white">
+                              <div className="p-3 bg-blue-50/60 border-b border-blue-200">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div>
+                                    <h3 className="font-medium text-blue-900">{baseName}</h3>
+                                    <p className="text-sm text-blue-700">{sortedDocs.length} document{sortedDocs.length > 1 ? 's' : ''}</p>
+                                  </div>
+                                  <TimeNavigation baseName={baseName} docs={sortedDocs} tone="blue" />
+                                </div>
+                              </div>
+                              
+                              <div className="p-4 space-y-3">
+                                {(() => {
+                                  const availableYears = [...new Set(sortedDocs.map(doc => new Date(doc.uploadedAt).getFullYear()))].sort((a, b) => b - a);
+                                  const selectedYear = selectedYearByDoc[baseName] || availableYears[0];
+                                  const filteredDocs = sortedDocs.filter(doc => 
+                                    new Date(doc.uploadedAt).getFullYear() === selectedYear
+                                  );
+                                  return filteredDocs.slice(0, 3).map((doc, index) => (
+                                  <div key={doc.id} className={`p-3 border rounded-lg hover:bg-gray-50 transition-colors ${
+                                    selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
+                                  }`}>
+                                    <div className="flex items-start justify-between gap-2 mb-2">
+                                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                                        <FileText className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                                        <div className="min-w-0">
+                                          <h4 className="font-medium text-gray-900 text-sm truncate">{doc.name}</h4>
+                                          <p className="text-xs text-gray-500">
+                                            {doc.size} • {doc.uploadedAt.toLocaleDateString()}
+                                          </p>
+                                          {index === 0 && (
+                                            <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300 mt-1">
+                                              Latest
+                                            </Badge>
+                                          )}
+                                          {doc.hasUpdateRequest && (
+                                            <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300 mt-1">
+                                              Update requested
+                                            </Badge>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <Badge className={getStatusBadgeColor(doc.status) + " text-xs"}>
+                                        {doc.status.replace('_', ' ')}
+                                      </Badge>
+                                    </div>
+                                    
+                                    <div className="flex gap-1">
+                                      <Button 
+                                        size="sm" 
+                                        variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                                        onClick={() => {
+                                          const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
+                                          setSelectedDocumentId(newSelectedId);
+                                          if (newSelectedId) {
+                                            setIsRequestedDocumentsOpen(false);
+                                          }
+                                        }}
+                                        className="text-xs flex-1"
+                                      >
+                                        <MessageSquare className="h-3 w-3 mr-1" />
+                                        Messages
+                                      </Button>
+                                      
+                                      <Button 
+                                        size="sm" 
+                                        variant="outline"
+                                        onClick={() => handleDocumentAction(doc.id, 'reviewed')}
+                                        className="text-xs"
+                                      >
+                                        Review
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  ));
+                                })()}
+                                
+                                {(() => {
+                                  const availableYears = [...new Set(sortedDocs.map(doc => new Date(doc.uploadedAt).getFullYear()))].sort((a, b) => b - a);
+                                  const selectedYear = selectedYearByDoc[baseName] || availableYears[0];
+                                  const filteredDocs = sortedDocs.filter(doc => 
+                                    new Date(doc.uploadedAt).getFullYear() === selectedYear
+                                  );
+                                  return filteredDocs.length > 3 && (
+                                    <p className="text-xs text-gray-500 text-center mt-2">
+                                      +{filteredDocs.length - 3} more documents
+                                    </p>
+                                  );
+                                })()}
+                              </div>
                             </div>
-                          )}
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <Badge className={getStatusBadgeColor(doc.status)}>
-                          {doc.status.replace('_', ' ')}
-                        </Badge>
-                      </div>
-                    </div>
-                    
-                    <div className="flex flex-wrap gap-2 mt-3">
-                                             <Button 
-                         size="sm" 
-                         variant={selectedDocumentId === doc.id ? "default" : "outline"}
-                         onClick={() => {
-                           console.log('Message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
-                           const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
-                           console.log('Setting selectedDocumentId to:', newSelectedId);
-                           setSelectedDocumentId(newSelectedId);
-                           // Auto-collapse the Requested Documents section when opening messages
-                           if (newSelectedId) {
-                             setIsRequestedDocumentsOpen(false);
-                           }
-                         }}
-                       >
-                        <MessageSquare className="h-4 w-4 mr-1" />
-                        Messages
-                      </Button>
-                      
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => handleDocumentAction(doc.id, 'reviewed')}
-                      >
-                        Review
-                      </Button>
-                      {doc.status === 'needs_update' && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => handleRequestUpdate(doc)}
-                        >
-                          Request Update
-                        </Button>
-                      )}
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => { setRequestInitialName(doc.name.replace(/\.[^/.]+$/, '')); setIsRequestPopupOpen(true); }}
-                      >
-                        Add Request
-                      </Button>
-                    </div>
+                          </CarouselItem>
+                        );
+                      })}
+                    </CarouselContent>
+                    <CarouselPrevious className="absolute left-2 top-1/2 -translate-y-1/2" />
+                    <CarouselNext className="absolute right-2 top-1/2 -translate-y-1/2" />
+                  </Carousel>
+                ) : (
+                  <div className="text-center py-8">
+                    <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                    <p className="text-gray-500">No client uploads yet</p>
                   </div>
-                ))}
-                             </div>
+                )}
+              </div>
 
                                {/* Requested Documents Admin View */}
                 <div className="space-y-4">
@@ -498,51 +649,116 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                       </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="space-y-4 mt-4">
-                      {documents.filter(d => d.isRequested && !d.url).map((doc) => (
-                       <div key={doc.id} className="p-4 border rounded-lg bg-orange-50/40 border-orange-200">
-                         {/* Requested Document Header */}
-                         <div className="mb-3 pb-2 border-b border-orange-200">
-                           <p className="text-xs font-medium text-orange-700 uppercase tracking-wide">
-                             Requested {doc.requestedAt?.toLocaleDateString()} by {doc.requestedBy}
-                           </p>
-                         </div>
-                         <div className="flex items-start justify-between gap-4">
-                           <div className="flex items-center gap-3 min-w-0 flex-1">
-                             <FileText className="h-5 w-5 text-orange-600 flex-shrink-0" />
-                             <div className="min-w-0">
-                               <h4 className="font-medium text-orange-900 truncate">{doc.name}</h4>
-                               <p className="text-sm text-orange-700">Requested {doc.requestedAt?.toLocaleDateString()} by {doc.requestedBy}</p>
-                             </div>
-                           </div>
-                           <div className="flex items-center gap-2 flex-shrink-0">
-                             <Badge className="bg-orange-200 text-orange-800">
-                               {doc.requestFrequency ? doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1) : 'One-time'}
-                             </Badge>
-                             <DropdownMenu>
-                               <DropdownMenuTrigger asChild>
-                                 <Button variant="outline" size="sm">⋮</Button>
-                               </DropdownMenuTrigger>
-                               <DropdownMenuContent align="end">
-                                 <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'monthly')}>Monthly</DropdownMenuItem>
-                                 <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'quarterly')}>Quarterly</DropdownMenuItem>
-                                 <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'yearly')}>Yearly</DropdownMenuItem>
-                                 <DropdownMenuSeparator />
-                                 <DropdownMenuItem 
-                                   onClick={() => handleDeleteClick(doc)}
-                                   className="text-red-600 focus:text-red-600 focus:bg-red-50"
-                                 >
-                                   <Trash2 className="h-4 w-4 mr-2" />
-                                   Delete Request
-                                 </DropdownMenuItem>
-                               </DropdownMenuContent>
-                             </DropdownMenu>
-                           </div>
-                         </div>
-                         {doc.description && (
-                           <p className="text-sm text-orange-800 mt-2">{doc.description}</p>
-                         )}
-                       </div>
-                     ))}
+                      {Array.from(groupDocumentsByBaseNameMap(documents.filter(d => d.isRequested && !d.url)).entries()).length > 0 ? (
+                        <Carousel
+                          opts={{
+                            align: "start",
+                            loop: false,
+                          }}
+                          className="w-full"
+                        >
+                          <CarouselContent className="-ml-4">
+                            {Array.from(groupDocumentsByBaseNameMap(documents.filter(d => d.isRequested && !d.url)).entries()).map(([baseName, docs]) => {
+                              const sortedDocs = docs.sort((a, b) => new Date(b.requestedAt || 0).getTime() - new Date(a.requestedAt || 0).getTime());
+                              return (
+                                <CarouselItem key={baseName} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
+                                  <div className="border rounded-lg overflow-hidden bg-orange-50/20">
+                                    <div className="p-3 bg-orange-50/60 border-b border-orange-200">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <div>
+                                          <h3 className="font-medium text-orange-900">{baseName}</h3>
+                                          <p className="text-sm text-orange-700">{sortedDocs.length} request{sortedDocs.length > 1 ? 's' : ''}</p>
+                                        </div>
+                                        <TimeNavigation baseName={baseName} docs={sortedDocs} tone="orange" />
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="p-4 space-y-3">
+                                      {(() => {
+                                        const availableYears = [...new Set(sortedDocs.map(doc => new Date(doc.requestedAt || 0).getFullYear()))].sort((a, b) => b - a);
+                                        const selectedYear = selectedYearByDoc[baseName] || availableYears[0];
+                                        const filteredDocs = sortedDocs.filter(doc => 
+                                          new Date(doc.requestedAt || 0).getFullYear() === selectedYear
+                                        );
+                                        return filteredDocs.slice(0, 3).map((doc, index) => (
+                                          <div key={doc.id} className="p-3 border rounded-lg bg-white/80 border-orange-200">
+                                            <div className="flex items-start justify-between gap-2 mb-2">
+                                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                <FileText className="h-4 w-4 text-orange-600 flex-shrink-0" />
+                                                <div className="min-w-0">
+                                                  <h4 className="font-medium text-orange-900 text-sm truncate">{doc.name}</h4>
+                                                  <p className="text-xs text-orange-700">
+                                                    Requested {doc.requestedAt?.toLocaleDateString()} by {doc.requestedBy}
+                                                  </p>
+                                                  {index === 0 && (
+                                                    <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300 mt-1">
+                                                      Latest Request
+                                                    </Badge>
+                                                  )}
+                                                </div>
+                                              </div>
+                                              <Badge className="text-xs bg-orange-200 text-orange-800">
+                                                {doc.requestFrequency ? doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1) : 'One-time'}
+                                              </Badge>
+                                            </div>
+                                            
+                                            <div className="flex gap-1">
+                                              <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                  <Button variant="outline" size="sm" className="text-xs flex-1">
+                                                    Manage ⋮
+                                                  </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                  <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'monthly')}>Monthly</DropdownMenuItem>
+                                                  <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'quarterly')}>Quarterly</DropdownMenuItem>
+                                                  <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'yearly')}>Yearly</DropdownMenuItem>
+                                                  <DropdownMenuSeparator />
+                                                  <DropdownMenuItem 
+                                                    onClick={() => handleDeleteClick(doc)}
+                                                    className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                                                  >
+                                                    <Trash2 className="h-4 w-4 mr-2" />
+                                                    Delete Request
+                                                  </DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                              </DropdownMenu>
+                                            </div>
+                                            
+                                            {doc.description && (
+                                              <p className="text-xs text-orange-800 mt-2">{doc.description}</p>
+                                            )}
+                                          </div>
+                                        ));
+                                      })()}
+                                      
+                                      {(() => {
+                                        const availableYears = [...new Set(sortedDocs.map(doc => new Date(doc.requestedAt || 0).getFullYear()))].sort((a, b) => b - a);
+                                        const selectedYear = selectedYearByDoc[baseName] || availableYears[0];
+                                        const filteredDocs = sortedDocs.filter(doc => 
+                                          new Date(doc.requestedAt || 0).getFullYear() === selectedYear
+                                        );
+                                        return filteredDocs.length > 3 && (
+                                          <p className="text-xs text-gray-500 text-center mt-2">
+                                            +{filteredDocs.length - 3} more requests
+                                          </p>
+                                        );
+                                      })()}
+                                    </div>
+                                  </div>
+                                </CarouselItem>
+                              );
+                            })}
+                          </CarouselContent>
+                          <CarouselPrevious className="absolute left-2 top-1/2 -translate-y-1/2" />
+                          <CarouselNext className="absolute right-2 top-1/2 -translate-y-1/2" />
+                        </Carousel>
+                      ) : (
+                        <div className="text-center py-8">
+                          <FileText className="h-12 w-12 text-orange-300 mx-auto mb-4" />
+                          <p className="text-orange-600">No document requests yet</p>
+                        </div>
+                      )}
                     </CollapsibleContent>
                   </Collapsible>
                 </div>
@@ -659,78 +875,126 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
             <CardTitle className="flex items-center gap-2 text-green-900">
               <FileText className="h-5 w-5" />
               Deliverables
+              <Badge className="text-xs bg-green-100 text-green-700 border-green-300 ml-2">
+                Files shared by advisor
+              </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6">
-            {/* Deliverable Cards - Matching Client Document Upload Style */}
-            <div>
-              <div className="grid gap-4 md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3">
-                                 {documents.filter(d => d.folder === 'Reports').map((doc) => (
-                   <div key={doc.id} className={`p-4 border rounded-lg hover:bg-gray-50 transition-colors ${
-                     selectedDocumentId === doc.id ? 'border-blue-300 bg-blue-50/30' : 'border-gray-200'
-                   }`}>
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <FileText className="h-5 w-5 text-green-600 flex-shrink-0" />
-                        <div className="min-w-0">
-                          <h4 className="font-medium text-gray-900 truncate">{doc.name}</h4>
-                          <p className="text-sm text-gray-500">
-                            report
-                          </p>
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <Badge className="text-xs bg-green-100 text-green-700 border-green-300">
-                          report
-                        </Badge>
-                      </div>
-                    </div>
-                    
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      <Badge className="text-xs bg-green-100 text-green-700 border-green-300">
-                        Generated {doc.uploadedAt.toLocaleDateString()}
-                      </Badge>
-                      {getNextDueDate(doc.uploadedAt, doc.requestFrequency) && (
-                        <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-300">
-                          Due {getNextDueDate(doc.uploadedAt, doc.requestFrequency)!.toLocaleDateString()}
-                        </Badge>
-                      )}
-                    </div>
-                    
-                                         <div className="flex flex-wrap gap-2 mt-3">
-                                               <Button 
-                          size="sm" 
-                          variant={selectedDocumentId === doc.id ? "default" : "outline"}
-                          onClick={() => {
-                            console.log('Deliverable message button clicked for doc:', doc.id, 'Current selectedDocumentId:', selectedDocumentId);
-                            const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
-                            console.log('Setting selectedDocumentId to:', newSelectedId);
-                            setSelectedDocumentId(newSelectedId);
-                            // Auto-collapse the Requested Documents section when opening messages
-                            if (newSelectedId) {
-                              setIsRequestedDocumentsOpen(false);
-                            }
-                          }}
-                          className={`text-xs ${selectedDocumentId === doc.id ? '' : 'hover:bg-green-100 hover:text-green-700 hover:border-green-300'}`}
-                        >
-                         <MessageSquare className="h-4 w-4 mr-1" />
-                         Messages
-                       </Button>
-                                               <Button size="sm" variant="outline" className="text-xs hover:bg-green-100 hover:text-green-700 hover:border-green-300">
-                          View
-                        </Button>
-                        <Button size="sm" variant="outline" className="text-xs hover:bg-green-100 hover:text-green-700 hover:border-green-300">
-                          Download
-                        </Button>
-                        <Button size="sm" variant="outline" className="text-xs hover:bg-green-100 hover:text-green-700 hover:border-green-300">
-                          Share
-                        </Button>
-                     </div>
-                  </div>
-                ))}
-              </div>
-                         </div>
+            {/* Deliverables Carousel - Grouped by type */}
+            <div className="space-y-4">
+              {Array.from(groupDocumentsByBaseNameMap(documents.filter(d => d.folder === 'Reports')).entries()).length > 0 ? (
+                <Carousel
+                  opts={{
+                    align: "start",
+                    loop: false,
+                  }}
+                  className="w-full"
+                >
+                  <CarouselContent className="-ml-4">
+                    {Array.from(groupDocumentsByBaseNameMap(documents.filter(d => d.folder === 'Reports')).entries()).map(([baseName, docs]) => {
+                      const sortedDocs = docs.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+                      return (
+                        <CarouselItem key={baseName} className="pl-4 basis-full md:basis-1/2 lg:basis-1/3">
+                          <div className="border rounded-lg overflow-hidden bg-white">
+                            <div className="p-3 bg-green-50/60 border-b border-green-200">
+                              <div className="flex items-center justify-between mb-2">
+                                <div>
+                                  <h3 className="font-medium text-green-900">{baseName}</h3>
+                                  <p className="text-sm text-green-700">{sortedDocs.length} deliverable{sortedDocs.length > 1 ? 's' : ''}</p>
+                                </div>
+                                <TimeNavigation baseName={baseName} docs={sortedDocs} tone="green" />
+                              </div>
+                            </div>
+                            
+                            <div className="p-4 space-y-3">
+                              {(() => {
+                                const availableYears = [...new Set(sortedDocs.map(doc => new Date(doc.uploadedAt).getFullYear()))].sort((a, b) => b - a);
+                                const selectedYear = selectedYearByDoc[baseName] || availableYears[0];
+                                const filteredDocs = sortedDocs.filter(doc => 
+                                  new Date(doc.uploadedAt).getFullYear() === selectedYear
+                                );
+                                return filteredDocs.slice(0, 3).map((doc, index) => (
+                                <div key={doc.id} className={`p-3 border rounded-lg hover:bg-gray-50 transition-colors ${
+                                  selectedDocumentId === doc.id ? 'border-green-300 bg-green-50/30' : 'border-gray-200'
+                                }`}>
+                                  <div className="flex items-start justify-between gap-2 mb-2">
+                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                      <FileText className="h-4 w-4 text-green-600 flex-shrink-0" />
+                                      <div className="min-w-0">
+                                        <h4 className="font-medium text-gray-900 text-sm truncate">{(doc as any).name}</h4>
+                                        <p className="text-xs text-gray-500">
+                                          Generated {(doc as any).uploadedAt.toLocaleDateString()}
+                                        </p>
+                                        {index === 0 && (
+                                          <Badge className="text-xs bg-green-100 text-green-700 border-green-300 mt-1">
+                                            Latest
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <Badge className="text-xs bg-green-100 text-green-700 border-green-300">
+                                      deliverable
+                                    </Badge>
+                                  </div>
+                                  
+                                  <div className="flex gap-1">
+                                    <Button 
+                                      size="sm" 
+                                      variant={selectedDocumentId === doc.id ? "default" : "outline"}
+                                      onClick={() => {
+                                        const newSelectedId = selectedDocumentId === doc.id ? null : doc.id;
+                                        setSelectedDocumentId(newSelectedId);
+                                        if (newSelectedId) {
+                                          setIsRequestedDocumentsOpen(false);
+                                        }
+                                      }}
+                                      className="text-xs flex-1"
+                                    >
+                                      <MessageSquare className="h-3 w-3 mr-1" />
+                                      Messages
+                                    </Button>
+                                    
+                                    <Button 
+                                      size="sm" 
+                                      variant="outline"
+                                      className="text-xs"
+                                    >
+                                      <CheckCircle className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                </div>
+                                ));
+                              })()}
+                              
+                              {(() => {
+                                const availableYears = [...new Set(sortedDocs.map(doc => new Date(doc.uploadedAt).getFullYear()))].sort((a, b) => b - a);
+                                const selectedYear = selectedYearByDoc[baseName] || availableYears[0];
+                                const filteredDocs = sortedDocs.filter(doc => 
+                                  new Date(doc.uploadedAt).getFullYear() === selectedYear
+                                );
+                                return filteredDocs.length > 3 && (
+                                  <p className="text-xs text-gray-500 text-center mt-2">
+                                    +{filteredDocs.length - 3} more deliverables
+                                  </p>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        </CarouselItem>
+                      );
+                    })}
+                  </CarouselContent>
+                  <CarouselPrevious className="absolute left-2 top-1/2 -translate-y-1/2" />
+                  <CarouselNext className="absolute right-2 top-1/2 -translate-y-1/2" />
+                </Carousel>
+              ) : (
+                <div className="text-center py-8">
+                  <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                  <p className="text-gray-500">No deliverables created yet</p>
+                </div>
+              )}
+            </div>
 
              {/* Documents Due Section */}
              <div className="mb-6">
