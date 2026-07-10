@@ -1,184 +1,190 @@
 import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { useDocumentsStore } from '@/context/DocumentsContext';
-import { PresetBin } from '@/types/dashboard';
 import { useToast } from '@/hooks/use-toast';
+import { getErrorMessage } from '@/utils/errors';
+import { I } from '@/components/docflow/icons';
 
-type BinItem = { id: string; name: string; };
+type PresetBin = { id: string; label: string; items: { name: string }[] };
+
+type BinItem = { id: string; name: string };
 
 const DEFAULT_TYPES: string[] = [
-  'Bank Statement',
-  'Tax Return',
-  'ID Copy',
-  'Pay Stub',
-  'Investment Statement',
-  'Insurance Policy',
-  'W-2',
-  '1099',
-  'Mortgage Statement',
-  'Business Financials',
+  'Bank Statement', 'Tax Return', 'ID Copy', 'Pay Stub', 'Investment Statement',
+  'Insurance Policy', 'W-2', '1099', 'Mortgage Statement', 'Business Financials',
+  'K-1', 'Trust Agreement',
 ];
 
 const Settings = () => {
-  const { presets, savePreset, deletePreset, updatePreset } = useDocumentsStore();
+  const { presets, savePreset, deletePreset } = useDocumentsStore();
   const { toast } = useToast();
 
   const [presetName, setPresetName] = React.useState('New Preset');
-  const [bins, setBins] = React.useState<Array<{ id: string; label: string; items: BinItem[]; isDragOver?: boolean }>>([
-    { id: 'bin-1', label: 'Monthly Docs', items: [] },
-    { id: 'bin-2', label: 'Quarterly Docs', items: [] },
-    { id: 'bin-3', label: 'Yearly Docs', items: [] },
-    { id: 'bin-4', label: 'One-Time', items: [] },
+  const [bins, setBins] = React.useState<Array<{ id: string; label: string; items: BinItem[] }>>([
+    { id: 'bin-1', label: 'Monthly',   items: [] },
+    { id: 'bin-2', label: 'Quarterly', items: [] },
+    { id: 'bin-3', label: 'Yearly',    items: [] },
+    { id: 'bin-4', label: 'One-time',  items: [] },
   ]);
+  const [overId, setOverId] = React.useState<string | null>(null);
 
-  const handleDragStart = (e: React.DragEvent, typeName: string) => {
-    e.dataTransfer.setData('text/plain', typeName);
+  const handleDragStart = (e: React.DragEvent, name: string) => {
+    e.dataTransfer.setData('text/plain', name);
     e.dataTransfer.effectAllowed = 'copy';
-  };
-
-  const toggleDragOver = (binId: string, isOver: boolean) => {
-    setBins(prev => prev.map(b => b.id === binId ? { ...b, isDragOver: isOver } : b));
   };
 
   const handleDrop = (e: React.DragEvent, binId: string) => {
     e.preventDefault();
     const name = e.dataTransfer.getData('text/plain');
+    setOverId(null);
     if (!name) return;
     setBins(prev => prev.map(b => {
       if (b.id !== binId) return b;
-      const exists = b.items.some(i => i.name.toLowerCase() === name.toLowerCase());
-      if (exists) return { ...b, isDragOver: false };
-      const newItem: BinItem = { id: `${binId}-${Date.now()}`, name };
-      return { ...b, items: [...b.items, newItem], isDragOver: false };
+      if (b.items.some(i => i.name.toLowerCase() === name.toLowerCase())) return b;
+      return { ...b, items: [...b.items, { id: `${binId}-${Date.now()}`, name }] };
     }));
   };
 
-  const handleRemove = (binId: string, itemId: string) => {
+  const handleRemove = (binId: string, itemId: string) =>
     setBins(prev => prev.map(b => b.id === binId ? { ...b, items: b.items.filter(i => i.id !== itemId) } : b));
-  };
 
-  const handleLabelChange = (binId: string, value: string) => {
+  const handleLabelChange = (binId: string, value: string) =>
     setBins(prev => prev.map(b => b.id === binId ? { ...b, label: value } : b));
+
+  const handleSavePreset = async () => {
+    const presetBins: PresetBin[] = bins.map(b => ({
+      id: b.id,
+      label: b.label,
+      items: b.items.map(i => ({ name: i.name })),
+    }));
+    try {
+      const created = await savePreset(presetName, presetBins);
+      toast({ title: 'Preset saved', description: `"${created.name}" created.` });
+    } catch (err) {
+      toast({ title: 'Save failed', description: getErrorMessage(err), variant: 'destructive' });
+    }
   };
 
-  const handleSavePreset = () => {
-    const presetBins: PresetBin[] = bins.map(b => ({ id: b.id, label: b.label, items: b.items.map(i => ({ name: i.name })) }));
-    const created = savePreset(presetName, presetBins);
-    toast({ title: 'Preset Saved', description: `Preset "${created.name}" created.` });
-  };
+  const totalItems = bins.reduce((s, b) => s + b.items.length, 0);
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-900">Advisor Settings</h2>
+    <div className="df-page">
+      <div className="df-page-head">
+        <div>
+          <h1 className="df-client-name">Settings</h1>
+          <div className="df-client-meta">
+            <span>Document request presets</span>
+            <span className="df-dot-sep" />
+            <span>{presets.length} saved preset{presets.length !== 1 ? 's' : ''}</span>
+          </div>
+        </div>
       </div>
 
-      <Card className="mb-6 border-blue-200 shadow-lg">
-        <CardHeader className="bg-gradient-to-r from-indigo-100 to-indigo-50 border-b border-blue-200">
-          <CardTitle className="flex items-center gap-2 text-blue-900">
-            Build Documents Needed Preset
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end mb-4">
-            <div className="sm:w-64">
-              <label className="block text-xs text-gray-600 mb-1">Preset name</label>
-              <Input value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="e.g., New Client Onboarding" />
-            </div>
-            <Button onClick={handleSavePreset} className="bg-blue-600 hover:bg-blue-700">Save Preset</Button>
+      <div className="df-section">
+        <div className="df-section-head">
+          <div>
+            <div className="df-section-title">Build a preset</div>
+            <div className="df-section-sub">{totalItems} item{totalItems !== 1 ? 's' : ''} · drag types into a cadence</div>
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            {bins.map((bin) => (
+          <div className="df-right">
+            <input
+              className="df-input"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Preset name"
+              style={{ width: 220 }}
+            />
+            <button className="df-btn df-sm df-primary" onClick={handleSavePreset}>
+              <I.Check size={12} /> Save preset
+            </button>
+          </div>
+        </div>
+        <div className="df-section-body">
+          <div className="df-bins">
+            {bins.map(bin => (
               <div
                 key={bin.id}
-                className={`rounded-lg p-3 min-h-[120px] border-2 border-dashed transition-colors bg-blue-50/20 ${
-                  bin.isDragOver ? 'border-blue-400 bg-blue-50/60' : 'border-blue-300'
-                }`}
-                onDragOver={(e) => { e.preventDefault(); toggleDragOver(bin.id, true); }}
-                onDragLeave={() => toggleDragOver(bin.id, false)}
+                className={'df-bin' + (overId === bin.id ? ' df-over' : '')}
+                onDragOver={(e) => { e.preventDefault(); setOverId(bin.id); }}
+                onDragLeave={() => setOverId(null)}
                 onDrop={(e) => handleDrop(e, bin.id)}
               >
-                <input
-                  value={bin.label}
-                  onChange={(e) => handleLabelChange(bin.id, e.target.value)}
-                  placeholder="Custom label"
-                  className="w-full mb-2 text-sm font-medium text-blue-900 bg-transparent focus:outline-none"
-                />
-                <div className="space-y-2">
-                  {bin.items.length === 0 ? (
-                    <p className="text-xs text-gray-500">Drag document types here</p>
-                  ) : (
-                    bin.items.map((item) => (
-                      <div key={item.id} className="flex items-center justify-between gap-2 p-2 bg-white border border-blue-100 rounded-md">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-sm text-gray-800 truncate">{item.name}</span>
-                          <Badge className="text-xs bg-blue-200 text-blue-800">Preset</Badge>
-                        </div>
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-gray-500 hover:text-red-600" onClick={() => handleRemove(bin.id, item.id)}>
-                          ×
-                        </Button>
-                      </div>
-                    ))
-                  )}
+                <div className="df-bin-head">
+                  <input
+                    value={bin.label}
+                    onChange={(e) => handleLabelChange(bin.id, e.target.value)}
+                    style={{
+                      border: 0,
+                      background: 'transparent',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: 'var(--df-ink)',
+                      outline: 0,
+                      width: '70%',
+                    }}
+                  />
+                  <span className="df-bin-cnt">{bin.items.length}</span>
                 </div>
+                {bin.items.length === 0 && <div className="df-bin-empty">Drop a type here</div>}
+                {bin.items.map(it => (
+                  <div key={it.id} className="df-bin-item">
+                    <span className="df-dotc" />
+                    <span>{it.name}</span>
+                    <span className="df-x" onClick={() => handleRemove(bin.id, it.id)}><I.X size={11} /></span>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
-
-          <div>
-            <h4 className="text-sm font-semibold text-gray-800 mb-3">Available document types</h4>
-            <div className="flex flex-wrap gap-2">
-              {DEFAULT_TYPES.map(type => (
-                <div
-                  key={type}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, type)}
-                  className="px-3 py-1.5 text-sm rounded-full border border-gray-300 bg-white cursor-grab active:cursor-grabbing hover:bg-gray-50"
-                  title="Drag to a bin"
-                >
-                  {type}
-                </div>
-              ))}
-            </div>
+          <div className="df-types">
+            {DEFAULT_TYPES.map(t => (
+              <div key={t} className="df-type-chip" draggable onDragStart={(e) => handleDragStart(e, t)}>
+                <span className="df-plus">+</span>{t}
+              </div>
+            ))}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      <Card className="border-blue-200 shadow-lg">
-        <CardHeader className="bg-gradient-to-r from-blue-100 to-blue-50 border-b border-blue-200">
-          <CardTitle className="flex items-center gap-2 text-blue-900">
-            Document Presets
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 space-y-3">
-          {presets.length === 0 && (
-            <p className="text-sm text-gray-600">No presets yet. Create one above.</p>
-          )}
-          {presets.map(p => (
-            <div key={p.id} className="p-3 border rounded-lg flex items-center justify-between">
-              <div>
-                <div className="font-medium text-gray-900">{p.name}</div>
-                <div className="text-xs text-gray-600">{p.bins.reduce((acc, b) => acc + b.items.length, 0)} documents • {p.bins.length} bins</div>
+      <div className="df-section">
+        <div className="df-section-head">
+          <div>
+            <div className="df-section-title">Saved presets</div>
+            <div className="df-section-sub">{presets.length} preset{presets.length !== 1 ? 's' : ''}</div>
+          </div>
+        </div>
+        <div className="df-list">
+          {presets.length === 0 && <div className="df-empty">No presets yet. Build one above.</div>}
+          {presets.map(p => {
+            const total = p.bins.reduce((acc, b) => acc + b.items.length, 0);
+            return (
+              <div key={p.id} className="df-row" style={{ gridTemplateColumns: '1fr auto auto' }}>
+                <div>
+                  <div className="df-name">{p.name}</div>
+                  <div className="df-meta">{total} document{total !== 1 ? 's' : ''} · {p.bins.length} bin{p.bins.length !== 1 ? 's' : ''} · updated {p.updatedAt.toLocaleDateString()}</div>
+                </div>
+                <button
+                  className="df-btn df-sm"
+                  onClick={() => {
+                    setPresetName(p.name);
+                    setBins(p.bins.map(b => ({
+                      id: b.id,
+                      label: b.label,
+                      items: b.items.map((i, idx) => ({ id: `${b.id}-${idx}-${Date.now()}`, name: i.name })),
+                    })));
+                  }}
+                >
+                  Edit
+                </button>
+                <button className="df-btn df-sm df-ghost" onClick={() => deletePreset(p.id)}>
+                  <I.Trash size={12} /> Delete
+                </button>
               </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => {
-                  setPresetName(p.name);
-                  setBins(p.bins.map(b => ({ id: b.id, label: b.label, items: b.items.map((i, idx) => ({ id: `${b.id}-${idx}-${Date.now()}`, name: i.name })) })));
-                }}>Edit</Button>
-                <Button variant="outline" size="sm" onClick={() => deletePreset(p.id)}>Delete</Button>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 };
 
 export default Settings;
-
-

@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1778344083910,
+      "tag": "0000_hesitant_pandemic",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783708112464,
+      "tag": "0001_add_storage_and_aum",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783708130860,
+      "tag": "0002_drop_client_counters",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,73 +1,78 @@
-# Welcome to your Lovable project
+# DocFlow
 
-## Project info
+A financial-advisor document portal. Advisors request, review, and share documents
+with clients; clients upload files and message their advisor through a dedicated portal.
 
-**URL**: https://lovable.dev/projects/2a6a15e7-9ce8-497a-9ed1-a3babf550fec
+- **Frontend** — Vite + React + TypeScript + shadcn/ui (port `8080`, `/api` proxied to `4000`)
+- **Backend** — Express + Drizzle ORM + PostgreSQL in [`server/`](server/) (port `4000`)
+- **Auth** — JWT in an httpOnly cookie; role-based routing (provider vs client)
+- **Storage** — uploaded files on local disk under `server/uploads/`, served only through an authenticated download endpoint
 
-## How can I edit this code?
+## Prerequisites
 
-There are several ways of editing your application.
+- Node.js 20+
+- Docker (for PostgreSQL), or a local PostgreSQL 16 instance
 
-**Use Lovable**
+## Getting started
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/2a6a15e7-9ce8-497a-9ed1-a3babf550fec) and start prompting.
+### 1. Database
 
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+```bash
+docker compose up -d          # starts postgres:16 on localhost:5432
 ```
 
-**Edit a file directly in GitHub**
+### 2. Backend
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+```bash
+cd server
+cp .env.example .env          # adjust if your DB/secret differ
+npm install
+npm run db:migrate            # apply schema migrations
+npm run db:seed               # seed demo data (idempotent; writes placeholder PDFs)
+npm run dev                   # API on http://localhost:4000
+```
 
-**Use GitHub Codespaces**
+> **Production note:** the server refuses to start in `NODE_ENV=production` unless
+> `JWT_SECRET` is set to a strong, non-default value.
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### 3. Frontend
 
-## What technologies are used for this project?
+In a second terminal, from the repo root:
 
-This project is built with:
+```bash
+npm install
+npm run dev                   # app on http://localhost:8080 (proxies /api → :4000)
+```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## Demo credentials (seeded)
 
-## How can I deploy this project?
+| Role    | Email                        | Password      |
+|---------|------------------------------|---------------|
+| Advisor | `sarah@meridiancpa.com`      | `password123` |
+| Client  | `sarah.johnson@meridian.co`  | `client123`   |
 
-Simply open [Lovable](https://lovable.dev/projects/2a6a15e7-9ce8-497a-9ed1-a3babf550fec) and click on Share -> Publish.
+## Useful scripts
 
-## Can I connect a custom domain to my Lovable project?
+Root (frontend):
 
-Yes, you can!
+| Command                                 | Description                               |
+|-----------------------------------------|-------------------------------------------|
+| `npm run dev`                           | Vite dev server                           |
+| `npm run build`                         | Production build (does **not** typecheck) |
+| `npm run lint`                          | ESLint                                    |
+| `npx tsc --noEmit -p tsconfig.app.json` | Typecheck the app                         |
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+`server/`:
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+| Command               | Description                                  |
+|-----------------------|----------------------------------------------|
+| `npm run dev`         | API with hot reload                          |
+| `npm run build`       | Typecheck + compile to `dist/`               |
+| `npm run db:generate` | Generate a Drizzle migration from the schema |
+| `npm run db:migrate`  | Apply pending migrations                     |
+| `npm run db:seed`     | Seed / self-heal demo data                   |
+
+## Notes
+
+- Uploads accept PDF, images, and common Office/CSV types up to **25 MB**.
+- `drilldown/` is an unrelated standalone prototype and is not part of this app.

@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Server secrets & uploaded files
+server/.env
+server/uploads/
+
+# Unrelated standalone prototype (own git repo)
+drilldown/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

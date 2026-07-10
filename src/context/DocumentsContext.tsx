@@ -1,235 +1,201 @@
-import React, { createContext, useContext, useMemo, useState, ReactNode, useEffect } from 'react';
-import { Document, RequestFrequency, DocumentRequest, DocumentPreset, PresetBin } from '@/types/dashboard';
-import { mockDocuments } from '@/utils/mockData';
+import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode, useCallback } from 'react';
+import { api } from '@/api/client';
+import type { Document, RequestFrequency, Preset } from '@/api/types';
+import { useAuth } from './AuthContext';
+
+type DocumentPatch = Partial<{
+  name: string;
+  folder: string;
+  isRequested: boolean;
+  status: 'pending' | 'reviewed' | 'needs_update' | 'in_review';
+  hasUpdateRequest: boolean;
+  updateRequestDescription: string;
+  requestedVersion: string;
+  requestFrequency: RequestFrequency;
+  dueDate: string | null;
+}>;
 
 interface DocumentsContextValue {
   documents: Document[];
-  setDocuments: React.Dispatch<React.SetStateAction<Document[]>>;
+  loading: boolean;
+  refresh: () => Promise<void>;
+
+  // Mutations
   requestDocument: (params: {
     documentName: string;
     description?: string;
-    requestedBy: string;
     clientId: string;
     frequency: RequestFrequency;
-  }) => DocumentRequest;
-  requestDocumentUpdate: (params: {
-    documentId: string;
-    requestedBy: string;
-    description?: string;
-    requestedVersion?: string;
-  }) => void;
-  updateRequestFrequency: (documentId: string, frequency: RequestFrequency) => void;
-  updateDocumentDueDate: (documentId: string, dueDate: Date | undefined) => void;
-  deleteRequestedDocument: (documentId: string) => void;
-  // Presets API
-  presets: DocumentPreset[];
-  savePreset: (name: string, bins: PresetBin[]) => DocumentPreset;
-  updatePreset: (presetId: string, update: Partial<Pick<DocumentPreset, 'name' | 'bins'>>) => void;
-  deletePreset: (presetId: string) => void;
-  applyPresetToClient: (presetId: string, params: { clientId: string; advisorName: string; }) => void;
+    dueDate?: Date | null;
+  }) => Promise<Document>;
+  /** Fulfil a request (or upload a new version) by attaching a real file. */
+  fulfillRequest: (documentId: string, file: File) => Promise<Document>;
+  /** Create a document record from a File and upload its bytes in one step. */
+  uploadDocument: (params: { clientId: string; file: File; folder?: string }) => Promise<Document>;
+  /** Patch document metadata / status. */
+  patchDocument: (id: string, patch: DocumentPatch) => Promise<Document>;
+  updateRequestFrequency: (documentId: string, frequency: RequestFrequency) => Promise<void>;
+  updateDocumentDueDate: (documentId: string, dueDate: Date | undefined) => Promise<void>;
+  deleteRequestedDocument: (documentId: string) => Promise<void>;
+
+  // Presets
+  presets: Preset[];
+  savePreset: (name: string, bins: Preset['bins']) => Promise<Preset>;
+  deletePreset: (id: string) => Promise<void>;
 }
 
 const DocumentsContext = createContext<DocumentsContextValue | undefined>(undefined);
 
+const extOf = (fileName: string) => fileName.split('.').pop()?.toLowerCase() || '';
+
 export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
-  const [documents, setDocuments] = useState<Document[]>(mockDocuments);
-  const [presets, setPresets] = useState<DocumentPreset[]>(() => {
-    try {
-      const raw = localStorage.getItem('wlp.documentPresets');
-      if (!raw) return [];
-      const parsed: DocumentPreset[] = JSON.parse(raw);
-      return parsed.map(p => ({
-        ...p,
-        createdAt: new Date(p.createdAt),
-        updatedAt: new Date(p.updatedAt),
-      }));
-    } catch {
-      return [];
+  const { me } = useAuth();
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!me) {
+      setDocuments([]);
+      setPresets([]);
+      return;
     }
-  });
+    setLoading(true);
+    try {
+      const [docs, ps] = await Promise.all([
+        api.documents.list(),
+        me.kind === 'provider' ? api.presets.list() : Promise.resolve([] as Preset[]),
+      ]);
+      setDocuments(docs);
+      setPresets(ps);
+    } finally {
+      setLoading(false);
+    }
+  }, [me]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('wlp.documentPresets', JSON.stringify(presets));
-    } catch {
-      // ignore
-    }
-  }, [presets]);
+    refresh();
+  }, [refresh]);
 
-  const requestDocument: DocumentsContextValue['requestDocument'] = ({ documentName, description, requestedBy, clientId, frequency }) => {
-    const now = new Date();
-    
-    // Check if there's an existing document with similar name that could be an update request
-    const existingDoc = documents.find(doc => {
-      if (!doc.url) return false; // Skip documents that don't exist yet
-      
-      const docBaseName = doc.name.toLowerCase().replace(/\.[^/.]+$/, ''); // Remove extension
-      const requestedBaseName = documentName.toLowerCase().replace(/\.[^/.]+$/, '');
-      
-      // Check for similar base names (e.g., "Tax Returns" matches)
-      const baseWords = docBaseName.split(' ').filter(word => word.length > 2);
-      const requestedWords = requestedBaseName.split(' ').filter(word => word.length > 2);
-      
-      // If most significant words match, consider it the same document type
-      const matchingWords = baseWords.filter(word => requestedWords.includes(word));
-      return matchingWords.length >= Math.min(2, Math.max(baseWords.length, requestedWords.length) * 0.6);
+  const upsert = useCallback((doc: Document) => {
+    setDocuments((prev) => {
+      const idx = prev.findIndex((d) => d.id === doc.id);
+      if (idx === -1) return [doc, ...prev];
+      const copy = [...prev];
+      copy[idx] = doc;
+      return copy;
     });
+  }, []);
 
-    if (existingDoc) {
-      // Extract version from requested document name (e.g., "2024" from "Tax Returns 2024")
-      const versionMatch = documentName.match(/\b(19|20)\d{2}\b/);
-      const requestedVersion = versionMatch ? versionMatch[0] : undefined;
-      
-      // Add update request to existing document
-      requestDocumentUpdate({
-        documentId: existingDoc.id,
-        requestedBy,
-        description,
-        requestedVersion
-      });
-      
-      return {
-        id: existingDoc.id,
-        documentName,
-        description,
-        requestedBy,
-        requestedAt: now,
+  const requestDocument = useCallback<DocumentsContextValue['requestDocument']>(
+    async ({ documentName, description, clientId, frequency, dueDate }) => {
+      const doc = await api.documents.create({
         clientId,
-        status: 'pending',
-        frequency,
-      };
-    }
-
-    // Create new requested document if no existing document found
-    const newRequestedDoc: Document = {
-      id: `req-${now.getTime()}`,
-      name: documentName,
-      type: '',
-      size: '',
-      uploadedBy: '',
-      uploadedAt: now,
-      folder: 'Documents',
-      clientId,
-      isRequested: true,
-      requestedBy,
-      requestedAt: now,
-      description,
-      requestFrequency: frequency,
-    };
-
-    setDocuments(prev => [newRequestedDoc, ...prev]);
-
-    return {
-      id: newRequestedDoc.id,
-      documentName,
-      description,
-      requestedBy,
-      requestedAt: now,
-      clientId,
-      status: 'pending',
-      frequency,
-    };
-  };
-
-  const requestDocumentUpdate: DocumentsContextValue['requestDocumentUpdate'] = ({ documentId, requestedBy, description, requestedVersion }) => {
-    const now = new Date();
-    setDocuments(prev => prev.map(doc => 
-      doc.id === documentId 
-        ? { 
-            ...doc, 
-            hasUpdateRequest: true,
-            updateRequestedBy: requestedBy,
-            updateRequestedAt: now,
-            updateRequestDescription: description,
-            requestedVersion
-          } 
-        : doc
-    ));
-  };
-
-  const updateRequestFrequency: DocumentsContextValue['updateRequestFrequency'] = (documentId, frequency) => {
-    setDocuments(prev => prev.map(doc => doc.id === documentId ? { ...doc, requestFrequency: frequency } : doc));
-  };
-
-  const updateDocumentDueDate: DocumentsContextValue['updateDocumentDueDate'] = (documentId, dueDate) => {
-    setDocuments(prev => prev.map(doc => doc.id === documentId ? { ...doc, dueDate } : doc));
-  };
-
-  const deleteRequestedDocument: DocumentsContextValue['deleteRequestedDocument'] = (documentId) => {
-    setDocuments(prev => prev.filter(doc => doc.id !== documentId));
-  };
-
-  const inferFrequencyFromLabel = (label: string): RequestFrequency => {
-    const l = label.toLowerCase();
-    if (l.includes('day')) return 'daily';
-    if (l.includes('month')) return 'monthly';
-    if (l.includes('quarter')) return 'quarterly';
-    if (l.includes('year')) return 'yearly';
-    if (l.includes('one')) return 'one-time';
-    return 'one-time';
-  };
-
-  const savePreset: DocumentsContextValue['savePreset'] = (name, bins) => {
-    const now = new Date();
-    const preset: DocumentPreset = {
-      id: `preset-${now.getTime()}`,
-      name: name.trim() || `Preset ${presets.length + 1}`,
-      bins: bins.map(b => ({ id: b.id, label: b.label, items: b.items.map(i => ({ name: i.name })) })),
-      createdAt: now,
-      updatedAt: now,
-    };
-    setPresets(prev => [preset, ...prev]);
-    return preset;
-  };
-
-  const updatePreset: DocumentsContextValue['updatePreset'] = (presetId, update) => {
-    setPresets(prev => prev.map(p => p.id === presetId ? { ...p, ...update, updatedAt: new Date() } : p));
-  };
-
-  const deletePreset: DocumentsContextValue['deletePreset'] = (presetId) => {
-    setPresets(prev => prev.filter(p => p.id !== presetId));
-  };
-
-  const applyPresetToClient: DocumentsContextValue['applyPresetToClient'] = (presetId, { clientId, advisorName }) => {
-    const preset = presets.find(p => p.id === presetId);
-    if (!preset) return;
-    const seen = new Set<string>();
-    preset.bins.forEach(bin => {
-      const frequency = inferFrequencyFromLabel(bin.label);
-      bin.items.forEach(item => {
-        const key = item.name.toLowerCase();
-        if (seen.has(key)) return;
-        seen.add(key);
-        requestDocument({
-          documentName: item.name,
-          requestedBy: advisorName,
-          clientId,
-          frequency,
-        });
+        name: documentName,
+        description,
+        isRequested: true,
+        requestFrequency: frequency,
+        dueDate: dueDate ? dueDate.toISOString() : undefined,
       });
-    });
-  };
-
-  const value = useMemo(() => ({
-    documents,
-    setDocuments,
-    requestDocument,
-    requestDocumentUpdate,
-    updateRequestFrequency,
-    updateDocumentDueDate,
-    deleteRequestedDocument,
-    presets,
-    savePreset,
-    updatePreset,
-    deletePreset,
-    applyPresetToClient,
-  }), [documents, presets]);
-
-  return (
-    <DocumentsContext.Provider value={value}>
-      {children}
-    </DocumentsContext.Provider>
+      setDocuments((prev) => [doc, ...prev]);
+      return doc;
+    },
+    []
   );
+
+  const fulfillRequest = useCallback<DocumentsContextValue['fulfillRequest']>(
+    async (documentId, file) => {
+      const updated = await api.documents.uploadFile(documentId, file);
+      upsert(updated);
+      return updated;
+    },
+    [upsert]
+  );
+
+  const uploadDocument = useCallback<DocumentsContextValue['uploadDocument']>(
+    async ({ clientId, file, folder }) => {
+      const created = await api.documents.create({
+        clientId,
+        name: file.name,
+        type: extOf(file.name),
+        folder: folder || 'Uploads',
+      });
+      const withFile = await api.documents.uploadFile(created.id, file);
+      upsert(withFile);
+      return withFile;
+    },
+    [upsert]
+  );
+
+  const patchDocument = useCallback<DocumentsContextValue['patchDocument']>(
+    async (id, patch) => {
+      const updated = await api.documents.update(id, patch);
+      upsert(updated);
+      return updated;
+    },
+    [upsert]
+  );
+
+  const updateRequestFrequency = useCallback<DocumentsContextValue['updateRequestFrequency']>(
+    async (id, frequency) => {
+      const updated = await api.documents.update(id, { requestFrequency: frequency });
+      upsert(updated);
+    },
+    [upsert]
+  );
+
+  const updateDocumentDueDate = useCallback<DocumentsContextValue['updateDocumentDueDate']>(
+    async (id, dueDate) => {
+      const updated = await api.documents.update(id, { dueDate: dueDate ? dueDate.toISOString() : null });
+      upsert(updated);
+    },
+    [upsert]
+  );
+
+  const deleteRequestedDocument = useCallback<DocumentsContextValue['deleteRequestedDocument']>(
+    async (id) => {
+      await api.documents.remove(id);
+      setDocuments((prev) => prev.filter((d) => d.id !== id));
+    },
+    []
+  );
+
+  const savePreset = useCallback<DocumentsContextValue['savePreset']>(async (name, bins) => {
+    const created = await api.presets.create({ name, bins });
+    setPresets((prev) => [created, ...prev]);
+    return created;
+  }, []);
+
+  const deletePreset = useCallback<DocumentsContextValue['deletePreset']>(async (id) => {
+    await api.presets.remove(id);
+    setPresets((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      documents,
+      loading,
+      refresh,
+      requestDocument,
+      fulfillRequest,
+      uploadDocument,
+      patchDocument,
+      updateRequestFrequency,
+      updateDocumentDueDate,
+      deleteRequestedDocument,
+      presets,
+      savePreset,
+      deletePreset,
+    }),
+    [
+      documents, loading, presets, refresh,
+      requestDocument, fulfillRequest, uploadDocument, patchDocument,
+      updateRequestFrequency, updateDocumentDueDate, deleteRequestedDocument,
+      savePreset, deletePreset,
+    ]
+  );
+
+  return <DocumentsContext.Provider value={value}>{children}</DocumentsContext.Provider>;
 };
 
 export const useDocumentsStore = () => {
@@ -237,5 +203,3 @@ export const useDocumentsStore = () => {
   if (!ctx) throw new Error('useDocumentsStore must be used within DocumentsProvider');
   return ctx;
 };
-
-

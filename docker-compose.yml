@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: docflow-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: docflow
+      POSTGRES_PASSWORD: docflow_dev
+      POSTGRES_DB: docflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - docflow-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docflow -d docflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  docflow-pg-data:

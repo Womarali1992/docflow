@@ -1,10 +1,10 @@
 import React from 'react';
 import { useParams } from 'react-router-dom';
-import AdvisorDashboard from '@/components/AdvisorDashboard';
+import DocFlowDashboard from '@/components/docflow/DocFlowDashboard';
 
 const Client = () => {
 	const { clientId } = useParams<{ clientId: string }>();
-	return <AdvisorDashboard initialClientId={clientId} />;
+	return <DocFlowDashboard initialClientId={clientId} />;
 };
 
 export default Client;
