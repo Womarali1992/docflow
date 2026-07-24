@@ -1,32 +1,44 @@
 import React, { createContext, useContext, useMemo, useState, ReactNode, useEffect } from 'react';
-import { Document, RequestFrequency, DocumentRequest, DocumentPreset, PresetBin } from '@/types/dashboard';
+import { Document, RequestFrequency, DocumentRequest, DocumentPreset, PresetBin, DocumentTimePeriod } from '@/types/dashboard';
 import { mockDocuments } from '@/utils/mockData';
+import { isSameDocumentType, extractVersionFromName, inferFrequencyFromLabel, generateDocumentId } from '@/utils/documentUtils';
+import { STORAGE_KEYS, DOCUMENT_FOLDERS } from '@/constants/app';
+
+interface RequestDocumentParams {
+  documentName: string;
+  description?: string;
+  requestedBy: string;
+  clientId: string;
+  frequency: RequestFrequency;
+}
+
+interface RequestDocumentUpdateParams {
+  documentId: string;
+  requestedBy: string;
+  description?: string;
+  requestedVersion?: string;
+}
+
+interface ApplyPresetParams {
+  clientId: string;
+  advisorName: string;
+}
 
 interface DocumentsContextValue {
   documents: Document[];
   setDocuments: React.Dispatch<React.SetStateAction<Document[]>>;
-  requestDocument: (params: {
-    documentName: string;
-    description?: string;
-    requestedBy: string;
-    clientId: string;
-    frequency: RequestFrequency;
-  }) => DocumentRequest;
-  requestDocumentUpdate: (params: {
-    documentId: string;
-    requestedBy: string;
-    description?: string;
-    requestedVersion?: string;
-  }) => void;
+  requestDocument: (params: RequestDocumentParams) => DocumentRequest;
+  requestDocumentUpdate: (params: RequestDocumentUpdateParams) => void;
   updateRequestFrequency: (documentId: string, frequency: RequestFrequency) => void;
   updateDocumentDueDate: (documentId: string, dueDate: Date | undefined) => void;
   deleteRequestedDocument: (documentId: string) => void;
+  updateDocumentTimePeriods: (documentId: string, timePeriods: DocumentTimePeriod[]) => void;
   // Presets API
   presets: DocumentPreset[];
   savePreset: (name: string, bins: PresetBin[]) => DocumentPreset;
   updatePreset: (presetId: string, update: Partial<Pick<DocumentPreset, 'name' | 'bins'>>) => void;
   deletePreset: (presetId: string) => void;
-  applyPresetToClient: (presetId: string, params: { clientId: string; advisorName: string; }) => void;
+  applyPresetToClient: (presetId: string, params: ApplyPresetParams) => void;
 }
 
 const DocumentsContext = createContext<DocumentsContextValue | undefined>(undefined);
@@ -35,24 +47,25 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
   const [documents, setDocuments] = useState<Document[]>(mockDocuments);
   const [presets, setPresets] = useState<DocumentPreset[]>(() => {
     try {
-      const raw = localStorage.getItem('wlp.documentPresets');
+      const raw = localStorage.getItem(STORAGE_KEYS.DOCUMENT_PRESETS);
       if (!raw) return [];
       const parsed: DocumentPreset[] = JSON.parse(raw);
-      return parsed.map(p => ({
-        ...p,
-        createdAt: new Date(p.createdAt),
-        updatedAt: new Date(p.updatedAt),
+      return parsed.map(preset => ({
+        ...preset,
+        createdAt: new Date(preset.createdAt),
+        updatedAt: new Date(preset.updatedAt),
       }));
-    } catch {
+    } catch (error) {
+      console.warn('Failed to load presets from localStorage:', error);
       return [];
     }
   });
 
   useEffect(() => {
     try {
-      localStorage.setItem('wlp.documentPresets', JSON.stringify(presets));
-    } catch {
-      // ignore
+      localStorage.setItem(STORAGE_KEYS.DOCUMENT_PRESETS, JSON.stringify(presets));
+    } catch (error) {
+      console.warn('Failed to save presets to localStorage:', error);
     }
   }, [presets]);
 
@@ -62,23 +75,11 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
     // Check if there's an existing document with similar name that could be an update request
     const existingDoc = documents.find(doc => {
       if (!doc.url) return false; // Skip documents that don't exist yet
-      
-      const docBaseName = doc.name.toLowerCase().replace(/\.[^/.]+$/, ''); // Remove extension
-      const requestedBaseName = documentName.toLowerCase().replace(/\.[^/.]+$/, '');
-      
-      // Check for similar base names (e.g., "Tax Returns" matches)
-      const baseWords = docBaseName.split(' ').filter(word => word.length > 2);
-      const requestedWords = requestedBaseName.split(' ').filter(word => word.length > 2);
-      
-      // If most significant words match, consider it the same document type
-      const matchingWords = baseWords.filter(word => requestedWords.includes(word));
-      return matchingWords.length >= Math.min(2, Math.max(baseWords.length, requestedWords.length) * 0.6);
+      return isSameDocumentType(doc.name, documentName);
     });
 
     if (existingDoc) {
-      // Extract version from requested document name (e.g., "2024" from "Tax Returns 2024")
-      const versionMatch = documentName.match(/\b(19|20)\d{2}\b/);
-      const requestedVersion = versionMatch ? versionMatch[0] : undefined;
+      const requestedVersion = extractVersionFromName(documentName);
       
       // Add update request to existing document
       requestDocumentUpdate({
@@ -95,20 +96,20 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
         requestedBy,
         requestedAt: now,
         clientId,
-        status: 'pending',
+        status: 'pending' as const,
         frequency,
       };
     }
 
     // Create new requested document if no existing document found
     const newRequestedDoc: Document = {
-      id: `req-${now.getTime()}`,
+      id: generateDocumentId('req'),
       name: documentName,
       type: '',
       size: '',
       uploadedBy: '',
       uploadedAt: now,
-      folder: 'Documents',
+      folder: DOCUMENT_FOLDERS.DOCUMENTS,
       clientId,
       isRequested: true,
       requestedBy,
@@ -119,16 +120,16 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
 
     setDocuments(prev => [newRequestedDoc, ...prev]);
 
-    return {
-      id: newRequestedDoc.id,
-      documentName,
-      description,
-      requestedBy,
-      requestedAt: now,
-      clientId,
-      status: 'pending',
-      frequency,
-    };
+          return {
+        id: newRequestedDoc.id,
+        documentName,
+        description,
+        requestedBy,
+        requestedAt: now,
+        clientId,
+        status: 'pending' as const,
+        frequency,
+      };
   };
 
   const requestDocumentUpdate: DocumentsContextValue['requestDocumentUpdate'] = ({ documentId, requestedBy, description, requestedVersion }) => {
@@ -159,22 +160,26 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
     setDocuments(prev => prev.filter(doc => doc.id !== documentId));
   };
 
-  const inferFrequencyFromLabel = (label: string): RequestFrequency => {
-    const l = label.toLowerCase();
-    if (l.includes('day')) return 'daily';
-    if (l.includes('month')) return 'monthly';
-    if (l.includes('quarter')) return 'quarterly';
-    if (l.includes('year')) return 'yearly';
-    if (l.includes('one')) return 'one-time';
-    return 'one-time';
+  const updateDocumentTimePeriods: DocumentsContextValue['updateDocumentTimePeriods'] = (documentId, timePeriods) => {
+    setDocuments(prev => prev.map(doc => 
+      doc.id === documentId 
+        ? { ...doc, selectedTimePeriods: timePeriods }
+        : doc
+    ));
   };
+
+
 
   const savePreset: DocumentsContextValue['savePreset'] = (name, bins) => {
     const now = new Date();
     const preset: DocumentPreset = {
-      id: `preset-${now.getTime()}`,
+      id: generateDocumentId('preset'),
       name: name.trim() || `Preset ${presets.length + 1}`,
-      bins: bins.map(b => ({ id: b.id, label: b.label, items: b.items.map(i => ({ name: i.name })) })),
+      bins: bins.map(bin => ({ 
+        id: bin.id, 
+        label: bin.label, 
+        items: bin.items.map(item => ({ name: item.name })) 
+      })),
       createdAt: now,
       updatedAt: now,
     };
@@ -218,6 +223,7 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
     updateRequestFrequency,
     updateDocumentDueDate,
     deleteRequestedDocument,
+    updateDocumentTimePeriods,
     presets,
     savePreset,
     updatePreset,

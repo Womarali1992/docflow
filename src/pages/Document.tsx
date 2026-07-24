@@ -54,7 +54,11 @@ const DocumentPage = () => {
 					</div>
 					{doc.url && (
 						<div className="mt-4">
-							<a href={doc.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Open file</a>
+							{doc.url.startsWith('#') ? (
+								<span className="text-gray-500 text-sm">Mock document - no file to open</span>
+							) : (
+								<a href={doc.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Open file</a>
+							)}
 						</div>
 					)}
 				</CardContent>

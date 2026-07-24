@@ -1,14 +1,31 @@
 
+// Base types
+export type UserRole = 'advisor' | 'client';
+export type RequestFrequency = 'daily' | 'monthly' | 'quarterly' | 'yearly' | 'one-time';
+export type DocumentStatus = 'pending' | 'reviewed' | 'needs_update' | 'fulfilled';
+export type ActivityType = 'message' | 'document' | 'update';
+
+// Message interface
 export interface Message {
   id: string;
   sender: string;
-  role: 'advisor' | 'client';
+  role: UserRole;
   content: string;
   timestamp: Date;
+  documentId?: string; // Optional link to document
 }
 
-export type RequestFrequency = 'daily' | 'monthly' | 'quarterly' | 'yearly' | 'one-time';
+// Document time period interface
+export interface DocumentTimePeriod {
+  id: string;
+  documentId: string;
+  period: string; // e.g., "2024-01" for January 2024, "2024-Q1" for Q1 2024, "2024" for year 2024
+  periodType: RequestFrequency;
+  isSelected: boolean;
+  selectedAt?: Date;
+}
 
+// Main document interface
 export interface Document {
   id: string;
   name: string;
@@ -18,21 +35,25 @@ export interface Document {
   uploadedAt: Date;
   folder: string;
   url?: string;
-  // Optional ownership
   clientId?: string;
-  // Optional explicit due date that overrides computed schedule
   dueDate?: Date;
+  
+  // Request-related fields
   isRequested?: boolean;
   requestedBy?: string;
   requestedAt?: Date;
   description?: string;
   requestFrequency?: RequestFrequency;
-  // Fields for handling update requests
+  
+  // Update request fields
   hasUpdateRequest?: boolean;
   updateRequestedBy?: string;
   updateRequestedAt?: Date;
   updateRequestDescription?: string;
-  requestedVersion?: string; // e.g., "2024" for Tax Returns 2024
+  requestedVersion?: string;
+  
+  // Time periods for recurring documents
+  selectedTimePeriods?: DocumentTimePeriod[];
 }
 
 export interface DocumentRequest {
@@ -42,19 +63,17 @@ export interface DocumentRequest {
   requestedBy: string;
   requestedAt: Date;
   clientId: string;
-  status: 'pending' | 'fulfilled';
+  status: DocumentStatus;
   frequency: RequestFrequency;
 }
 
 export interface Activity {
   id: string;
-  type: 'message' | 'document' | 'update';
+  type: ActivityType;
   description: string;
   timestamp: Date;
   user: string;
 }
-
-export type UserRole = 'advisor' | 'client';
 
 export interface Client {
   id: string;

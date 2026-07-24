@@ -5,11 +5,12 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { MoreVertical, Trash2, ArrowLeft, ArrowRight } from 'lucide-react';
+import { MoreVertical, Trash2, ArrowLeft, ArrowRight, ChevronRight, ChevronLeft } from 'lucide-react';
 import { useDocumentsStore } from '@/context/DocumentsContext';
 import { RequestFrequency } from '@/types/dashboard';
 import { FileText, Download, Search, Folder } from 'lucide-react';
 import { Document } from '@/types/dashboard';
+import { groupDocumentsByBaseNameMap } from '@/utils/documentGrouping';
 interface DocumentLibraryProps {
   documents: Document[];
   searchTerm: string;
@@ -72,7 +73,7 @@ const DocumentLibrary = ({
           onClick={goPrev}
           disabled={currentIndex <= 0}
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ChevronLeft className="h-4 w-4 text-blue-600" />
         </Button>
         <div className={`px-3 py-1 rounded-full text-sm ${badgeBase}`}>
           {years[currentIndex] ?? ''}
@@ -91,7 +92,7 @@ const DocumentLibrary = ({
   };
 
   // Inline component: quarter switcher
-  const QuarterCarousel = ({ docId, tone, initialQuarter = 'Q1' }: { docId: string; tone: 'orange' | 'blue'; initialQuarter?: 'Q1' | 'Q2' | 'Q3' | 'Q4' }) => {
+  const QuarterCarousel = ({ docId, tone, initialQuarter = 'Q1', showQuarterLabel = true, showYearInCenter = false }: { docId: string; tone: 'orange' | 'blue'; initialQuarter?: 'Q1' | 'Q2' | 'Q3' | 'Q4'; showQuarterLabel?: boolean; showYearInCenter?: boolean }) => {
     const quarters = ['Q1', 'Q2', 'Q3', 'Q4'];
     const selectedQuarter = selectedQuarterByDoc[docId];
     const currentIndex = selectedQuarter ? Math.max(0, quarters.indexOf(selectedQuarter)) : 0;
@@ -111,13 +112,72 @@ const DocumentLibrary = ({
 
     const goPrev = (e: React.MouseEvent) => {
       e.stopPropagation();
-      const nextIdx = Math.max(0, currentIndex - 1);
-      setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: quarters[nextIdx] }));
+      
+      if (showYearInCenter) {
+        const doc = getDocumentById(docId);
+        const currentYear = selectedYearByDoc[docId] || getYearsForDoc(doc)[getYearsForDoc(doc).length - 1];
+        
+        if (currentIndex <= 0) {
+          // At Q1, go to Q4 of previous year
+          const newYear = currentYear - 1;
+          setSelectedYearByDoc(prev => ({ ...prev, [docId]: newYear }));
+          setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: 'Q4' }));
+          
+          if (doc?.requestFrequency === 'monthly') {
+            const months = getMonthsForQuarter('Q4');
+            setSelectedPeriodByDoc(prev => ({ ...prev, [docId]: months[0] }));
+          }
+        } else {
+          // Normal navigation within same year
+          const nextIdx = currentIndex - 1;
+          const newQuarter = quarters[nextIdx];
+          setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: newQuarter }));
+          
+          if (doc?.requestFrequency === 'monthly') {
+            const months = getMonthsForQuarter(newQuarter);
+            setSelectedPeriodByDoc(prev => ({ ...prev, [docId]: months[0] }));
+          }
+        }
+      } else {
+        // Original behavior for desktop
+        const nextIdx = Math.max(0, currentIndex - 1);
+        setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: quarters[nextIdx] }));
+      }
     };
+    
     const goNext = (e: React.MouseEvent) => {
       e.stopPropagation();
-      const nextIdx = Math.min(quarters.length - 1, currentIndex + 1);
-      setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: quarters[nextIdx] }));
+      
+      if (showYearInCenter) {
+        const doc = getDocumentById(docId);
+        const currentYear = selectedYearByDoc[docId] || getYearsForDoc(doc)[getYearsForDoc(doc).length - 1];
+        
+        if (currentIndex >= quarters.length - 1) {
+          // At Q4, go to Q1 of next year
+          const newYear = currentYear + 1;
+          setSelectedYearByDoc(prev => ({ ...prev, [docId]: newYear }));
+          setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: 'Q1' }));
+          
+          if (doc?.requestFrequency === 'monthly') {
+            const months = getMonthsForQuarter('Q1');
+            setSelectedPeriodByDoc(prev => ({ ...prev, [docId]: months[0] }));
+          }
+        } else {
+          // Normal navigation within same year
+          const nextIdx = currentIndex + 1;
+          const newQuarter = quarters[nextIdx];
+          setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: newQuarter }));
+          
+          if (doc?.requestFrequency === 'monthly') {
+            const months = getMonthsForQuarter(newQuarter);
+            setSelectedPeriodByDoc(prev => ({ ...prev, [docId]: months[0] }));
+          }
+        }
+      } else {
+        // Original behavior for desktop
+        const nextIdx = Math.min(quarters.length - 1, currentIndex + 1);
+        setSelectedQuarterByDoc(prev => ({ ...prev, [docId]: quarters[nextIdx] }));
+      }
     };
 
     return (
@@ -127,21 +187,46 @@ const DocumentLibrary = ({
           size="icon"
           className={`h-8 w-8 rounded-full ${arrowClass}`}
           onClick={goPrev}
-          disabled={currentIndex <= 0}
+          disabled={!showYearInCenter && currentIndex <= 0}
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ChevronLeft className="h-4 w-4 text-blue-600" />
         </Button>
-        <div className={`px-3 py-1 rounded-full text-sm ${badgeBase}`}>
-          {quarters[currentIndex]}
-        </div>
+        {showQuarterLabel && (
+          <div className={`px-3 py-1 rounded-full text-sm ${badgeBase}`}>
+            {(() => {
+              const doc = getDocumentById(docId);
+              const year = selectedYearByDoc[docId] || getDocumentYear(doc);
+              return getQuarterWithYear(quarters[currentIndex], year);
+            })()}
+          </div>
+        )}
+        {showYearInCenter && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+              <Button variant="outline" size="sm" className={tone === 'orange' ? 'border-orange-300 text-orange-700 hover:bg-orange-50' : 'border-blue-300 text-blue-700 hover:bg-blue-50'}>
+                {selectedYearByDoc[docId] || getYearsForDoc(getDocumentById(docId))[getYearsForDoc(getDocumentById(docId)).length - 1]}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              {getYearsForDoc(getDocumentById(docId)).map((year) => (
+                <DropdownMenuItem
+                  key={year}
+                  onClick={(e) => { e.stopPropagation(); setSelectedYearByDoc(prev => ({ ...prev, [docId]: year })); }}
+                >
+                  {year}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         <Button
           variant="outline"
           size="icon"
           className={`h-8 w-8 rounded-full ${arrowClass}`}
           onClick={goNext}
-          disabled={currentIndex >= quarters.length - 1}
+          disabled={!showYearInCenter && currentIndex >= quarters.length - 1}
         >
-          <ArrowRight className="h-4 w-4" />
+          <ChevronRight className="h-4 w-4 text-blue-600" />
         </Button>
       </div>
     );
@@ -151,6 +236,10 @@ const DocumentLibrary = ({
     const month = doc.uploadedAt.getMonth(); // 0-11
     const qIndex = Math.floor(month / 3); // 0-3
     return (['Q1', 'Q2', 'Q3', 'Q4'] as const)[qIndex];
+  };
+
+  const getDocumentById = (docId: string): Document => {
+    return documents.find(doc => doc.id === docId) || documents[0];
   };
 
   const getMonthsForQuarter = (quarter: string): string[] => {
@@ -165,6 +254,72 @@ const DocumentLibrary = ({
         return ['Oct', 'Nov', 'Dec'];
       default:
         return ['Jan', 'Feb', 'Mar'];
+    }
+  };
+
+  // Helper function to get month name with year for display
+  const getMonthWithYear = (month: string, year: number): string => {
+    return `${month} ${year}`;
+  };
+
+  // Helper function to get quarter with year for display
+  const getQuarterWithYear = (quarter: string, year: number): string => {
+    return `${quarter} ${year}`;
+  };
+
+  // Helper function to get the year for a document
+  const getDocumentYear = (doc: Document): number => {
+    return doc.uploadedAt.getFullYear();
+  };
+
+  // Helper function to check if a time period matches the document
+  const isTimePeriodForDocument = (doc: Document, period: string, periodType: 'month' | 'quarter'): boolean => {
+    const docYear = getDocumentYear(doc);
+    const docMonth = doc.uploadedAt.getMonth();
+    
+    if (periodType === 'month') {
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthIndex = monthNames.indexOf(period);
+      return monthIndex === docMonth && docYear === (selectedYearByDoc[doc.id] || docYear);
+    } else {
+      const quarter = Math.floor(docMonth / 3) + 1;
+      const docQuarter = `Q${quarter}`;
+      return period === docQuarter && docYear === (selectedYearByDoc[doc.id] || docYear);
+    }
+  };
+
+  // Helper function to format date as "Month Year"
+  const formatDateAsMonthYear = (date: Date): string => {
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const month = monthNames[date.getMonth()];
+    const year = date.getFullYear();
+    return `${month} ${year}`;
+  };
+
+  // Helper function to navigate to document's time period
+  const navigateToDocumentTimePeriod = (targetDoc: Document, parentDoc?: Document) => {
+    const docYear = getDocumentYear(targetDoc);
+    const docMonth = targetDoc.uploadedAt.getMonth();
+    const docQuarter = Math.floor(docMonth / 3) + 1;
+    
+    // Set the year and quarter/period to match the document
+    setSelectedYearByDoc(prev => ({ ...prev, [targetDoc.id]: docYear }));
+    setSelectedQuarterByDoc(prev => ({ ...prev, [targetDoc.id]: `Q${docQuarter}` as const }));
+    
+    if (targetDoc.requestFrequency === 'monthly') {
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      setSelectedPeriodByDoc(prev => ({ ...prev, [targetDoc.id]: monthNames[docMonth] }));
+    }
+    
+    // Also update the parent document's time period if it has request frequency
+    if (parentDoc?.requestFrequency) {
+      setSelectedYearByDoc(prev => ({ ...prev, [parentDoc.id]: docYear }));
+      setSelectedQuarterByDoc(prev => ({ ...prev, [parentDoc.id]: `Q${docQuarter}` as const }));
+      
+      if (parentDoc.requestFrequency === 'monthly') {
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        setSelectedPeriodByDoc(prev => ({ ...prev, [parentDoc.id]: monthNames[docMonth] }));
+      }
     }
   };
 
@@ -234,6 +389,11 @@ const DocumentLibrary = ({
     return date ? date.toLocaleDateString() === selectedDate : false;
   });
 
+  // Group documents by base document type (excluding time period)
+  const groupedDocuments = React.useMemo(() => {
+    return groupDocumentsByBaseNameMap(filteredDocuments);
+  }, [filteredDocuments]);
+
   const getYearsForDoc = (doc: Document) => {
     const nowYear = new Date().getFullYear();
     const baseYear = (doc.isRequested && !doc.url && doc.requestedAt) ? doc.requestedAt.getFullYear() : doc.uploadedAt.getFullYear();
@@ -250,6 +410,12 @@ const DocumentLibrary = ({
   const handleDownload = (doc: Document, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent triggering the document selection
     if (doc.url) {
+      // For mock documents, show a message instead of trying to download
+      if (doc.url.startsWith('#')) {
+        alert('This is a mock document for demonstration purposes. In a real application, this would download the actual file.');
+        return;
+      }
+      
       const link = document.createElement('a');
       link.href = doc.url;
       link.download = doc.name;
@@ -309,61 +475,172 @@ const DocumentLibrary = ({
       
       {/* Separate uploaded documents and requested documents */}
       {(() => {
-        const uploadedDocs = filteredDocuments.filter(doc => !(doc.isRequested && !doc.url) && !(doc.hasUpdateRequest && doc.url));
-        const requestedDocs = filteredDocuments.filter(doc => (doc.isRequested && !doc.url) || (doc.hasUpdateRequest && doc.url));
+        // Convert grouped documents back to arrays but keep grouping info
+        const allGroupedDocs = Array.from(groupedDocuments.entries()).map(([baseName, docs]) => ({
+          baseName,
+          docs: docs.sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime()) // Sort by newest first
+        }));
+        
+        const uploadedGroups = allGroupedDocs.map(group => ({
+          ...group,
+          docs: group.docs.filter(doc => !(doc.isRequested && !doc.url) && !(doc.hasUpdateRequest && doc.url))
+        })).filter(group => group.docs.length > 0);
+        
+        const requestedGroups = allGroupedDocs.map(group => ({
+          ...group,
+          docs: group.docs.filter(doc => (doc.isRequested && !doc.url) || (doc.hasUpdateRequest && doc.url))
+        })).filter(group => group.docs.length > 0);
         
         return (
           <div className="space-y-6">
 
 
             {/* Uploaded Documents - 2 columns even on mobile */}
-            {uploadedDocs.length > 0 && (
+            {uploadedGroups.length > 0 && (
               <div>
                 <h4 className="text-lg font-medium text-gray-700 mb-4">Uploaded Documents</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  {uploadedDocs.map(doc => {
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                  {uploadedGroups.map(group => {
+                    // Use the first document as the representative for display
+                    const doc = group.docs[0];
+                    const docCount = group.docs.length;
                     return (
                       <div 
-                        key={doc.id} 
-                        className="p-4 rounded-xl transition-all duration-200 cursor-pointer border border-gray-200 bg-gray-50 hover:bg-white hover:shadow-md"
-                        onClick={() => onSelectDocument && onSelectDocument(doc)}
+                        key={group.baseName} 
+                        className="p-3 rounded-xl transition-all duration-200 cursor-pointer border border-gray-200 bg-gray-50 hover:bg-white hover:shadow-md"
+                        onClick={() => {
+                          // Auto-navigate to the document's time period
+                          const docYear = getDocumentYear(doc);
+                          const docMonth = doc.uploadedAt.getMonth();
+                          const docQuarter = Math.floor(docMonth / 3) + 1;
+                          
+                          // Set the year and quarter/period to match the document
+                          setSelectedYearByDoc(prev => ({ ...prev, [doc.id]: docYear }));
+                          setSelectedQuarterByDoc(prev => ({ ...prev, [doc.id]: `Q${docQuarter}` as const }));
+                          
+                          if (doc.requestFrequency === 'monthly') {
+                            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                            setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: monthNames[docMonth] }));
+                          }
+                          
+                          onSelectDocument && onSelectDocument(doc);
+                        }}
                       >
-                        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 mb-3">
-                          <div className="w-10 h-10 rounded-lg shadow-sm flex items-center justify-center bg-white">
+                                                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2 mb-2">
+                           <div className="w-10 h-10 rounded-lg shadow-sm flex items-center justify-center bg-white">
                             <FileText className="h-5 w-5 text-blue-600" />
                           </div>
                           <div className="flex items-center justify-center gap-2">
-                            {doc.requestFrequency ? (
-                              doc.requestFrequency === 'monthly' ? (
-                                getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
-                                  const active = selectedPeriodByDoc[doc.id] === m;
-                                  const cls = `cursor-pointer ${active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-800'}`;
-                                  return (
-                                    <Badge
-                                      key={m}
-                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : m })); }}
-                                      className={cls}
+                            {doc.requestFrequency && (
+                              <div className="flex items-center justify-center gap-0.5">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button 
+                                      className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent cursor-pointer bg-blue-100 text-blue-800 hover:bg-blue-200"
+                                      onClick={(e) => e.stopPropagation()}
                                     >
-                                      {m}
-                                    </Badge>
-                                  );
-                                })
-                              ) : (
-                                getPeriodsForDoc(doc).map((p) => {
-                                  const active = selectedPeriodByDoc[doc.id] === p;
-                                  const cls = `cursor-pointer ${active ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-800'}`;
-                                  return (
-                                    <Badge
-                                      key={p}
-                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : p })); }}
-                                      className={cls}
-                                    >
-                                      {p}
-                                    </Badge>
-                                  );
-                                })
-                              )
-                            ) : null}
+                                      {doc.requestFrequency === 'monthly' 
+                                        ? (() => {
+                                            const month = selectedPeriodByDoc[doc.id] || getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc))[0];
+                                            const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                            return getMonthWithYear(month, year);
+                                          })()
+                                        : (() => {
+                                            const quarter = selectedQuarterByDoc[doc.id] || getInitialQuarterForDoc(doc);
+                                            const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                            return getQuarterWithYear(quarter, year);
+                                          })()
+                                      }
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent onClick={(e) => e.stopPropagation()}>
+                                    {doc.requestFrequency === 'monthly' ? (
+                                                                             getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
+                                         const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                         const isCurrentDocPeriod = isTimePeriodForDocument(doc, m, 'month');
+                                         return (
+                                           <DropdownMenuItem
+                                             key={m}
+                                             onClick={(e) => { 
+                                               e.stopPropagation(); 
+                                               setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: m })); 
+                                               
+                                               // Also update the year to match the selected month
+                                               // When user clicks on a month, we need to determine which year it should be
+                                               const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                               const monthIndex = monthNames.indexOf(m);
+                                               if (monthIndex !== -1) {
+                                                 // For now, let's use the document's year as the base
+                                                 // In a real app, you might want to show a year picker or use the current selected year
+                                                 const docYear = getDocumentYear(doc);
+                                                 setSelectedYearByDoc(prev => ({ ...prev, [doc.id]: docYear }));
+                                               }
+                                             }}
+                                             className={isCurrentDocPeriod ? 'bg-blue-50 text-blue-700 font-medium' : ''}
+                                           >
+                                             <div className="flex items-center justify-between w-full">
+                                               <span>{getMonthWithYear(m, year)}</span>
+                                               {isCurrentDocPeriod && (
+                                                 <span className="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded-full">
+                                                   Current
+                                                 </span>
+                                               )}
+                                             </div>
+                                           </DropdownMenuItem>
+                                         );
+                                       })
+                                    ) : (
+                                                                             ['Q1', 'Q2', 'Q3', 'Q4'].map((q) => {
+                                         const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                         const isCurrentDocPeriod = isTimePeriodForDocument(doc, q, 'quarter');
+                                         return (
+                                           <DropdownMenuItem
+                                             key={q}
+                                             onClick={(e) => { 
+                                               e.stopPropagation(); 
+                                               setSelectedQuarterByDoc(prev => ({ ...prev, [doc.id]: q })); 
+                                               
+                                               // Also update the year to match the selected quarter
+                                               // When user clicks on a quarter, we need to determine which year it should be
+                                               const docYear = getDocumentYear(doc);
+                                               setSelectedYearByDoc(prev => ({ ...prev, [doc.id]: docYear }));
+                                               
+                                               // If monthly frequency, also set the first month of the selected quarter
+                                               if (doc.requestFrequency === 'monthly') {
+                                                 const months = getMonthsForQuarter(q);
+                                                 setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: months[0] }));
+                                               }
+                                             }}
+                                             className={isCurrentDocPeriod ? 'bg-blue-50 text-blue-700 font-medium' : ''}
+                                           >
+                                             <div className="flex items-center justify-between w-full">
+                                               <span>{getQuarterWithYear(q, year)}</span>
+                                               {isCurrentDocPeriod && (
+                                                 <span className="text-xs bg-blue-200 text-blue-800 px-2 py-1 rounded-full">
+                                                   Current
+                                                 </span>
+                                               )}
+                                             </div>
+                                           </DropdownMenuItem>
+                                         );
+                                       })
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                                {doc.requestFrequency === 'monthly' && (
+                                  <button 
+                                    className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-blue-50 text-blue-700 border-blue-200"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {(() => {
+                                      const quarter = selectedQuarterByDoc[doc.id] || getInitialQuarterForDoc(doc);
+                                      const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                      return getQuarterWithYear(quarter, year);
+                                    })()}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="justify-self-end">
                             <Button 
@@ -379,7 +656,13 @@ const DocumentLibrary = ({
                         
                         {doc.requestFrequency ? (
                           <>
-                            <div className="mt-1 flex items-center justify-center mb-3">
+                            {/* Mobile: Show year between arrow buttons */}
+                            <div className="mt-1 flex items-center justify-center mb-3 md:hidden">
+                              <QuarterCarousel docId={doc.id} tone="blue" initialQuarter={getInitialQuarterForDoc(doc)} showQuarterLabel={false} showYearInCenter={true} />
+                            </div>
+                            
+                            {/* Desktop: Show original logic */}
+                            <div className="mt-1 hidden md:flex items-center justify-center mb-3">
                               {doc.requestFrequency === 'monthly' ? (
                                 <QuarterCarousel docId={doc.id} tone="blue" initialQuarter={getInitialQuarterForDoc(doc)} />
                               ) : (
@@ -389,23 +672,68 @@ const DocumentLibrary = ({
                           </>
                         ) : null}
                         
-                        <div className="space-y-2">
-                          <h4 className="text-sm font-semibold line-clamp-2 text-gray-800">
-                            {getDisplayName(doc)}
-                          </h4>
-                          
-                          <p className="text-xs text-gray-500">{doc.size}</p>
-                          <p className="text-xs text-gray-500">{doc.uploadedAt.toLocaleDateString()}</p>
-                          
-                          <div className="space-y-1 pt-2">
-                            <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
-                              <Folder className="h-3 w-3" />
-                              {doc.folder}
-                            </Badge>
-                            <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
-                              {doc.uploadedBy}
-                            </Badge>
+                                                 <div className="space-y-1.5">
+                           <div className="text-center">
+                             <h4 className="text-sm font-semibold line-clamp-2 text-gray-800">
+                              {docCount > 1 ? group.baseName : getDisplayName(doc)}
+                            </h4>
+                                                         {docCount > 1 && (
+                               <DropdownMenu>
+                                 <DropdownMenuTrigger asChild>
+                                   <button className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent cursor-pointer bg-blue-50 text-blue-600 hover:bg-blue-100 mt-1">
+                                     {docCount} documents
+                                   </button>
+                                 </DropdownMenuTrigger>
+                                 <DropdownMenuContent align="center" className="w-48">
+                                   <DropdownMenuItem className="text-xs font-medium text-gray-700 cursor-default">
+                                     Available dates:
+                                   </DropdownMenuItem>
+                                   <DropdownMenuSeparator />
+                                   {group.docs.map((docItem, index) => (
+                                     <DropdownMenuItem 
+                                       key={index}
+                                       className="text-xs text-gray-600 cursor-pointer"
+                                       onClick={(e) => {
+                                         e.stopPropagation();
+                                         
+                                         // Navigate to the document's time period
+                                         navigateToDocumentTimePeriod(docItem, doc);
+                                         
+                                         onSelectDocument && onSelectDocument(docItem);
+                                       }}
+                                     >
+                                       <div className="flex items-center justify-between w-full">
+                                         <span className="truncate">
+                                           {docItem.name}
+                                         </span>
+                                         <span className="text-gray-500 ml-2">
+                                           {formatDateAsMonthYear(docItem.uploadedAt)}
+                                         </span>
+                                       </div>
+                                     </DropdownMenuItem>
+                                   ))}
+                                 </DropdownMenuContent>
+                               </DropdownMenu>
+                             )}
                           </div>
+                          
+                                                     <div className="flex items-center justify-center gap-4 text-center">
+                             <p className="text-xs text-gray-500">{formatDateAsMonthYear(doc.uploadedAt)}</p>
+                             <p className="text-xs text-gray-500">{doc.size}</p>
+                           </div>
+                           
+                           {/* Card Footer */}
+                           <div className="mt-3 pt-3 border-t border-gray-100">
+                             <div className="flex items-center justify-center gap-1.5">
+                               <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
+                                 {doc.uploadedBy}
+                               </Badge>
+                               <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
+                                 <Folder className="h-3 w-3" />
+                                 {doc.folder}
+                               </Badge>
+                             </div>
+                           </div>
                         </div>
                       </div>
                     );
@@ -415,62 +743,160 @@ const DocumentLibrary = ({
             )}
 
             {/* Requested Documents - 1 column (includes both requested and update requests) */}
-            {requestedDocs.length > 0 && (
+            {requestedGroups.length > 0 && (
               <div>
                 <h4 className="text-lg font-medium text-gray-700 mb-4">Requested Documents</h4>
                 <div className="grid grid-cols-1 gap-4">
-                  {requestedDocs.map(doc => {
+                  {requestedGroups.map(group => {
+                    // Use the first document as the representative for display
+                    const doc = group.docs[0];
+                    const docCount = group.docs.length;
                     const isRequested = doc.isRequested && !doc.url;
                     const hasUpdateRequest = doc.hasUpdateRequest && doc.url;
                     
                     return (
                       <div 
-                        key={doc.id} 
+                        key={group.baseName} 
                         className={`p-4 rounded-xl transition-all duration-200 cursor-pointer ${
                           isRequested 
                             ? 'border-2 border-dashed border-orange-300 bg-orange-50/30 hover:bg-orange-50/50'
                             : 'border border-gray-200 bg-gray-50 hover:bg-white hover:shadow-md'
                         }`}
-                        onClick={() => onSelectDocument && onSelectDocument(doc)}
+                        onClick={() => {
+                          // Auto-navigate to the document's time period
+                          const docYear = getDocumentYear(doc);
+                          const docMonth = doc.uploadedAt.getMonth();
+                          const docQuarter = Math.floor(docMonth / 3) + 1;
+                          
+                          // Set the year and quarter/period to match the document
+                          setSelectedYearByDoc(prev => ({ ...prev, [doc.id]: docYear }));
+                          setSelectedQuarterByDoc(prev => ({ ...prev, [doc.id]: `Q${docQuarter}` as const }));
+                          
+                          if (doc.requestFrequency === 'monthly') {
+                            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                            setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: monthNames[docMonth] }));
+                          }
+                          
+                          onSelectDocument && onSelectDocument(doc);
+                        }}
                       >
-                        <div className="grid grid-cols-[auto_1fr_auto] items-center gap-3 mb-3">
-                          <div className={`w-10 h-10 rounded-lg shadow-sm flex items-center justify-center ${
+                                                 <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2 mb-2">
+                           <div className={`w-10 h-10 rounded-lg shadow-sm flex items-center justify-center ${
                             isRequested ? 'bg-orange-100' : 'bg-white'
                           }`}>
                             <FileText className={`h-5 w-5 ${isRequested ? 'text-orange-600' : 'text-blue-600'}`} />
                           </div>
                           <div className="flex items-center justify-center gap-2">
-                            {doc.requestFrequency ? (
-                              doc.requestFrequency === 'monthly' ? (
-                                getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
-                                  const active = selectedPeriodByDoc[doc.id] === m;
-                                  const cls = `cursor-pointer ${active ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-800'}`;
-                                  return (
-                                    <Badge
-                                      key={m}
-                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : m })); }}
-                                      className={cls}
+                            {doc.requestFrequency && (
+                              <div className="flex items-center justify-center gap-0.5">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <button 
+                                      className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent cursor-pointer bg-orange-100 text-orange-800 hover:bg-orange-200"
+                                      onClick={(e) => e.stopPropagation()}
                                     >
-                                      {m}
-                                    </Badge>
-                                  );
-                                })
-                              ) : (
-                                getPeriodsForDoc(doc).map((p) => {
-                                  const active = selectedPeriodByDoc[doc.id] === p;
-                                  const cls = `cursor-pointer ${active ? 'bg-orange-500 text-white' : 'bg-orange-100 text-orange-800'}`;
-                                  return (
-                                    <Badge
-                                      key={p}
-                                      onClick={(e) => { e.stopPropagation(); setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: active ? '' : p })); }}
-                                      className={cls}
-                                    >
-                                      {p}
-                                    </Badge>
-                                  );
-                                })
-                              )
-                            ) : null}
+                                      {doc.requestFrequency === 'monthly' 
+                                        ? (() => {
+                                            const month = selectedPeriodByDoc[doc.id] || getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc))[0];
+                                            const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                            return getMonthWithYear(month, year);
+                                          })()
+                                        : (() => {
+                                            const quarter = selectedQuarterByDoc[doc.id] || getInitialQuarterForDoc(doc);
+                                            const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                            return getQuarterWithYear(quarter, year);
+                                          })()
+                                      }
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent onClick={(e) => e.stopPropagation()}>
+                                    {doc.requestFrequency === 'monthly' ? (
+                                                                             getMonthsForQuarter(selectedQuarterByDoc[doc.id] ?? getInitialQuarterForDoc(doc)).map((m) => {
+                                         const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                         const isCurrentDocPeriod = isTimePeriodForDocument(doc, m, 'month');
+                                         return (
+                                           <DropdownMenuItem
+                                             key={m}
+                                             onClick={(e) => { 
+                                               e.stopPropagation(); 
+                                               setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: m })); 
+                                               
+                                               // Also update the year to match the selected month
+                                               // When user clicks on a month, we need to determine which year it should be
+                                               const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                                               const monthIndex = monthNames.indexOf(m);
+                                               if (monthIndex !== -1) {
+                                                 // For now, let's use the document's year as the base
+                                                 // In a real app, you might want to show a year picker or use the current selected year
+                                                 const docYear = getDocumentYear(doc);
+                                                 setSelectedYearByDoc(prev => ({ ...prev, [doc.id]: docYear }));
+                                               }
+                                             }}
+                                             className={isCurrentDocPeriod ? 'bg-orange-50 text-orange-700 font-medium' : ''}
+                                           >
+                                             <div className="flex items-center justify-between w-full">
+                                               <span>{getMonthWithYear(m, year)}</span>
+                                               {isCurrentDocPeriod && (
+                                                 <span className="text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded-full">
+                                                   Current
+                                                 </span>
+                                               )}
+                                             </div>
+                                           </DropdownMenuItem>
+                                         );
+                                       })
+                                    ) : (
+                                                                             ['Q1', 'Q2', 'Q3', 'Q4'].map((q) => {
+                                         const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                         const isCurrentDocPeriod = isTimePeriodForDocument(doc, q, 'quarter');
+                                         return (
+                                           <DropdownMenuItem
+                                             key={q}
+                                             onClick={(e) => { 
+                                               e.stopPropagation(); 
+                                               setSelectedQuarterByDoc(prev => ({ ...prev, [doc.id]: q })); 
+                                               
+                                               // Also update the year to match the selected quarter
+                                               // When user clicks on a quarter, we need to determine which year it should be
+                                               const docYear = getDocumentYear(doc);
+                                               setSelectedYearByDoc(prev => ({ ...prev, [doc.id]: docYear }));
+                                               
+                                               // If monthly frequency, also set the first month of the selected quarter
+                                               if (doc.requestFrequency === 'monthly') {
+                                                 const months = getMonthsForQuarter(q);
+                                                 setSelectedPeriodByDoc(prev => ({ ...prev, [doc.id]: months[0] }));
+                                               }
+                                             }}
+                                             className={isCurrentDocPeriod ? 'bg-orange-50 text-orange-700 font-medium' : ''}
+                                           >
+                                             <div className="flex items-center justify-between w-full">
+                                               <span>{getQuarterWithYear(q, year)}</span>
+                                               {isCurrentDocPeriod && (
+                                                 <span className="text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded-full">
+                                                   Current
+                                                 </span>
+                                               )}
+                                             </div>
+                                           </DropdownMenuItem>
+                                         );
+                                       })
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                                {doc.requestFrequency === 'monthly' && (
+                                  <button 
+                                    className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-orange-50 text-orange-700 border-orange-200"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {(() => {
+                                      const quarter = selectedQuarterByDoc[doc.id] || getInitialQuarterForDoc(doc);
+                                      const year = selectedYearByDoc[doc.id] || getDocumentYear(doc);
+                                      return getQuarterWithYear(quarter, year);
+                                    })()}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="justify-self-end">
                             {isRequested && canManageRequests ? (
@@ -509,22 +935,68 @@ const DocumentLibrary = ({
                         
                         {doc.requestFrequency ? (
                           <>
-                            <div className="mt-1 flex items-center justify-center mb-3">
+                            {/* Mobile: Show year between arrow buttons */}
+                            <div className="mt-1 flex items-center justify-center mb-3 md:hidden">
+                              <QuarterCarousel docId={doc.id} tone="orange" initialQuarter={getInitialQuarterForDoc(doc)} showQuarterLabel={false} showYearInCenter={true} />
+                            </div>
+                            
+                            {/* Desktop: Show original logic */}
+                            <div className="mt-1 hidden md:flex items-center justify-center mb-3">
                               {doc.requestFrequency === 'monthly' ? (
                                 <QuarterCarousel docId={doc.id} tone="orange" initialQuarter={getInitialQuarterForDoc(doc)} />
                               ) : (
-                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="blue" />
+                                <YearCarousel docId={doc.id} years={getYearsForDoc(doc)} tone="orange" />
                               )}
                             </div>
                           </>
                         ) : null}
                         
-                        <div className="space-y-2">
-                          <h4 className={`text-sm font-semibold line-clamp-2 ${
-                            isRequested ? 'text-black' : 'text-black'
-                          }`}>
-                            {getDisplayName(doc)}
-                          </h4>
+                                                 <div className="space-y-1.5">
+                           <div className="text-center">
+                             <h4 className={`text-sm font-semibold line-clamp-2 ${
+                              isRequested ? 'text-black' : 'text-black'
+                            }`}>
+                              {docCount > 1 ? group.baseName : getDisplayName(doc)}
+                            </h4>
+                                                         {docCount > 1 && (
+                               <DropdownMenu>
+                                 <DropdownMenuTrigger asChild>
+                                   <button className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent cursor-pointer bg-orange-50 text-orange-600 hover:bg-orange-100 mt-1">
+                                     {docCount} documents
+                                   </button>
+                                 </DropdownMenuTrigger>
+                                 <DropdownMenuContent align="center" className="w-48">
+                                   <DropdownMenuItem className="text-xs font-medium text-gray-700 cursor-default">
+                                     Available dates:
+                                   </DropdownMenuItem>
+                                   <DropdownMenuSeparator />
+                                   {group.docs.map((docItem, index) => (
+                                     <DropdownMenuItem 
+                                       key={index}
+                                       className="text-xs text-gray-600 cursor-pointer"
+                                       onClick={(e) => {
+                                         e.stopPropagation();
+                                         
+                                         // Navigate to the document's time period
+                                         navigateToDocumentTimePeriod(docItem, doc);
+                                         
+                                         onSelectDocument && onSelectDocument(docItem);
+                                       }}
+                                     >
+                                       <div className="flex items-center justify-between w-full">
+                                         <span className="truncate">
+                                           {docItem.name}
+                                         </span>
+                                         <span className="text-gray-500 ml-2">
+                                           {formatDateAsMonthYear(docItem.uploadedAt)}
+                                         </span>
+                                       </div>
+                                     </DropdownMenuItem>
+                                   ))}
+                                 </DropdownMenuContent>
+                               </DropdownMenu>
+                             )}
+                          </div>
                           
                           {isRequested ? (
                             <>
@@ -543,7 +1015,7 @@ const DocumentLibrary = ({
                               </p>
                               {doc.requestedAt && (
                                 <p className="text-xs text-orange-500">
-                                  {doc.requestedAt.toLocaleDateString()}
+                                  {formatDateAsMonthYear(doc.requestedAt)}
                                 </p>
                               )}
                               {doc.description && (
@@ -554,21 +1026,30 @@ const DocumentLibrary = ({
                             </>
                           ) : (
                             <>
-                              <p className="text-xs text-gray-500">{doc.size}</p>
-                              <p className="text-xs text-gray-500">{doc.uploadedAt.toLocaleDateString()}</p>
-                              
-                              <div className="space-y-1 pt-2">
-                                <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
-                                  <Folder className="h-3 w-3" />
-                                  {doc.folder}
-                                </Badge>
-                                <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
-                                  {doc.uploadedBy}
-                                </Badge>
-                                <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
-                                  Update requested for {doc.requestedVersion} version
-                                </Badge>
-                              </div>
+                                                             <div className="flex items-center justify-center gap-4 text-center">
+                                 <p className="text-xs text-gray-500">{formatDateAsMonthYear(doc.uploadedAt)}</p>
+                                 <p className="text-xs text-gray-500">{doc.size}</p>
+                               </div>
+                               
+                               {/* Card Footer */}
+                               <div className="mt-3 pt-3 border-t border-gray-100">
+                                 <div className="space-y-2">
+                                   <div className="flex items-center justify-center gap-2 flex-wrap">
+                                     <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
+                                       {doc.uploadedBy}
+                                     </Badge>
+                                     <Badge variant="outline" className="text-xs bg-white border-gray-300 flex items-center gap-1">
+                                       <Folder className="h-3 w-3" />
+                                       {doc.folder}
+                                     </Badge>
+                                   </div>
+                                   <div className="text-center">
+                                     <Badge variant="outline" className="text-xs bg-orange-100 border-orange-300 text-orange-700">
+                                       Update requested for {doc.requestedVersion} version
+                                     </Badge>
+                                   </div>
+                                 </div>
+                               </div>
 
                               <div 
                                 className="mt-2 p-3 bg-orange-50/50 rounded-lg border-2 border-dashed border-orange-300 hover:border-orange-400 hover:bg-orange-50/70 transition-all duration-200 cursor-pointer relative"
@@ -617,7 +1098,7 @@ const DocumentLibrary = ({
                                   </p>
                                   {doc.updateRequestedAt && (
                                     <p className="text-xs text-orange-500 mb-2">
-                                      {doc.updateRequestedAt.toLocaleDateString()}
+                                      {formatDateAsMonthYear(doc.updateRequestedAt)}
                                     </p>
                                   )}
                                   {doc.updateRequestDescription && (

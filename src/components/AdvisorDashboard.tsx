@@ -5,11 +5,12 @@ import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Send, Plus, Trash2, ChevronDown, CheckCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Upload, MessageSquare, Send, Plus, Trash2, ChevronDown, CheckCircle, Menu } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import RequestDocumentPopup from './RequestDocumentPopup';
 import PreparedMaterials from './PreparedMaterials';
 import DocumentsNeeded from './DocumentsNeeded';
+import ClientHeader from './ClientHeader';
 import { DocumentRequest, RequestFrequency, Client } from '@/types/dashboard';
 import { useDocumentsStore } from '@/context/DocumentsContext';
 import { Button as UIButton } from '@/components/ui/button';
@@ -392,91 +393,24 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
 
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-200 via-blue-100 to-slate-200">
       <div className="max-w-7xl mx-auto p-6">
         {/* Client Navigation Header */}
-        <Card className="mb-6 border-blue-200 shadow-lg">
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <Button variant="outline" size="sm" onClick={prevClient}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                
-                <div className="text-center">
-                  <CardTitle className="text-xl font-semibold text-blue-900">
-                    {currentClient.name}
-                  </CardTitle>
-                  <p className="text-sm text-blue-600">{currentClient.email}</p>
-                  <p className="text-xs text-gray-500">
-                    Last activity: {currentClient.lastActivity.toLocaleDateString()}
-                  </p>
-                </div>
-                
-                <Button variant="outline" size="sm" onClick={nextClient}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-              
-              <div className="flex items-center gap-4">
-                <div 
-                  className="relative flex items-center justify-center w-48 h-16 border-2 border-dashed border-blue-300 rounded-lg bg-blue-50/50 hover:bg-blue-100/50 transition-colors cursor-pointer group"
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    toast({
-                      title: "File Drop",
-                      description: "File upload functionality would be implemented here",
-                    });
-                  }}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <div className="text-center">
-                    <Upload className="h-5 w-5 text-blue-600 mx-auto mb-1 group-hover:text-blue-700" />
-                    <span className="text-xs text-blue-700 font-medium">Drop files or click</span>
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      const files = e.target.files;
-                      if (!files || files.length === 0) return;
-                      toast({
-                        title: files.length > 1 ? 'Files Selected' : 'File Selected',
-                        description: files.length > 1 ? `${files.length} files chosen.` : `${files[0].name}`,
-                      });
-                    }}
-                  />
-                </div>
-              </div>
-              
-              <div className="flex gap-4">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-900">{currentClient.documentsCount}</div>
-                  <div className="text-xs text-gray-600">Documents</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-orange-600">{currentClient.pendingUpdates}</div>
-                  <div className="text-xs text-gray-600">Pending</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">{currentClient.unreadMessages}</div>
-                  <div className="text-xs text-gray-600">Messages</div>
-                </div>
-              </div>
-            </div>
-          </CardHeader>
-        </Card>
+        <ClientHeader
+          clients={mockClients}
+          currentClient={currentClient}
+          onSelectClient={(id) =>
+            setCurrentClientIndex(mockClients.findIndex((c) => c.id === id))
+          }
+        />
 
         {/* Client Document Uploads - Top Section */}
-        <Card className="mb-6 border-blue-200 shadow-lg">
-          <CardHeader className="bg-gradient-to-r from-blue-100 to-blue-50 border-b border-blue-200">
-            <CardTitle className="flex items-center gap-2 text-blue-900">
+        <Card className="mb-6 border-slate-300 shadow-lg">
+          <CardHeader className="bg-orange-700 border-b-2 border-orange-900">
+            <CardTitle className="flex items-center gap-2 text-white">
               <Upload className="h-5 w-5" />
               Client Document Uploads
-              <Badge className="text-xs bg-blue-100 text-blue-700 border-blue-300 ml-2">
+              <Badge className="text-xs bg-white/20 text-white border-white/30 ml-2">
                 Files uploaded by clients
               </Badge>
               <div className="ml-auto flex items-center gap-2">
@@ -640,12 +574,15 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                 <div className="space-y-4">
                   <Collapsible open={isRequestedDocumentsOpen} onOpenChange={setIsRequestedDocumentsOpen}>
                     <CollapsibleTrigger asChild>
-                      <Button 
-                        variant="ghost" 
-                        className="w-full justify-between p-0 h-auto hover:bg-transparent"
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-between px-6 py-4 h-auto rounded-lg bg-orange-700 hover:bg-orange-800 border-b-2 border-orange-900"
                       >
-                        <h3 className="text-lg font-semibold text-gray-900">Requested Documents</h3>
-                        <ChevronDown className={`h-4 w-4 text-gray-500 transition-transform duration-200 ${isRequestedDocumentsOpen ? 'rotate-180' : ''}`} />
+                        <span className="flex items-center gap-2 text-lg font-semibold text-white">
+                          <FileText className="h-5 w-5" />
+                          Requested Documents
+                        </span>
+                        <ChevronDown className={`h-5 w-5 text-white/80 transition-transform duration-200 ${isRequestedDocumentsOpen ? 'rotate-180' : ''}`} />
                       </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="space-y-4 mt-4">
@@ -697,32 +634,36 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                                                   )}
                                                 </div>
                                               </div>
-                                              <Badge className="text-xs bg-orange-200 text-orange-800">
-                                                {doc.requestFrequency ? doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1) : 'One-time'}
-                                              </Badge>
-                                            </div>
-                                            
-                                            <div className="flex gap-1">
-                                              <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                  <Button variant="outline" size="sm" className="text-xs flex-1">
-                                                    Manage ⋮
-                                                  </Button>
-                                                </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end">
-                                                  <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'monthly')}>Monthly</DropdownMenuItem>
-                                                  <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'quarterly')}>Quarterly</DropdownMenuItem>
-                                                  <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'yearly')}>Yearly</DropdownMenuItem>
-                                                  <DropdownMenuSeparator />
-                                                  <DropdownMenuItem 
-                                                    onClick={() => handleDeleteClick(doc)}
-                                                    className="text-red-600 focus:text-red-600 focus:bg-red-50"
-                                                  >
-                                                    <Trash2 className="h-4 w-4 mr-2" />
-                                                    Delete Request
-                                                  </DropdownMenuItem>
-                                                </DropdownMenuContent>
-                                              </DropdownMenu>
+                                              <div className="flex items-center gap-1 flex-shrink-0">
+                                                <Badge className="text-xs bg-orange-200 text-orange-800">
+                                                  {doc.requestFrequency ? doc.requestFrequency.charAt(0).toUpperCase() + doc.requestFrequency.slice(1) : 'One-time'}
+                                                </Badge>
+                                                <DropdownMenu>
+                                                  <DropdownMenuTrigger asChild>
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="icon"
+                                                      className="h-7 w-7 text-orange-700 hover:bg-orange-100"
+                                                      aria-label="Manage request"
+                                                    >
+                                                      <Menu className="h-4 w-4" />
+                                                    </Button>
+                                                  </DropdownMenuTrigger>
+                                                  <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'monthly')}>Monthly</DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'quarterly')}>Quarterly</DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={() => updateRequestFrequency(doc.id, 'yearly')}>Yearly</DropdownMenuItem>
+                                                    <DropdownMenuSeparator />
+                                                    <DropdownMenuItem
+                                                      onClick={() => handleDeleteClick(doc)}
+                                                      className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                                                    >
+                                                      <Trash2 className="h-4 w-4 mr-2" />
+                                                      Delete Request
+                                                    </DropdownMenuItem>
+                                                  </DropdownMenuContent>
+                                                </DropdownMenu>
+                                              </div>
                                             </div>
                                             
                                             {doc.description && (
@@ -773,7 +714,7 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
 
         {/* Messages Section - Now independent and always visible when document is selected */}
         {selectedDocumentId && selectedDocument ? (
-          <Card className="mb-6 border-blue-200 shadow-lg relative z-10 bg-white" 
+          <Card className="mb-6 border-slate-300 shadow-lg relative z-10 bg-white" 
                 style={{ 
                   display: 'block', 
                   position: 'relative', 
@@ -781,8 +722,8 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
                   visibility: 'visible',
                   opacity: 1
                 }}>
-            <CardHeader className="bg-gradient-to-r from-blue-100 to-blue-50 border-b border-blue-200">
-              <CardTitle className="flex items-center gap-2 text-blue-900">
+            <CardHeader className="bg-indigo-900 border-b-2 border-indigo-950">
+              <CardTitle className="flex items-center gap-2 text-white">
                 <MessageSquare className="h-5 w-5" />
                 Messages: {selectedDocument.name}
                 {selectedDocument && documents.find(d => d.id === selectedDocumentId) && (
@@ -870,12 +811,12 @@ const AdvisorDashboard = ({ initialClientId }: AdvisorDashboardProps) => {
 
 
         {/* Generated Reports - Bottom Section */}
-        <Card className="border-blue-200 shadow-lg">
-          <CardHeader className="bg-gradient-to-r from-green-100 to-green-50 border-b border-green-200">
-            <CardTitle className="flex items-center gap-2 text-green-900">
+        <Card className="border-slate-300 shadow-lg">
+          <CardHeader className="bg-green-800 border-b-2 border-green-900">
+            <CardTitle className="flex items-center gap-2 text-white">
               <FileText className="h-5 w-5" />
               Deliverables
-              <Badge className="text-xs bg-green-100 text-green-700 border-green-300 ml-2">
+              <Badge className="text-xs bg-white/20 text-white border-white/30 ml-2">
                 Files shared by advisor
               </Badge>
             </CardTitle>

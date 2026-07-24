@@ -83,11 +83,27 @@ const DocumentUpload = ({ onFileUpload, selectedDocument, onClearSelection }: Do
             <div className="h-96 overflow-auto">
               {selectedDocument.name.toLowerCase().endsWith('.pdf') ? (
                 selectedDocument.url ? (
-                  <iframe
-                    src={selectedDocument.url}
-                    className="w-full h-full border-0"
-                    title={`PDF Viewer - ${selectedDocument.name}`}
-                  />
+                  <div className="h-full flex items-center justify-center bg-gray-50">
+                    <div className="text-center">
+                      <FileText className="h-16 w-16 text-blue-600 mx-auto mb-4" />
+                      <p className="text-gray-800 font-medium text-lg">PDF Document</p>
+                      <p className="text-sm text-gray-600 mt-2 mb-4">
+                        {selectedDocument.name}
+                      </p>
+                      <div className="space-y-2">
+                        <Button 
+                          variant="outline" 
+                          className="w-full"
+                          onClick={handleDownload}
+                        >
+                          Download PDF
+                        </Button>
+                        <p className="text-xs text-gray-500 mt-2">
+                          This is a mock document for demonstration purposes
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
                   <div className="h-full flex items-center justify-center bg-gray-50">
                     <div className="text-center">
