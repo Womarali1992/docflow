@@ -55,22 +55,40 @@ npm run dev                   # app on http://localhost:8080 (proxies /api → :
 
 Root (frontend):
 
-| Command                                 | Description                               |
-|-----------------------------------------|-------------------------------------------|
-| `npm run dev`                           | Vite dev server                           |
-| `npm run build`                         | Production build (does **not** typecheck) |
-| `npm run lint`                          | ESLint                                    |
-| `npx tsc --noEmit -p tsconfig.app.json` | Typecheck the app                         |
+| Command             | Description                               |
+|---------------------|-------------------------------------------|
+| `npm run dev`       | Vite dev server                           |
+| `npm run build`     | Production build (does **not** typecheck) |
+| `npm run lint`      | ESLint                                    |
+| `npm run typecheck` | Typecheck the app                         |
 
 `server/`:
 
-| Command               | Description                                  |
-|-----------------------|----------------------------------------------|
-| `npm run dev`         | API with hot reload                          |
-| `npm run build`       | Typecheck + compile to `dist/`               |
-| `npm run db:generate` | Generate a Drizzle migration from the schema |
-| `npm run db:migrate`  | Apply pending migrations                     |
-| `npm run db:seed`     | Seed / self-heal demo data                   |
+| Command                            | Description                                                        |
+|------------------------------------|--------------------------------------------------------------------|
+| `npm run dev`                      | API with hot reload                                                |
+| `npm run build`                    | Typecheck + compile to `dist/`                                     |
+| `npm test`                         | API tests (vitest + supertest) against the `docflow_test` database |
+| `npm run typecheck:test`           | Typecheck the test files                                           |
+| `node scripts/create-test-db.mjs`  | Create `docflow_test` once (set `PG_ADMIN_URL` if the dev role lacks CREATEDB) |
+| `npm run db:generate`              | Generate a Drizzle migration from the schema                       |
+| `npm run db:migrate`               | Apply pending migrations                                           |
+| `npm run db:seed`                  | Seed / self-heal demo data                                         |
+
+## Tests
+
+`server/test/authz.test.ts` is a table-driven authorization matrix: every route is exercised
+as two advisors, three clients across two firms, and an anonymous caller. Expectations describe
+the target behaviour from [`docs/CPA-PILOT-PLAN.md`](docs/CPA-PILOT-PLAN.md); cases the current
+code does not meet yet run as `it.fails` and are flipped as the fixes land. Tests refuse to run
+unless `DATABASE_URL_TEST` names a database called `docflow_test`; every table is truncated
+before each test.
+
+## Pilot programme
+
+The CPA pilot (engagements, review workflow, server sessions + MFA, scanned immutable uploads,
+Windows deployment) is specified in [`docs/CPA-PILOT-PLAN.md`](docs/CPA-PILOT-PLAN.md). Its
+Status ledger says which commit is next.
 
 ## Notes
 

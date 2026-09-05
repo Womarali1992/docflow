@@ -1,0 +1,64 @@
+/**
+ * Vitest setup — runs before every test file.
+ *
+ * Points the server at the docflow_test database (never the dev database), runs
+ * the migrations once per file, and truncates every public table before each
+ * test so tests are independent. Server modules are imported dynamically AFTER
+ * the environment is set, because db/client.ts and storage.ts read it at import.
+ */
+import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, beforeEach } from 'vitest';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+const testUrl =
+  process.env.DATABASE_URL_TEST || 'postgres://docflow:docflow_dev@localhost:5432/docflow_test';
+if (!/\/docflow_test(\?|$)/.test(testUrl)) {
+  throw new Error(
+    `DATABASE_URL_TEST must name a database called docflow_test (got "${testUrl.replace(/:[^:@/]+@/, ':***@')}"). ` +
+      'Refusing to run tests against it.'
+  );
+}
+
+process.env.DATABASE_URL = testUrl;
+process.env.NODE_ENV = 'test';
+process.env.UPLOADS_DIR = path.join(here, '.uploads-tmp');
+delete process.env.ALLOW_PROVIDER_SIGNUP;
+
+const { db, pool } = await import('../src/db/client.js');
+const { migrate } = await import('drizzle-orm/node-postgres/migrator');
+const { sql } = await import('drizzle-orm');
+
+let tableList: string | null = null;
+
+beforeAll(async () => {
+  fs.rmSync(process.env.UPLOADS_DIR!, { recursive: true, force: true });
+  fs.mkdirSync(process.env.UPLOADS_DIR!, { recursive: true });
+  try {
+    await migrate(db, { migrationsFolder: path.join(here, '..', 'migrations') });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not prepare the test database (${msg}). Create it once with: node scripts/create-test-db.mjs`
+    );
+  }
+});
+
+beforeEach(async () => {
+  if (tableList === null) {
+    const result = await db.execute(
+      sql`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`
+    );
+    tableList = result.rows.map((r) => `"${String(r.table_name)}"`).join(', ');
+  }
+  if (tableList) {
+    await db.execute(sql.raw(`TRUNCATE TABLE ${tableList} RESTART IDENTITY CASCADE`));
+  }
+});
+
+afterAll(async () => {
+  await pool.end();
+});

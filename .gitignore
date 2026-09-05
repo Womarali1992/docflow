@@ -15,6 +15,7 @@ dist-ssr
 # Server secrets & uploaded files
 server/.env
 server/uploads/
+server/test/.uploads-tmp/
 
 # Unrelated standalone prototype (own git repo)
 drilldown/
