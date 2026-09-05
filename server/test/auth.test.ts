@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import request from 'supertest';
-import { PASSWORD, app, seedFixture, type Fixture } from './helpers.js';
+import { PASSWORD, app, request, seedFixture, type Fixture } from './helpers.js';
 
 describe('auth', () => {
   let fx: Fixture;

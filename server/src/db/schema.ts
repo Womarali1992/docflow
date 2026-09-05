@@ -185,6 +185,29 @@ export const presets = pgTable(
 );
 
 /* =========================================================
+   Sessions (opaque server-side sessions; the cookie carries a random token,
+   the row stores its sha256). userId is polymorphic over providers/clients.
+   ========================================================= */
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tokenHash: text('token_hash').notNull().unique(),
+    userKind: actorKindEnum('user_kind').notNull(),
+    userId: uuid('user_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+  },
+  (t) => ({
+    userIdx: index('sessions_user_idx').on(t.userKind, t.userId),
+  })
+);
+
+/* =========================================================
    Relations
    ========================================================= */
 export const providersRelations = relations(providers, ({ many }) => ({
@@ -222,4 +245,6 @@ export type NewMessage = typeof messages.$inferInsert;
 export type Activity = typeof activities.$inferSelect;
 export type NewActivity = typeof activities.$inferInsert;
 export type Preset = typeof presets.$inferSelect;
+export type Session = typeof sessions.$inferSelect;
+export type NewSession = typeof sessions.$inferInsert;
 export type NewPreset = typeof presets.$inferInsert;

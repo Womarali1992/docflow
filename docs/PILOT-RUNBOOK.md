@@ -89,6 +89,6 @@ the reader tolerates a BOM); the recorded run is the rerun.
 - Files are mutable until C2.x, so a file replaced *during* the copy is caught by the hash
   verification and fails the run; rerun. v2 makes this impossible by design (immutable versions,
   dump → files → manifest ordering).
-- `config\server.env` holds `JWT_SECRET` and the database password. Only back up to an
-  encrypted volume, and rotate the secret if a backup drive is lost.
+- `config\server.env` holds the database password (and, from C1.2, the MFA encryption key).
+  Only back up to an encrypted volume, and rotate the secrets if a backup drive is lost.
 - No scheduling yet; C5.3 adds the Task Scheduler job and the offline-drive rotation.

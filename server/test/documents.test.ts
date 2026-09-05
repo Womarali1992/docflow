@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import request from 'supertest';
-import { PDF_BYTES, app, binaryParser, loginAs, seedFixture, type Fixture } from './helpers.js';
+import type { Test } from 'supertest';
+import { PDF_BYTES, app, binaryParser, loginAs, request, seedFixture, type Fixture } from './helpers.js';
 
-const attachPdf = (t: request.Test) =>
+const attachPdf = (t: Test) =>
   t.attach('file', PDF_BYTES, { filename: 'again.pdf', contentType: 'application/pdf' });
 
 describe('documents', () => {

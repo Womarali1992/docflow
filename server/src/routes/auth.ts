@@ -1,30 +1,45 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import rateLimit from 'express-rate-limit';
 import { db, schema } from '../db/client.js';
-import { authenticate, clearAuthCookie, setAuthCookie, signToken } from '../middleware/auth.js';
+import { authenticate } from '../middleware/auth.js';
+import {
+  clearSessionCookie,
+  createSession,
+  findSessionByToken,
+  listLiveSessions,
+  readSessionToken,
+  revokeAllSessions,
+  revokeSession,
+  setSessionCookie,
+  toSessionDto,
+} from '../auth/sessions.js';
+import { NAME_MAX, loginEmailLimiter, loginIpLimiter } from '../security/limits.js';
 
 const router = Router();
 
-// Throttle credential-guessing: 20 attempts / 15 min / IP. Successful logins don't count.
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { error: 'Too many login attempts. Please try again later.' },
-});
-
 const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
+  email: z.string().email().max(NAME_MAX),
+  password: z.string().min(1).max(1024),
   kind: z.enum(['provider', 'client']),
 });
 
-router.post('/login', loginLimiter, async (req, res) => {
+type Me =
+  | { kind: 'provider'; id: string; name: string; email: string; firmName: string | null }
+  | { kind: 'client'; id: string; name: string; email: string; providerId: string; providerName: string | null };
+
+async function startSession(req: Request, res: Response, userKind: 'provider' | 'client', userId: string) {
+  const { token } = await createSession({
+    userKind,
+    userId,
+    ip: req.ip ?? null,
+    userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+  });
+  setSessionCookie(res, token);
+}
+
+router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
@@ -37,21 +52,9 @@ router.post('/login', loginLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, provider.passwordHash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const token = signToken({
-      sub: provider.id,
-      kind: 'provider',
-      providerId: provider.id,
-      email: provider.email,
-      name: provider.name,
-    });
-    setAuthCookie(res, token);
-    return res.json({
-      kind: 'provider',
-      id: provider.id,
-      name: provider.name,
-      email: provider.email,
-      firmName: provider.firmName,
-    });
+    await startSession(req, res, 'provider', provider.id);
+    const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
+    return res.json(me);
   } else {
     const [client] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
     if (!client || !client.passwordHash) return res.status(401).json({ error: 'Invalid credentials' });
@@ -60,30 +63,24 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, client.providerId));
 
-    const token = signToken({
-      sub: client.id,
-      kind: 'client',
-      providerId: client.providerId,
-      email: client.email,
-      name: client.name,
-    });
-    setAuthCookie(res, token);
-    return res.json({
+    await startSession(req, res, 'client', client.id);
+    const me: Me = {
       kind: 'client',
       id: client.id,
       name: client.name,
       email: client.email,
       providerId: client.providerId,
       providerName: prov?.name ?? null,
-    });
+    };
+    return res.json(me);
   }
 });
 
 const signupSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
-  password: z.string().min(6),
-  firmName: z.string().optional(),
+  name: z.string().min(1).max(NAME_MAX),
+  email: z.string().email().max(NAME_MAX),
+  password: z.string().min(6).max(1024),
+  firmName: z.string().max(NAME_MAX).optional(),
 });
 
 /* Self-service advisor signup is off unless explicitly enabled; the pilot
@@ -107,26 +104,36 @@ router.post('/signup-provider', async (req, res) => {
     .values({ name, email, passwordHash, firmName, role: 'advisor' })
     .returning();
 
-  const token = signToken({
-    sub: provider.id,
-    kind: 'provider',
-    providerId: provider.id,
-    email: provider.email,
-    name: provider.name,
-  });
-  setAuthCookie(res, token);
-  res.status(201).json({
-    kind: 'provider',
-    id: provider.id,
-    name: provider.name,
-    email: provider.email,
-    firmName: provider.firmName,
-  });
+  await startSession(req, res, 'provider', provider.id);
+  const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
+  res.status(201).json(me);
 });
 
-router.post('/logout', (req, res) => {
-  clearAuthCookie(res);
+/* Logout revokes the current session row; an anonymous logout is a no-op that
+   still clears the cookie, so a stale browser tab can always "sign out". */
+router.post('/logout', async (req, res) => {
+  const token = readSessionToken(req);
+  if (token) {
+    const session = await findSessionByToken(token);
+    if (session) await revokeSession(session.id);
+  }
+  clearSessionCookie(res);
   res.json({ ok: true });
+});
+
+/* Sign out everywhere: every session of the caller, including this one. */
+router.post('/logout-all', authenticate, async (req, res) => {
+  const auth = req.auth!;
+  const revoked = await revokeAllSessions(auth.kind, auth.sub);
+  clearSessionCookie(res);
+  res.json({ ok: true, revoked });
+});
+
+/* Live sessions of the caller (for the security card); `current` marks this one. */
+router.get('/sessions', authenticate, async (req, res) => {
+  const auth = req.auth!;
+  const rows = await listLiveSessions(auth.kind, auth.sub);
+  res.json(rows.map((s) => toSessionDto(s, req.session?.id)));
 });
 
 router.get('/me', authenticate, async (req, res) => {
@@ -134,25 +141,21 @@ router.get('/me', authenticate, async (req, res) => {
   if (auth.kind === 'provider') {
     const [p] = await db.select().from(schema.providers).where(eq(schema.providers.id, auth.sub));
     if (!p) return res.status(404).json({ error: 'Not found' });
-    return res.json({
-      kind: 'provider',
-      id: p.id,
-      name: p.name,
-      email: p.email,
-      firmName: p.firmName,
-    });
+    const me: Me = { kind: 'provider', id: p.id, name: p.name, email: p.email, firmName: p.firmName };
+    return res.json(me);
   } else {
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, auth.sub));
     if (!c) return res.status(404).json({ error: 'Not found' });
     const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId));
-    return res.json({
+    const me: Me = {
       kind: 'client',
       id: c.id,
       name: c.name,
       email: c.email,
       providerId: c.providerId,
       providerName: prov?.name ?? null,
-    });
+    };
+    return res.json(me);
   }
 });
 

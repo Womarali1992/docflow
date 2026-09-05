@@ -24,7 +24,7 @@ describe('ops scripts', () => {
     const c = await countAll(url());
     expect(c.database).toBe('docflow_test');
     expect(Object.keys(c.tables).sort()).toEqual([...TABLES].sort());
-    expect(c.tables).toEqual({ providers: 2, clients: 3, documents: 9, messages: 2, activities: 5, presets: 2 });
+    expect(c.tables).toEqual({ providers: 2, clients: 3, documents: 9, messages: 2, activities: 5, presets: 2, sessions: 0 });
     expect(c.documentsWithFile).toBe(6);
     expect(c.migrations).toBeGreaterThanOrEqual(3);
   });

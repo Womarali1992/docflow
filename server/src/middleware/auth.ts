@@ -1,6 +1,20 @@
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import type { NextFunction, Request, Response } from 'express';
+import { eq } from 'drizzle-orm';
+import { db, schema } from '../db/client.js';
+import {
+  POLL_HEADER,
+  clearSessionCookie,
+  findSessionByToken,
+  readSessionToken,
+  revokeSession,
+  sessionState,
+  touchSession,
+} from '../auth/sessions.js';
 
+/**
+ * The shape routes have relied on since the JWT era; kept verbatim so no route
+ * changes (Compatibility ledger: "req.auth shape from the JWT era", kept).
+ */
 export interface AuthPayload {
   sub: string;
   kind: 'provider' | 'client';
@@ -9,60 +23,88 @@ export interface AuthPayload {
   name: string;
 }
 
+export interface SessionInfo {
+  id: string;
+  createdAt: Date;
+  lastSeenAt: Date;
+  expiresAt: Date;
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       auth?: AuthPayload;
+      session?: SessionInfo;
     }
   }
 }
 
-const DEV_FALLBACK_SECRET = 'dev_only_secret';
+export type AuthFailure = 'missing' | 'invalid' | 'revoked' | 'expired' | 'idle';
 
-function resolveJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (process.env.NODE_ENV === 'production') {
-    if (!secret || secret === DEV_FALLBACK_SECRET || secret === 'dev_only_secret_change_me_in_production') {
-      throw new Error(
-        'JWT_SECRET must be set to a strong, non-default value in production. Refusing to start.'
-      );
-    }
-    return secret;
+const FAILURE_MESSAGE: Record<AuthFailure, string> = {
+  missing: 'Not authenticated',
+  invalid: 'Session ended',
+  revoked: 'Session ended',
+  expired: 'Session expired',
+  idle: 'Signed out after 30 minutes of inactivity',
+};
+
+function reject(res: Response, reason: AuthFailure) {
+  clearSessionCookie(res);
+  return res.status(401).json({ error: FAILURE_MESSAGE[reason], reason });
+}
+
+/** Resolves the account behind a session into the `req.auth` shape; null when the account is gone. */
+export async function loadAuth(kind: 'provider' | 'client', id: string): Promise<AuthPayload | null> {
+  if (kind === 'provider') {
+    const [p] = await db
+      .select({ id: schema.providers.id, email: schema.providers.email, name: schema.providers.name })
+      .from(schema.providers)
+      .where(eq(schema.providers.id, id));
+    return p ? { sub: p.id, kind: 'provider', providerId: p.id, email: p.email, name: p.name } : null;
   }
-  return secret || DEV_FALLBACK_SECRET;
+  const [c] = await db
+    .select({ id: schema.clients.id, providerId: schema.clients.providerId, email: schema.clients.email, name: schema.clients.name })
+    .from(schema.clients)
+    .where(eq(schema.clients.id, id));
+  return c ? { sub: c.id, kind: 'client', providerId: c.providerId, email: c.email, name: c.name } : null;
 }
 
-const JWT_SECRET = resolveJwtSecret();
-const COOKIE_NAME = 'docflow_session';
-
-export function signToken(payload: AuthPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-}
-
-export function setAuthCookie(res: Response, token: string) {
-  res.cookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 7 * 24 * 3600 * 1000,
-    path: '/',
-  });
-}
-
-export function clearAuthCookie(res: Response) {
-  res.clearCookie(COOKIE_NAME, { path: '/' });
-}
-
-export function authenticate(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies?.[COOKIE_NAME];
-  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+/**
+ * Loads the session named by the cookie, refuses it when revoked / expired /
+ * idle (401 with a `reason` the UI can explain), then extends the idle window
+ * unless the request is a poll.
+ */
+export async function authenticate(req: Request, res: Response, next: NextFunction) {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as AuthPayload;
-    req.auth = decoded;
+    const token = readSessionToken(req);
+    if (!token) return reject(res, 'missing');
+
+    const session = await findSessionByToken(token);
+    if (!session) return reject(res, 'invalid');
+
+    const state = sessionState(session);
+    if (state !== 'ok') return reject(res, state);
+
+    const auth = await loadAuth(session.userKind, session.userId);
+    if (!auth) {
+      await revokeSession(session.id);
+      return reject(res, 'revoked');
+    }
+
+    await touchSession(session, { poll: req.headers[POLL_HEADER] === '1' });
+
+    req.auth = auth;
+    req.session = {
+      id: session.id,
+      createdAt: session.createdAt,
+      lastSeenAt: session.lastSeenAt,
+      expiresAt: session.expiresAt,
+    };
     next();
-  } catch {
-    return res.status(401).json({ error: 'Invalid session' });
+  } catch (err) {
+    next(err);
   }
 }
 

@@ -9,7 +9,7 @@
 import pg from 'pg';
 import { databaseUrl, dbNameOf, isMain } from './lib.mjs';
 
-export const TABLES = ['providers', 'clients', 'documents', 'messages', 'activities', 'presets'];
+export const TABLES = ['providers', 'clients', 'documents', 'messages', 'activities', 'presets', 'sessions'];
 
 export async function countAll(url) {
   const client = new pg.Client({ connectionString: url });

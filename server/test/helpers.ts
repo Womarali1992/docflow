@@ -5,13 +5,27 @@
  */
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import request from 'supertest';
-import type { Response } from 'supertest';
+import supertest from 'supertest';
+import type { Express } from 'express';
+import type { Response, Test } from 'supertest';
 import app from '../src/app.js';
 import { db, schema } from '../src/db/client.js';
 import { humanSize, storedFileName, writeStoredFileSync } from '../src/storage.js';
 
 export { app };
+
+/** The origin the test app is 'served' from; the origin check refuses non-GET requests without it. */
+export const TEST_ORIGIN = 'http://localhost:8080';
+
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete';
+export type Http = Record<Method, (url: string) => Test>;
+
+/** supertest bound to the app, with the app's own Origin on every request (drop it deliberately to test the check). */
+export function request(target: Express = app): Http {
+  const base = supertest(target);
+  const wrap = (m: Method) => (url: string) => base[m](url).set('Origin', TEST_ORIGIN);
+  return { get: wrap('get'), post: wrap('post'), put: wrap('put'), patch: wrap('patch'), delete: wrap('delete') };
+}
 
 export const PASSWORD = 'test-password-123';
 // Low cost on purpose: fixtures are rebuilt before every test.

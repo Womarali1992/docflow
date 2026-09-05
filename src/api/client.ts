@@ -1,10 +1,10 @@
-import type { Activity, Client, Document, Me, Message, Preset, RequestFrequency } from './types';
+import type { Activity, Client, Document, Me, Message, Preset, RequestFrequency, SessionSummary } from './types';
 
 const BASE = '/api';
 
 const DATE_FIELDS = new Set([
   'createdAt', 'updatedAt', 'uploadedAt', 'requestedAt', 'dueDate',
-  'updateRequestedAt', 'lastActivity', 'readAt',
+  'updateRequestedAt', 'lastActivity', 'readAt', 'lastSeenAt', 'expiresAt',
 ]);
 
 function reviveDates<T>(obj: unknown): T {
@@ -38,25 +38,35 @@ export class ApiError extends Error {
   }
 }
 
-/** Fired on a 401 (except the login call) so the auth layer can drop the session. */
+/** Why the server ended the session;  just means there was none. */
+export type UnauthorizedReason = 'missing' | 'invalid' | 'revoked' | 'expired' | 'idle';
+
+/** Fired on a 401 (except the login call) so the auth layer can drop the session; detail.reason says why. */
 export const UNAUTHORIZED_EVENT = 'docflow:unauthorized';
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const isForm = init.body instanceof FormData;
+interface ApiInit extends RequestInit {
+  /** Background refresh: sends X-DocFlow-Poll so the request keeps the session alive without extending it. */
+  poll?: boolean;
+}
+
+async function request<T>(path: string, init: ApiInit = {}): Promise<T> {
+  const { poll, ...rest } = init;
+  const isForm = rest.body instanceof FormData;
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
-    ...init,
+    ...rest,
     headers: {
       // Let the browser set the multipart boundary for FormData bodies.
       ...(isForm ? {} : { 'Content-Type': 'application/json' }),
-      ...(init.headers || {}),
+      ...(poll ? { 'X-DocFlow-Poll': '1' } : {}),
+      ...(rest.headers || {}),
     },
   });
   if (!res.ok) {
-    let body: { error?: string; [k: string]: unknown };
+    let body: { error?: string; reason?: UnauthorizedReason; [k: string]: unknown };
     try { body = await res.json(); } catch { body = { error: res.statusText }; }
     if (res.status === 401 && path !== '/auth/login' && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { reason: body.reason ?? 'missing' } }));
     }
     throw new ApiError(res.status, body);
   }
@@ -74,6 +84,9 @@ export const api = {
         body: JSON.stringify({ email, password, kind }),
       }),
     logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
+    /** Sign out everywhere: every session of the current user, including this one. */
+    logoutAll: () => request<{ ok: true; revoked: number }>('/auth/logout-all', { method: 'POST' }),
+    sessions: () => request<SessionSummary[]>('/auth/sessions'),
     signupProvider: (input: { name: string; email: string; password: string; firmName?: string }) =>
       request<Me>('/auth/signup-provider', {
         method: 'POST',

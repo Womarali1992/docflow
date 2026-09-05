@@ -5,7 +5,7 @@ with clients; clients upload files and message their advisor through a dedicated
 
 - **Frontend** — Vite + React + TypeScript + shadcn/ui (port `8080`, `/api` proxied to `4000`)
 - **Backend** — Express + Drizzle ORM + PostgreSQL in [`server/`](server/) (port `4000`)
-- **Auth** — JWT in an httpOnly cookie; role-based routing (provider vs client)
+- **Auth** — opaque server sessions (30 min idle / 12 h absolute, revocable) in an httpOnly cookie; Origin check on every state change; role-based routing (provider vs client)
 - **Storage** — uploaded files on local disk under `server/uploads/`, served only through an authenticated download endpoint
 
 ## Prerequisites
@@ -33,7 +33,8 @@ npm run dev                   # API on http://localhost:4000
 ```
 
 > **Production note:** the server refuses to start in `NODE_ENV=production` unless
-> `JWT_SECRET` is set to a strong, non-default value.
+> `APP_BASE_URL` is the public https origin (every non-GET request must come from it).
+> Set `TRUST_PROXY=1` only behind Caddy.
 
 ### 3. Frontend
 

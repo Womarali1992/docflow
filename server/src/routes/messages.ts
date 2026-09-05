@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { recordActivity } from '../db/activity-log.js';
+import { MESSAGE_MAX } from '../security/limits.js';
 
 const router = Router();
 router.use(authenticate);
@@ -75,7 +76,7 @@ router.patch('/read', async (req, res) => {
 const sendSchema = z.object({
   clientId: z.string().uuid().optional(),
   documentId: z.string().uuid().optional(),
-  content: z.string().min(1),
+  content: z.string().min(1).max(MESSAGE_MAX),
 });
 
 router.post('/', async (req, res) => {

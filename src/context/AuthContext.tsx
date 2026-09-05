@@ -1,6 +1,14 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { api, UNAUTHORIZED_EVENT } from '@/api/client';
+import { api, UNAUTHORIZED_EVENT, type UnauthorizedReason } from '@/api/client';
 import type { Me } from '@/api/types';
+import { toast } from '@/hooks/use-toast';
+
+/** What to tell the user when the server ends a session; missing/invalid are silent (no session to lose). */
+const SIGNED_OUT_MESSAGE: Partial<Record<UnauthorizedReason, string>> = {
+  idle: 'Signed out after 30 minutes of inactivity. Please sign in again.',
+  expired: 'Your session has ended. Please sign in again.',
+  revoked: 'You were signed out.',
+};
 
 interface AuthContextValue {
   me: Me | null;
@@ -35,7 +43,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // A 401 from any API call (expired/cleared session) drops the session so the
   // RouteGuard redirects to /login on the next render.
   useEffect(() => {
-    const onUnauthorized = () => setMe(null);
+    const onUnauthorized = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: UnauthorizedReason }>).detail?.reason;
+      const message = reason ? SIGNED_OUT_MESSAGE[reason] : undefined;
+      setMe((current) => {
+        if (current && message) toast({ title: 'Signed out', description: message });
+        return null;
+      });
+    };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);

@@ -16,7 +16,7 @@
 | C0.1 | `chore(pilot): merge finish-docflow-app; add docs/CPA-PILOT-PLAN.md; vitest+supertest harness on docflow_test; authz matrix for the current API` | SHIPPED 2026-09-05 |
 | C0.2 | `fix(authz): clients cannot review, replace or delete advisor material; cross-tenant ids are 404; storagePath never serialized; signup off by default` | SHIPPED 2026-09-05 |
 | C0.3 | `feat(ops): backup + restore scripts for the current schema (pg_dump, uploads copy, manifest) and a rehearsed restore` | SHIPPED 2026-09-05 |
-| C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | NOT STARTED |
+| C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | SHIPPED 2026-09-05 |
 | C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | NOT STARTED |
 | C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | NOT STARTED |
 | C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | NOT STARTED |
@@ -36,7 +36,25 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C1.1** (opaque server sessions, origin check, helmet, limits). Phase 0 is complete.
+**NEXT = C1.2** (TOTP MFA with recovery codes, forced enrollment, pre-auth session stage). Phase 0 complete; C1.1 shipped.
+
+C1.1 notes: `server/src/auth/{sessions,csrf}.ts`, `server/src/security/{headers,limits}.ts`, migration
+`0003_sessions` (additive; `sessions` also joins `scripts/count.mjs` TABLES). `authenticate` loads the row by
+the sha256 of the cookie token, refuses `revoked` / `expired` / `idle` with a `reason` in the 401 body and
+clears the cookie, then bumps `lastSeenAt` at most once a minute and never with `X-DocFlow-Poll: 1`. Cookie
+`__Host-docflow_session` in production (`docflow_session` otherwise), Max-Age 12 h. Origin check
+(Sec-Fetch-Site first, else Origin must equal the `APP_BASE_URL` origin, neither → 403 `bad_origin`) is
+mounted on `/api` before every router, so an anonymous or multipart cross-site request dies before auth or
+parsing; the harness sends the app Origin by default (`helpers.request`) and uses raw supertest for the
+negative cases. Helmet: CSP exactly as specified, Referrer-Policy no-referrer, nosniff, X-Frame-Options
+SAMEORIGIN, no HSTS (Caddy's), plus `Permissions-Policy: camera=(self)`. Throttles: login 20 / 15 min per IP
+and 10 / 15 min per email, global 600 / 15 min per session (hashed cookie) or IP; `RATE_LIMIT_*` env
+overrides (the test setup raises the global one, the limiter is unit-tested). Field limits: names 200,
+instructions 2 000, messages 5 000, JSON 1 MB → 413. Revocation paths tested: logout, logout-all, advisor
+setting a client password (`PATCH /clients/:id`), account deleted. `jsonwebtoken` and `JWT_SECRET` are gone;
+`APP_BASE_URL` is required in production and `TRUST_PROXY=1` is the only way to get `trust proxy`. Frontend:
+`api/client.ts` gained `poll`, the 401 `reason` reaches `AuthContext` as a toast, and `api.auth.logoutAll` /
+`sessions` are ready for the C1.2 security card. Gate: 205 tests / 6 files (~80 s).
 
 C0.3 notes: `ops/windows/{common,backup,restore}.ps1` (Windows PowerShell 5.1) plus
 `server/scripts/{lib,count,integrity,create-db}.mjs` (cwd-independent, `npm run count|integrity|db:create`).

@@ -98,6 +98,17 @@ export interface Preset {
   updatedAt: Date;
 }
 
+/** A live server session of the current user (GET /auth/sessions). */
+export interface SessionSummary {
+  id: string;
+  createdAt: Date;
+  lastSeenAt: Date;
+  expiresAt: Date;
+  ip: string | null;
+  userAgent: string | null;
+  current: boolean;
+}
+
 export type Me =
   | { kind: 'provider'; id: string; name: string; email: string; firmName?: string | null }
   | { kind: 'client';   id: string; name: string; email: string; providerId: string; providerName?: string | null };

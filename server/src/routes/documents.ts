@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
 import { uploadSingle } from '../middleware/upload.js';
+import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
 import {
   absPathFor,
   deleteStoredFile,
@@ -195,11 +196,11 @@ async function attachFile(req: Request, res: Response, doc: DocumentRow) {
 /* Create / request document (provider creates a request, or a metadata record) */
 const createSchema = z.object({
   clientId: z.string().uuid(),
-  name: z.string().min(1),
+  name: z.string().min(1).max(NAME_MAX),
   type: z.string().optional(),
   folder: z.string().optional(),
   isRequested: z.boolean().optional(),
-  description: z.string().optional(),
+  description: z.string().max(INSTRUCTIONS_MAX).optional(),
   requestFrequency: z.enum(['daily', 'monthly', 'quarterly', 'yearly', 'one-time']).optional(),
   dueDate: z.string().datetime().optional(),
 });
@@ -257,12 +258,12 @@ router.post('/', async (req, res) => {
 
 /* Update document metadata / status / update-requests — advisor only */
 const updateSchema = z.object({
-  name: z.string().optional(),
+  name: z.string().min(1).max(NAME_MAX).optional(),
   folder: z.string().optional(),
   isRequested: z.boolean().optional(),
   status: z.enum(['pending', 'reviewed', 'needs_update', 'in_review']).optional(),
   hasUpdateRequest: z.boolean().optional(),
-  updateRequestDescription: z.string().optional(),
+  updateRequestDescription: z.string().max(INSTRUCTIONS_MAX).optional(),
   requestedVersion: z.string().optional(),
   requestFrequency: z.enum(['daily', 'monthly', 'quarterly', 'yearly', 'one-time']).optional(),
   dueDate: z.string().datetime().nullable().optional(),

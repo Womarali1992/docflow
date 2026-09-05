@@ -8,7 +8,6 @@
  * `fails` (the case then runs as `it.fails`) and flip it back in the fix.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import request from 'supertest';
 import type { Response, Test } from 'supertest';
 import {
   ACTORS,
@@ -17,6 +16,7 @@ import {
   binaryParser,
   docIds,
   loginAs,
+  request,
   seedFixture,
   selfClient,
   selfProvider,
@@ -63,6 +63,27 @@ const cases: Case[] = [
       const self = selfClient(fx, actor) ?? selfProvider(fx, actor);
       expect(res.body.id).toBe(self!.id);
     },
+  },
+  {
+    name: 'POST /api/auth/logout-all',
+    req: () => request(app).post('/api/auth/logout-all'),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res) => expect(res.body.revoked).toBeGreaterThanOrEqual(1),
+  },
+  {
+    name: 'GET /api/auth/sessions',
+    req: () => request(app).get('/api/auth/sessions'),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res) => {
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0].current).toBe(true);
+      expect(res.body[0]).not.toHaveProperty('tokenHash');
+    },
+  },
+  {
+    name: 'POST /api/auth/logout (a stale tab can always sign out)',
+    req: () => request(app).post('/api/auth/logout'),
+    expect: S(200, 200, 200, 200, 200, 200),
   },
   {
     name: 'POST /api/auth/signup-provider is disabled unless ALLOW_PROVIDER_SIGNUP=true',

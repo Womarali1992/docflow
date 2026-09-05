@@ -4,6 +4,8 @@ import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
+import { revokeAllSessions } from '../auth/sessions.js';
+import { NAME_MAX } from '../security/limits.js';
 
 const router = Router();
 
@@ -74,7 +76,7 @@ router.get('/:id', async (req, res) => {
 });
 
 const createClientSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().min(1).max(NAME_MAX),
   email: z.string().email(),
   accountId: z.string().optional(),
   plan: z.string().optional(),
@@ -109,7 +111,7 @@ router.post('/', requireProvider, async (req, res) => {
 });
 
 const updateClientSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(NAME_MAX).optional(),
   email: z.string().email().optional(),
   plan: z.string().optional(),
   aum: z.number().nonnegative().nullable().optional(),
@@ -134,6 +136,8 @@ router.patch('/:id', requireProvider, async (req, res) => {
   if (password !== undefined) updates.passwordHash = await bcrypt.hash(password, 10);
 
   await db.update(schema.clients).set(updates).where(eq(schema.clients.id, req.params.id));
+  // A new password ends every session the client had (plan: revocation paths).
+  if (password !== undefined) await revokeAllSessions('client', req.params.id);
 
   const [client] = await db
     .select(clientColumns('provider'))

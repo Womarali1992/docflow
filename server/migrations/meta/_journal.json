@@ -22,6 +22,13 @@
       "when": 1783708130860,
       "tag": "0002_drop_client_counters",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788619863316,
+      "tag": "0003_sessions",
+      "breakpoints": true
     }
   ]
 }
