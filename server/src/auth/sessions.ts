@@ -12,7 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { and, eq, isNull, ne } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
-import type { Session } from '../db/schema.js';
+import type { Session, SessionStage } from '../db/schema.js';
 
 export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 export const ABSOLUTE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
@@ -67,6 +67,8 @@ export function sessionState(session: Pick<Session, 'revokedAt' | 'expiresAt' | 
 export interface CreateSessionInput {
   userKind: 'provider' | 'client';
   userId: string;
+  /** preauth (second factor pending) or mfa_enroll (no authenticator yet); never active at login. */
+  stage: SessionStage;
   ip?: string | null;
   userAgent?: string | null;
 }
@@ -80,6 +82,7 @@ export async function createSession(input: CreateSessionInput, now = new Date())
       tokenHash: hashToken(token),
       userKind: input.userKind,
       userId: input.userId,
+      stage: input.stage,
       createdAt: now,
       lastSeenAt: now,
       expiresAt: new Date(now.getTime() + ABSOLUTE_TIMEOUT_MS),
@@ -104,6 +107,11 @@ export async function touchSession(session: Session, opts: { poll: boolean }, no
   if (now.getTime() - session.lastSeenAt.getTime() < TOUCH_INTERVAL_MS) return false;
   await db.update(schema.sessions).set({ lastSeenAt: now }).where(eq(schema.sessions.id, session.id));
   return true;
+}
+
+/** Moves a session between MFA stages (login → verify/enroll → active). */
+export async function setSessionStage(id: string, stage: SessionStage, now = new Date()): Promise<void> {
+  await db.update(schema.sessions).set({ stage, lastSeenAt: now }).where(eq(schema.sessions.id, id));
 }
 
 export async function revokeSession(id: string, now = new Date()): Promise<void> {

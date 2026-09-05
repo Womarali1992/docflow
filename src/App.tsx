@@ -5,8 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import DocFlowLayout from "@/components/docflow/Layout";
 import ClientLayout from "@/components/docflow/ClientLayout";
-import { RouteGuard } from "@/components/RouteGuard";
+import { MfaGate, RouteGuard } from "@/components/RouteGuard";
 import Index from "./pages/Index";
+import Mfa from "./pages/Mfa";
+import MfaEnroll from "./pages/MfaEnroll";
 import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 import FinancialOverview from "./pages/FinancialOverview";
@@ -26,6 +28,8 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/mfa" element={<MfaGate stage="preauth"><Mfa /></MfaGate>} />
+          <Route path="/mfa/enroll" element={<MfaGate stage="mfa_enroll"><MfaEnroll /></MfaGate>} />
 
           <Route element={<RouteGuard kind="provider"><DocFlowLayout /></RouteGuard>}>
             <Route path="/" element={<Index />} />

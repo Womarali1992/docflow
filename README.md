@@ -33,8 +33,14 @@ npm run dev                   # API on http://localhost:4000
 ```
 
 > **Production note:** the server refuses to start in `NODE_ENV=production` unless
-> `APP_BASE_URL` is the public https origin (every non-GET request must come from it).
-> Set `TRUST_PROXY=1` only behind Caddy.
+> `APP_BASE_URL` is the public https origin (every non-GET request must come from it) and
+> `APP_ENCRYPTION_KEY` is set (32 random bytes as 64 hex chars; it encrypts authenticator
+> secrets at rest). Set `TRUST_PROXY=1` only behind Caddy.
+
+> **Two-step verification is on for everyone.** `db:seed` enrolls the demo accounts with one
+> published authenticator secret and prints it; get the current code with
+> `npm run totp -- <secret>` from `server/`. A brand-new account is walked through enrollment
+> (QR code + recovery codes) on its first sign-in.
 
 ### 3. Frontend
 

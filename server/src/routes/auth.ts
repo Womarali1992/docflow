@@ -3,7 +3,8 @@ import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
-import { authenticate } from '../middleware/auth.js';
+import type { SessionStage } from '../db/schema.js';
+import { authenticate, authenticateAnyStage } from '../middleware/auth.js';
 import {
   clearSessionCookie,
   createSession,
@@ -15,6 +16,7 @@ import {
   setSessionCookie,
   toSessionDto,
 } from '../auth/sessions.js';
+import { getMfa, isEnrolled } from '../auth/mfa.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter } from '../security/limits.js';
 
 const router = Router();
@@ -29,14 +31,41 @@ type Me =
   | { kind: 'provider'; id: string; name: string; email: string; firmName: string | null }
   | { kind: 'client'; id: string; name: string; email: string; providerId: string; providerName: string | null };
 
-async function startSession(req: Request, res: Response, userKind: 'provider' | 'client', userId: string) {
+/** Every auth answer says where the session stands (invariant 9): the UI routes on `stage`, not on `me`. */
+interface AuthState {
+  stage: SessionStage;
+  me: Me;
+}
+
+/**
+ * Opens a session after the password check. The stage is never `active` here:
+ * an enrolled account owes a code (`preauth`), anyone else owes an enrollment
+ * (`mfa_enroll`). /auth/mfa/* moves it forward.
+ */
+async function startSession(req: Request, res: Response, userKind: 'provider' | 'client', userId: string): Promise<SessionStage> {
+  const stage: SessionStage = isEnrolled(await getMfa(userKind, userId)) ? 'preauth' : 'mfa_enroll';
   const { token } = await createSession({
     userKind,
     userId,
+    stage,
     ip: req.ip ?? null,
     userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
   });
   setSessionCookie(res, token);
+  return stage;
+}
+
+async function providerMe(id: string): Promise<Me | null> {
+  const [p] = await db.select().from(schema.providers).where(eq(schema.providers.id, id));
+  if (!p) return null;
+  return { kind: 'provider', id: p.id, name: p.name, email: p.email, firmName: p.firmName };
+}
+
+async function clientMe(id: string): Promise<Me | null> {
+  const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, id));
+  if (!c) return null;
+  const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId));
+  return { kind: 'client', id: c.id, name: c.name, email: c.email, providerId: c.providerId, providerName: prov?.name ?? null };
 }
 
 router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
@@ -52,9 +81,10 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, provider.passwordHash);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
 
-    await startSession(req, res, 'provider', provider.id);
+    const stage = await startSession(req, res, 'provider', provider.id);
     const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
-    return res.json(me);
+    const state: AuthState = { stage, me };
+    return res.json(state);
   } else {
     const [client] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
     if (!client || !client.passwordHash) return res.status(401).json({ error: 'Invalid credentials' });
@@ -63,7 +93,7 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
 
     const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, client.providerId));
 
-    await startSession(req, res, 'client', client.id);
+    const stage = await startSession(req, res, 'client', client.id);
     const me: Me = {
       kind: 'client',
       id: client.id,
@@ -72,7 +102,8 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
       providerId: client.providerId,
       providerName: prov?.name ?? null,
     };
-    return res.json(me);
+    const state: AuthState = { stage, me };
+    return res.json(state);
   }
 });
 
@@ -104,9 +135,10 @@ router.post('/signup-provider', async (req, res) => {
     .values({ name, email, passwordHash, firmName, role: 'advisor' })
     .returning();
 
-  await startSession(req, res, 'provider', provider.id);
+  const stage = await startSession(req, res, 'provider', provider.id);
   const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
-  res.status(201).json(me);
+  const state: AuthState = { stage, me };
+  res.status(201).json(state);
 });
 
 /* Logout revokes the current session row; an anonymous logout is a no-op that
@@ -136,27 +168,14 @@ router.get('/sessions', authenticate, async (req, res) => {
   res.json(rows.map((s) => toSessionDto(s, req.session?.id)));
 });
 
-router.get('/me', authenticate, async (req, res) => {
+/* Who am I and where does this session stand. Reachable in every stage so a
+   reload during the second step lands back on the right screen. */
+router.get('/me', authenticateAnyStage, async (req, res) => {
   const auth = req.auth!;
-  if (auth.kind === 'provider') {
-    const [p] = await db.select().from(schema.providers).where(eq(schema.providers.id, auth.sub));
-    if (!p) return res.status(404).json({ error: 'Not found' });
-    const me: Me = { kind: 'provider', id: p.id, name: p.name, email: p.email, firmName: p.firmName };
-    return res.json(me);
-  } else {
-    const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, auth.sub));
-    if (!c) return res.status(404).json({ error: 'Not found' });
-    const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId));
-    const me: Me = {
-      kind: 'client',
-      id: c.id,
-      name: c.name,
-      email: c.email,
-      providerId: c.providerId,
-      providerName: prov?.name ?? null,
-    };
-    return res.json(me);
-  }
+  const me = auth.kind === 'provider' ? await providerMe(auth.sub) : await clientMe(auth.sub);
+  if (!me) return res.status(404).json({ error: 'Not found' });
+  const state: AuthState = { stage: req.session!.stage, me };
+  res.json(state);
 });
 
 export default router;

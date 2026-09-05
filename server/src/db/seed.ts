@@ -1,11 +1,44 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
 import { db, pool, schema } from './client.js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { makePlaceholderPdf } from './placeholder-pdf.js';
 import { humanSize, writeStoredFileSync } from '../storage.js';
+import { encryptSecret } from '../auth/crypto.js';
+import { generateCode, type UserKind } from '../auth/mfa.js';
+
+/**
+ * One well-known authenticator secret for every demo account so a local sign-in
+ * is `npm run totp -- <secret>` away. Base32, as an authenticator app expects.
+ */
+const DEV_TOTP_SECRET = 'DOCFLOW2DEV2TOTP2SECRET2';
+
+/** Enrolls a demo account with the shared dev secret unless it is already enrolled. */
+async function enrollDevMfa(userKind: UserKind, userId: string, label: string) {
+  const [existing] = await db
+    .select()
+    .from(schema.mfaTotp)
+    .where(and(eq(schema.mfaTotp.userKind, userKind), eq(schema.mfaTotp.userId, userId)));
+  if (existing?.enrolledAt) return;
+  const now = new Date();
+  if (existing) {
+    await db
+      .update(schema.mfaTotp)
+      .set({ secretEnc: encryptSecret(DEV_TOTP_SECRET), enrolledAt: now, lastUsedStep: null, updatedAt: now })
+      .where(eq(schema.mfaTotp.id, existing.id));
+  } else {
+    await db
+      .insert(schema.mfaTotp)
+      .values({ userKind, userId, secretEnc: encryptSecret(DEV_TOTP_SECRET), enrolledAt: now, createdAt: now, updatedAt: now });
+  }
+  console.log(`+ MFA enrolled (dev secret): ${label}`);
+}
 
 async function seed() {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('db:seed writes demo accounts with published passwords and a published MFA secret. Refusing in production.');
+    process.exit(1);
+  }
   console.log('Seeding database...');
 
   const advisorEmail = 'sarah@meridiancpa.com';
@@ -227,9 +260,15 @@ async function seed() {
     console.log(`= Messages already seeded for ${firstClient.name}`);
   }
 
+  // Every demo account is MFA-enrolled with the shared dev secret (login lands on the code screen, not on enrollment).
+  await enrollDevMfa('provider', provider.id, provider.email);
+  for (const c of allClients) await enrollDevMfa('client', c.id, c.email);
+
   console.log('\nSeed complete. Login credentials:');
   console.log(`  Advisor: ${advisorEmail} / ${advisorPassword}`);
   console.log(`  Clients: <client-email> / ${clientPassword}`);
+  console.log(`  Authenticator secret (all demo accounts): ${DEV_TOTP_SECRET}`);
+  console.log(`  Code right now: ${generateCode(DEV_TOTP_SECRET)}  (later: npm run totp -- ${DEV_TOTP_SECRET})`);
   await pool.end();
 }
 

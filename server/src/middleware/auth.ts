@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
+import type { SessionStage } from '../db/schema.js';
 import {
   POLL_HEADER,
   clearSessionCookie,
@@ -25,6 +26,7 @@ export interface AuthPayload {
 
 export interface SessionInfo {
   id: string;
+  stage: SessionStage;
   createdAt: Date;
   lastSeenAt: Date;
   expiresAt: Date;
@@ -74,39 +76,58 @@ export async function loadAuth(kind: 'provider' | 'client', id: string): Promise
 /**
  * Loads the session named by the cookie, refuses it when revoked / expired /
  * idle (401 with a `reason` the UI can explain), then extends the idle window
- * unless the request is a poll.
+ * unless the request is a poll. With `requireActive` (the default everywhere
+ * except the MFA, `me` and logout endpoints) a session that has not finished
+ * its second factor is refused with 403 `mfa_required` (invariant 9).
  */
-export async function authenticate(req: Request, res: Response, next: NextFunction) {
-  try {
-    const token = readSessionToken(req);
-    if (!token) return reject(res, 'missing');
+function makeAuthenticate(opts: { requireActive: boolean }) {
+  return async function authenticate(req: Request, res: Response, next: NextFunction) {
+    try {
+      const token = readSessionToken(req);
+      if (!token) return reject(res, 'missing');
 
-    const session = await findSessionByToken(token);
-    if (!session) return reject(res, 'invalid');
+      const session = await findSessionByToken(token);
+      if (!session) return reject(res, 'invalid');
 
-    const state = sessionState(session);
-    if (state !== 'ok') return reject(res, state);
+      const state = sessionState(session);
+      if (state !== 'ok') return reject(res, state);
 
-    const auth = await loadAuth(session.userKind, session.userId);
-    if (!auth) {
-      await revokeSession(session.id);
-      return reject(res, 'revoked');
+      const auth = await loadAuth(session.userKind, session.userId);
+      if (!auth) {
+        await revokeSession(session.id);
+        return reject(res, 'revoked');
+      }
+
+      if (opts.requireActive && session.stage !== 'active') {
+        return res.status(403).json({
+          error: session.stage === 'mfa_enroll' ? 'Set up two-step verification to continue' : 'Enter your verification code to continue',
+          code: 'mfa_required',
+          stage: session.stage,
+        });
+      }
+
+      await touchSession(session, { poll: req.headers[POLL_HEADER] === '1' });
+
+      req.auth = auth;
+      req.session = {
+        id: session.id,
+        stage: session.stage,
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        expiresAt: session.expiresAt,
+      };
+      next();
+    } catch (err) {
+      next(err);
     }
-
-    await touchSession(session, { poll: req.headers[POLL_HEADER] === '1' });
-
-    req.auth = auth;
-    req.session = {
-      id: session.id,
-      createdAt: session.createdAt,
-      lastSeenAt: session.lastSeenAt,
-      expiresAt: session.expiresAt,
-    };
-    next();
-  } catch (err) {
-    next(err);
-  }
+  };
 }
+
+/** The default: a live, fully verified (`active`) session. */
+export const authenticate = makeAuthenticate({ requireActive: true });
+
+/** Only for `/auth/me`, `/auth/mfa/*` and logout: a live session in any stage. */
+export const authenticateAnyStage = makeAuthenticate({ requireActive: false });
 
 export function requireProvider(req: Request, res: Response, next: NextFunction) {
   if (!req.auth) return res.status(401).json({ error: 'Not authenticated' });

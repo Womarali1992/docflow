@@ -39,6 +39,7 @@ const ClientSidebar: React.FC = () => {
     { id: 'reqs', label: 'Requests',     Icon: I.Inbox, anchor: 'requests', count: myRequests.length },
     { id: 'docs', label: 'My documents', Icon: I.Folder, anchor: 'documents', count: myDocs.length },
     { id: 'msgs', label: 'Messages',     Icon: I.Msg, anchor: 'messages', count: client.unreadMessages },
+    { id: 'sec',  label: 'Security',     Icon: I.Shield, anchor: 'security' },
   ];
 
   return (

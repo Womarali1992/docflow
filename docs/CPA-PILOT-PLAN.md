@@ -17,7 +17,7 @@
 | C0.2 | `fix(authz): clients cannot review, replace or delete advisor material; cross-tenant ids are 404; storagePath never serialized; signup off by default` | SHIPPED 2026-09-05 |
 | C0.3 | `feat(ops): backup + restore scripts for the current schema (pg_dump, uploads copy, manifest) and a rehearsed restore` | SHIPPED 2026-09-05 |
 | C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | SHIPPED 2026-09-05 |
-| C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | NOT STARTED |
+| C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | SHIPPED 2026-09-05 |
 | C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | NOT STARTED |
 | C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | NOT STARTED |
 | C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | NOT STARTED |
@@ -36,7 +36,31 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C1.2** (TOTP MFA with recovery codes, forced enrollment, pre-auth session stage). Phase 0 complete; C1.1 shipped.
+**NEXT = C1.3** (invitations, password reset, admin CLI, deactivation revokes sessions). Phase 0 complete; C1.1 and
+C1.2 shipped.
+
+C1.2 notes: migration `0004_mfa` (additive: enum `session_stage`, tables `mfa_totp` + `recovery_codes`,
+`sessions.stage` default `preauth`; both tables join `scripts/count.mjs` TABLES). `server/src/auth/crypto.ts` =
+AES-256-GCM under `APP_ENCRYPTION_KEY` (64 hex or base64, 32 bytes; wire format `v1:iv:tag:ct`; required in
+production, fixed dev key with a one-time warning elsewhere; `app.ts` calls `encryptionKey()` at boot so a bad key
+fails fast). `server/src/auth/mfa.ts` = otplib TOTP (30 s, window ±1), `lastUsedStep` replay guard, `qrcode` data
+URL, 10 recovery codes × 10 chars from an unambiguous alphabet, bcrypt cost 10, single use, regenerable with a fresh
+code. Login (and signup) now answer `{stage, me}` and create the session in `preauth` (enrolled) or `mfa_enroll`
+(not enrolled) — never `active`; `GET /auth/me` answers the same envelope in every stage. Stage gating lives in
+`middleware/auth.ts`: `authenticate` refuses a non-active session with 403 `{code:'mfa_required', stage}` without
+touching it; `authenticateAnyStage` is used only by `/auth/me` and `/auth/mfa/*` (`/auth/logout` needs no auth;
+`/auth/logout-all` and `/auth/sessions` stay active-only). Routes: `POST /auth/mfa/verify {code | recoveryCode}`,
+`POST /auth/mfa/enroll` (409 once enrolled — re-enrollment is the C1.3 admin reset), `POST /auth/mfa/enroll/confirm
+{code}` → recovery codes once, `POST /auth/mfa/recovery-codes {code}`, `GET /auth/mfa/status`. Throttle: 5 wrong
+codes / 15 min per session (`RATE_LIMIT_MFA_VERIFY`). Frontend: `/mfa` and `/mfa/enroll` behind `MfaGate`,
+`RouteGuard` forwards a non-active session to its stage screen and back to `from` afterwards, the API client raises
+`docflow:mfa-required` on a 403 so a session that lost its second factor mid-use falls back a stage;
+`SecurityCard` (two-step status, recovery codes left + regenerate, live sessions, sign out everywhere) sits on the
+advisor `/settings` and at the bottom of the client portal (`#security`). Seed: every demo account is enrolled with
+the published dev secret `DOCFLOW2DEV2TOTP2SECRET2` (`npm run totp -- <secret>` prints the code); `db:seed` refuses
+to run with `NODE_ENV=production`. Tests: `test/mfa.test.ts` (16) + 5 matrix rows; `loginAs` now completes both
+steps (clearing the replay guard so one test can sign the same actor in twice inside a 30 s step). Gate: 251 tests
+/ 7 files.
 
 C1.1 notes: `server/src/auth/{sessions,csrf}.ts`, `server/src/security/{headers,limits}.ts`, migration
 `0003_sessions` (additive; `sessions` also joins `scripts/count.mjs` TABLES). `authenticate` loads the row by

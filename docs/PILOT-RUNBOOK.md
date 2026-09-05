@@ -89,6 +89,9 @@ the reader tolerates a BOM); the recorded run is the rerun.
 - Files are mutable until C2.x, so a file replaced *during* the copy is caught by the hash
   verification and fails the run; rerun. v2 makes this impossible by design (immutable versions,
   dump → files → manifest ordering).
-- `config\server.env` holds the database password (and, from C1.2, the MFA encryption key).
-  Only back up to an encrypted volume, and rotate the secrets if a backup drive is lost.
+- `config\server.env` holds the database password and, since C1.2, `APP_ENCRYPTION_KEY` (the
+  key every authenticator secret is encrypted under). Only back up to an encrypted volume, and
+  rotate the secrets if a backup drive is lost. A restore without the matching
+  `APP_ENCRYPTION_KEY` restores accounts nobody can finish signing in to — the admin CLI
+  (C1.3) resets their MFA one by one; there is no bulk recovery, so the key is part of the backup.
 - No scheduling yet; C5.3 adds the Task Scheduler job and the offline-drive rotation.

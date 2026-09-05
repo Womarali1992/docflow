@@ -59,10 +59,42 @@ const cases: Case[] = [
     req: () => request(app).get('/api/auth/me'),
     expect: S(200, 200, 200, 200, 200, 401),
     check: (res, fx, actor) => {
-      expect(res.body).not.toHaveProperty('passwordHash');
+      expect(res.body.me).not.toHaveProperty('passwordHash');
+      expect(res.body.stage).toBe('active');
       const self = selfClient(fx, actor) ?? selfProvider(fx, actor);
-      expect(res.body.id).toBe(self!.id);
+      expect(res.body.me.id).toBe(self!.id);
     },
+  },
+  {
+    name: 'GET /api/auth/mfa/status',
+    req: () => request(app).get('/api/auth/mfa/status'),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res) => {
+      expect(res.body).toMatchObject({ stage: 'active', enrolled: true, recoveryCodesLeft: 0 });
+      expect(JSON.stringify(res.body)).not.toMatch(/secret/i);
+    },
+  },
+  {
+    // Every fixture account is enrolled; re-enrollment is the admin's job (C1.3).
+    name: 'POST /api/auth/mfa/enroll',
+    req: () => request(app).post('/api/auth/mfa/enroll'),
+    expect: S(409, 409, 409, 409, 409, 401),
+  },
+  {
+    name: 'POST /api/auth/mfa/enroll/confirm',
+    req: () => request(app).post('/api/auth/mfa/enroll/confirm').send({ code: '000000' }),
+    expect: S(409, 409, 409, 409, 409, 401),
+  },
+  {
+    // A wrong code is refused for everyone; the right code is exercised in mfa.test.ts.
+    name: 'POST /api/auth/mfa/verify',
+    req: () => request(app).post('/api/auth/mfa/verify').send({ code: '000000' }),
+    expect: S(401, 401, 401, 401, 401, 401),
+  },
+  {
+    name: 'POST /api/auth/mfa/recovery-codes',
+    req: () => request(app).post('/api/auth/mfa/recovery-codes').send({ code: '000000' }),
+    expect: S(401, 401, 401, 401, 401, 401),
   },
   {
     name: 'POST /api/auth/logout-all',

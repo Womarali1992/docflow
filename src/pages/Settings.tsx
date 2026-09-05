@@ -3,6 +3,7 @@ import { useDocumentsStore } from '@/context/DocumentsContext';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '@/components/docflow/icons';
+import SecurityCard from '@/components/docflow/SecurityCard';
 
 type PresetBin = { id: string; label: string; items: { name: string }[] };
 
@@ -72,12 +73,16 @@ const Settings = () => {
         <div>
           <h1 className="df-client-name">Settings</h1>
           <div className="df-client-meta">
+            <span>Security</span>
+            <span className="df-dot-sep" />
             <span>Document request presets</span>
             <span className="df-dot-sep" />
             <span>{presets.length} saved preset{presets.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
       </div>
+
+      <SecurityCard id="security" />
 
       <div className="df-section">
         <div className="df-section-head">

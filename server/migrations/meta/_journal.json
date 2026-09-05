@@ -29,6 +29,13 @@
       "when": 1788619863316,
       "tag": "0003_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788621124485,
+      "tag": "0004_mfa",
+      "breakpoints": true
     }
   ]
 }

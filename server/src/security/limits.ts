@@ -49,6 +49,17 @@ export const loginEmailLimiter = rateLimit({
   message: { error: 'Too many login attempts for this account. Please try again later.', code: 'rate_limited' },
 });
 
+/** 5 wrong codes / 15 min per session; a correct code does not count. */
+export const mfaVerifyLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES,
+  limit: limitFromEnv('RATE_LIMIT_MFA_VERIFY', 5),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req: Request) => throttleKey(req),
+  message: { error: 'Too many verification attempts. Please try again later.', code: 'rate_limited' },
+});
+
 /** Key: the session (hashed, so the token never sits in the store) or the client IP when anonymous. */
 export function throttleKey(req: Request): string {
   const token = readSessionToken(req);

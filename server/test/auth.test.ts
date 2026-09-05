@@ -18,8 +18,9 @@ describe('auth', () => {
     try {
       const on = await request(app).post('/api/auth/signup-provider').send(body);
       expect(on.status).toBe(201);
-      expect(on.body).toMatchObject({ kind: 'provider', email: body.email, firmName: body.firmName });
-      expect(on.body).not.toHaveProperty('passwordHash');
+      // A brand-new account owes an enrollment before it can do anything else.
+      expect(on.body).toMatchObject({ stage: 'mfa_enroll', me: { kind: 'provider', email: body.email, firmName: body.firmName } });
+      expect(on.body.me).not.toHaveProperty('passwordHash');
       expect(on.headers['set-cookie']).toBeDefined();
 
       const duplicate = await request(app).post('/api/auth/signup-provider').send(body);

@@ -59,6 +59,9 @@ describe('sessions', () => {
     expect(row.tokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(row.userKind).toBe('provider');
     expect(row.userId).toBe(fx.provider1.id);
+    // A password alone never yields an active session (invariant 9).
+    expect(row.stage).toBe('preauth');
+    expect(res.body.stage).toBe('preauth');
     expect(row.revokedAt).toBeNull();
     expect(row.expiresAt.getTime() - row.createdAt.getTime()).toBe(ABSOLUTE_TIMEOUT_MS);
 

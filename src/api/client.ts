@@ -1,10 +1,22 @@
-import type { Activity, Client, Document, Me, Message, Preset, RequestFrequency, SessionSummary } from './types';
+import type {
+  Activity,
+  AuthState,
+  Client,
+  Document,
+  Message,
+  MfaEnrollment,
+  MfaStatus,
+  Preset,
+  RequestFrequency,
+  SessionStage,
+  SessionSummary,
+} from './types';
 
 const BASE = '/api';
 
 const DATE_FIELDS = new Set([
   'createdAt', 'updatedAt', 'uploadedAt', 'requestedAt', 'dueDate',
-  'updateRequestedAt', 'lastActivity', 'readAt', 'lastSeenAt', 'expiresAt',
+  'updateRequestedAt', 'lastActivity', 'readAt', 'lastSeenAt', 'expiresAt', 'enrolledAt',
 ]);
 
 function reviveDates<T>(obj: unknown): T {
@@ -44,6 +56,9 @@ export type UnauthorizedReason = 'missing' | 'invalid' | 'revoked' | 'expired' |
 /** Fired on a 401 (except the login call) so the auth layer can drop the session; detail.reason says why. */
 export const UNAUTHORIZED_EVENT = 'docflow:unauthorized';
 
+/** Fired on a 403 `mfa_required` so the auth layer can send the user back to the second step; detail.stage says which. */
+export const MFA_REQUIRED_EVENT = 'docflow:mfa-required';
+
 interface ApiInit extends RequestInit {
   /** Background refresh: sends X-DocFlow-Poll so the request keeps the session alive without extending it. */
   poll?: boolean;
@@ -63,10 +78,13 @@ async function request<T>(path: string, init: ApiInit = {}): Promise<T> {
     },
   });
   if (!res.ok) {
-    let body: { error?: string; reason?: UnauthorizedReason; [k: string]: unknown };
+    let body: { error?: string; code?: string; reason?: UnauthorizedReason; stage?: SessionStage; [k: string]: unknown };
     try { body = await res.json(); } catch { body = { error: res.statusText }; }
-    if (res.status === 401 && path !== '/auth/login' && typeof window !== 'undefined') {
+    if (res.status === 401 && path !== '/auth/login' && !path.startsWith('/auth/mfa/') && typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { reason: body.reason ?? 'missing' } }));
+    }
+    if (res.status === 403 && body.code === 'mfa_required' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(MFA_REQUIRED_EVENT, { detail: { stage: body.stage ?? 'preauth' } }));
     }
     throw new ApiError(res.status, body);
   }
@@ -77,9 +95,11 @@ async function request<T>(path: string, init: ApiInit = {}): Promise<T> {
 
 export const api = {
   auth: {
-    me: () => request<Me>('/auth/me'),
+    /** Identity plus session stage; works in every stage so a reload lands on the right screen. */
+    me: () => request<AuthState>('/auth/me'),
+    /** Password step. The answer's `stage` is never `active`: a code or an enrollment follows. */
     login: (email: string, password: string, kind: 'provider' | 'client') =>
-      request<Me>('/auth/login', {
+      request<AuthState>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password, kind }),
       }),
@@ -88,10 +108,34 @@ export const api = {
     logoutAll: () => request<{ ok: true; revoked: number }>('/auth/logout-all', { method: 'POST' }),
     sessions: () => request<SessionSummary[]>('/auth/sessions'),
     signupProvider: (input: { name: string; email: string; password: string; firmName?: string }) =>
-      request<Me>('/auth/signup-provider', {
+      request<AuthState>('/auth/signup-provider', {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+
+    mfa: {
+      status: () => request<MfaStatus>('/auth/mfa/status'),
+      /** Second step of sign-in: an authenticator code, or one recovery code. */
+      verify: (input: { code: string } | { recoveryCode: string }) =>
+        request<{ stage: 'active'; recoveryCodesLeft: number }>('/auth/mfa/verify', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      /** Starts (or restarts) enrollment: a fresh secret, QR code and manual key. */
+      enroll: () => request<MfaEnrollment>('/auth/mfa/enroll', { method: 'POST' }),
+      /** Proves the authenticator works; activates the session; the recovery codes are shown once. */
+      confirmEnrollment: (code: string) =>
+        request<{ stage: 'active'; recoveryCodes: string[] }>('/auth/mfa/enroll/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ code }),
+        }),
+      /** Replaces every recovery code; needs a fresh authenticator code. */
+      regenerateRecoveryCodes: (code: string) =>
+        request<{ recoveryCodes: string[] }>('/auth/mfa/recovery-codes', {
+          method: 'POST',
+          body: JSON.stringify({ code }),
+        }),
+    },
   },
 
   clients: {

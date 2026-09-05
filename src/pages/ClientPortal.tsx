@@ -8,6 +8,7 @@ import { getErrorMessage } from '@/utils/errors';
 import type { Document } from '@/api/types';
 import { I } from '@/components/docflow/icons';
 import MessagesPanel from '@/components/docflow/MessagesPanel';
+import SecurityCard from '@/components/docflow/SecurityCard';
 import { CLIENT_UPLOAD_EVENT } from '@/components/docflow/ClientTopbar';
 import { useToast } from '@/hooks/use-toast';
 
@@ -283,6 +284,8 @@ const ClientPortal = () => {
           <MessagesPanel ref={messagesRef} clientId={client.id} meKind="client" subtitle={advisorName || 'Your advisor'} />
         </div>
       </div>
+
+      <SecurityCard id="security" />
     </div>
   );
 };

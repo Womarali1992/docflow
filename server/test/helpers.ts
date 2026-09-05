@@ -8,8 +8,11 @@ import bcrypt from 'bcryptjs';
 import supertest from 'supertest';
 import type { Express } from 'express';
 import type { Response, Test } from 'supertest';
+import { and, eq } from 'drizzle-orm';
 import app from '../src/app.js';
 import { db, schema } from '../src/db/client.js';
+import { encryptSecret } from '../src/auth/crypto.js';
+import { generateCode } from '../src/auth/mfa.js';
 import { humanSize, storedFileName, writeStoredFileSync } from '../src/storage.js';
 
 export { app };
@@ -30,6 +33,26 @@ export function request(target: Express = app): Http {
 export const PASSWORD = 'test-password-123';
 // Low cost on purpose: fixtures are rebuilt before every test.
 const PASSWORD_HASH = bcrypt.hashSync(PASSWORD, 4);
+
+/** Every fixture account is MFA-enrolled with this authenticator secret (base32). */
+export const TOTP_SECRET = 'TESTFIXTURE2TOTP2SECRET2';
+
+/** The code an authenticator app would show for the fixture secret right now. */
+export const totpCode = () => generateCode(TOTP_SECRET);
+
+async function enrollMfa(userKind: 'provider' | 'client', userId: string) {
+  const now = new Date();
+  await db
+    .insert(schema.mfaTotp)
+    .values({ userKind, userId, secretEnc: encryptSecret(TOTP_SECRET), enrolledAt: now, createdAt: now, updatedAt: now });
+}
+
+/** Removes the enrollment so the next login lands in `mfa_enroll` (for enrollment tests). */
+export async function unenroll(fx: Fixture, actor: LoggedInActor) {
+  const { kind, id } = identity(fx, actor);
+  await db.delete(schema.mfaTotp).where(and(eq(schema.mfaTotp.userKind, kind), eq(schema.mfaTotp.userId, id)));
+  await db.delete(schema.recoveryCodes).where(and(eq(schema.recoveryCodes.userKind, kind), eq(schema.recoveryCodes.userId, id)));
+}
 
 export const PDF_BYTES = Buffer.from(
   '%PDF-1.4\n% docflow test fixture\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n'
@@ -89,6 +112,7 @@ async function insertProvider(name: string, email: string): Promise<ProviderFixt
     actorId: p.id,
     actorName: name,
   });
+  await enrollMfa('provider', p.id);
   return { id: p.id, email, preset: preset.id };
 }
 
@@ -164,6 +188,7 @@ async function insertClient(
     actorId: c.id,
     actorName: name,
   });
+  await enrollMfa('client', c.id);
   return { id: c.id, email, providerId: provider.id, upload, request: req, deliverable };
 }
 
@@ -237,8 +262,15 @@ export function selfProvider(fx: Fixture, actor: Actor): ProviderFixture | null 
   return null;
 }
 
-/** Log in through the real endpoint and return the session cookie as `name=value`. */
-export async function loginAs(fx: Fixture, actor: LoggedInActor): Promise<string> {
+/** The kind + id an actor signs in as. */
+export function identity(fx: Fixture, actor: LoggedInActor): { kind: 'provider' | 'client'; id: string } {
+  const provider = selfProvider(fx, actor);
+  if (provider) return { kind: 'provider', id: provider.id };
+  return { kind: 'client', id: selfClient(fx, actor)!.id };
+}
+
+/** First step only: password login. Returns the pre-auth cookie and the response (`body.stage` says what is owed). */
+export async function passwordLogin(fx: Fixture, actor: LoggedInActor): Promise<{ cookie: string; res: Response }> {
   const { kind, email } = credentials(fx, actor);
   const res = await request(app).post('/api/auth/login').send({ email, password: PASSWORD, kind });
   if (res.status !== 200) {
@@ -247,7 +279,35 @@ export async function loginAs(fx: Fixture, actor: LoggedInActor): Promise<string
   const header = res.headers['set-cookie'] as string[] | string | undefined;
   const raw = Array.isArray(header) ? header[0] : header;
   if (!raw) throw new Error(`login for ${actor} returned no Set-Cookie header`);
-  return raw.split(';')[0];
+  return { cookie: raw.split(';')[0], res };
+}
+
+/** Forgets the last accepted TOTP step so the same code can be accepted again (test-only; the guard is covered in mfa.test.ts). */
+export async function clearReplayGuard(fx: Fixture, actor: LoggedInActor) {
+  const { kind, id } = identity(fx, actor);
+  await db
+    .update(schema.mfaTotp)
+    .set({ lastUsedStep: null })
+    .where(and(eq(schema.mfaTotp.userKind, kind), eq(schema.mfaTotp.userId, id)));
+}
+
+/**
+ * Full sign-in through the real endpoints (password, then the authenticator
+ * code) and the resulting `active` session cookie as `name=value`. The replay
+ * guard is cleared first so one test can sign the same actor in twice inside
+ * a single 30 s step.
+ */
+export async function loginAs(fx: Fixture, actor: LoggedInActor): Promise<string> {
+  const { cookie, res } = await passwordLogin(fx, actor);
+  if (res.body.stage !== 'preauth') {
+    throw new Error(`expected a preauth session for ${actor}, got stage ${String(res.body.stage)}`);
+  }
+  await clearReplayGuard(fx, actor);
+  const verify = await request(app).post('/api/auth/mfa/verify').set('Cookie', cookie).send({ code: totpCode() });
+  if (verify.status !== 200 || verify.body.stage !== 'active') {
+    throw new Error(`mfa verify failed for ${actor}: ${verify.status} ${JSON.stringify(verify.body)}`);
+  }
+  return cookie;
 }
 
 /** Collects a binary response body into a Buffer (superagent parses only text and JSON by default). */

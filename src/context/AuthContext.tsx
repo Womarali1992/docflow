@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { api, UNAUTHORIZED_EVENT, type UnauthorizedReason } from '@/api/client';
-import type { Me } from '@/api/types';
+import React, { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { api, MFA_REQUIRED_EVENT, UNAUTHORIZED_EVENT, type UnauthorizedReason } from '@/api/client';
+import type { AuthState, Me, SessionStage } from '@/api/types';
 import { toast } from '@/hooks/use-toast';
 
 /** What to tell the user when the server ends a session; missing/invalid are silent (no session to lose). */
@@ -12,9 +12,15 @@ const SIGNED_OUT_MESSAGE: Partial<Record<UnauthorizedReason, string>> = {
 
 interface AuthContextValue {
   me: Me | null;
+  /** Null without a session. Screens are gated on `active`; the other stages own the /mfa routes. */
+  stage: SessionStage | null;
   loading: boolean;
-  login: (email: string, password: string, kind: 'provider' | 'client') => Promise<Me>;
+  login: (email: string, password: string, kind: 'provider' | 'client') => Promise<AuthState>;
+  /** Called by the MFA screens once the server has moved the session to `active`. */
+  activate: () => void;
   logout: () => Promise<void>;
+  /** Every session of this user, including this one. */
+  logoutAll: () => Promise<number>;
   refresh: () => Promise<void>;
 }
 
@@ -22,26 +28,30 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [me, setMe] = useState<Me | null>(null);
+  const [stage, setStage] = useState<SessionStage | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
-      const m = await api.auth.me();
-      setMe(m);
+      const state = await api.auth.me();
+      setMe(state.me);
+      setStage(state.stage);
     } catch {
       setMe(null);
+      setStage(null);
     }
-  };
+  }, []);
 
   useEffect(() => {
     (async () => {
       await refresh();
       setLoading(false);
     })();
-  }, []);
+  }, [refresh]);
 
   // A 401 from any API call (expired/cleared session) drops the session so the
-  // RouteGuard redirects to /login on the next render.
+  // RouteGuard redirects to /login on the next render. A 403 mfa_required means
+  // the session lost its second factor (another tab, a reset): fall back a stage.
   useEffect(() => {
     const onUnauthorized = (event: Event) => {
       const reason = (event as CustomEvent<{ reason?: UnauthorizedReason }>).detail?.reason;
@@ -50,24 +60,44 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         if (current && message) toast({ title: 'Signed out', description: message });
         return null;
       });
+      setStage(null);
+    };
+    const onMfaRequired = (event: Event) => {
+      const next = (event as CustomEvent<{ stage?: SessionStage }>).detail?.stage;
+      if (next === 'preauth' || next === 'mfa_enroll') setStage(next);
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    window.addEventListener(MFA_REQUIRED_EVENT, onMfaRequired);
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      window.removeEventListener(MFA_REQUIRED_EVENT, onMfaRequired);
+    };
   }, []);
 
   const login = async (email: string, password: string, kind: 'provider' | 'client') => {
-    const m = await api.auth.login(email, password, kind);
-    setMe(m);
-    return m;
+    const state = await api.auth.login(email, password, kind);
+    setMe(state.me);
+    setStage(state.stage);
+    return state;
   };
+
+  const activate = useCallback(() => setStage('active'), []);
 
   const logout = async () => {
     await api.auth.logout();
     setMe(null);
+    setStage(null);
+  };
+
+  const logoutAll = async () => {
+    const { revoked } = await api.auth.logoutAll();
+    setMe(null);
+    setStage(null);
+    return revoked;
   };
 
   return (
-    <AuthContext.Provider value={{ me, loading, login, logout, refresh }}>
+    <AuthContext.Provider value={{ me, stage, loading, login, activate, logout, logoutAll, refresh }}>
       {children}
     </AuthContext.Provider>
   );

@@ -112,3 +112,32 @@ export interface SessionSummary {
 export type Me =
   | { kind: 'provider'; id: string; name: string; email: string; firmName?: string | null }
   | { kind: 'client';   id: string; name: string; email: string; providerId: string; providerName?: string | null };
+
+/**
+ * Where a session stands. `preauth`: password accepted, authenticator code owed.
+ * `mfa_enroll`: no authenticator yet, enrollment owed. `active`: fully signed in.
+ */
+export type SessionStage = 'preauth' | 'mfa_enroll' | 'active';
+
+/** Answer of login and GET /auth/me: identity plus the stage the UI must route on. */
+export interface AuthState {
+  stage: SessionStage;
+  me: Me;
+}
+
+/** GET /auth/mfa/status */
+export interface MfaStatus {
+  stage: SessionStage;
+  enrolled: boolean;
+  enrolledAt: Date | null;
+  recoveryCodesLeft: number;
+}
+
+/** POST /auth/mfa/enroll: what the authenticator app needs (QR or the key typed by hand). */
+export interface MfaEnrollment {
+  secret: string;
+  otpauthUrl: string;
+  qrDataUrl: string;
+  issuer: string;
+  account: string;
+}

@@ -2,12 +2,14 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
+import mfaRoutes from './routes/mfa.js';
 import clientRoutes from './routes/clients.js';
 import documentRoutes from './routes/documents.js';
 import messageRoutes from './routes/messages.js';
 import presetRoutes from './routes/presets.js';
 import activityRoutes from './routes/activities.js';
 import { appOrigin, originCheck } from './auth/csrf.js';
+import { encryptionKey } from './auth/crypto.js';
 import { permissionsPolicy, securityHeaders } from './security/headers.js';
 import { JSON_BODY_LIMIT, globalLimiter } from './security/limits.js';
 
@@ -44,6 +46,8 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
+// The second factor is mounted first: its routes are the only ones a pre-auth session may reach.
+app.use('/api/auth/mfa', mfaRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/documents', documentRoutes);
@@ -70,7 +74,9 @@ function isBodyParserError(err: unknown): err is { status: 400 | 413 } {
   return status === 413 || status === 400;
 }
 
-// Fail fast on a misconfigured origin instead of refusing every POST at runtime.
+// Fail fast on a misconfigured origin or a missing encryption key instead of
+// refusing every POST (or every MFA enrollment) at runtime.
 appOrigin();
+encryptionKey();
 
 export default app;

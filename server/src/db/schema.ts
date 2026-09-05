@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, numeric, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, numeric, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
 export const requestFrequencyEnum = pgEnum('request_frequency', [
@@ -19,6 +19,9 @@ export const documentStatusEnum = pgEnum('document_status', [
 ]);
 
 export const activityTypeEnum = pgEnum('activity_type', ['document', 'message', 'update']);
+
+/* preauth = password accepted, second factor pending · mfa_enroll = no authenticator yet · active = fully signed in */
+export const sessionStageEnum = pgEnum('session_stage', ['preauth', 'mfa_enroll', 'active']);
 
 /* =========================================================
    Providers (CPA firms / advisors)
@@ -195,6 +198,7 @@ export const sessions = pgTable(
     tokenHash: text('token_hash').notNull().unique(),
     userKind: actorKindEnum('user_kind').notNull(),
     userId: uuid('user_id').notNull(),
+    stage: sessionStageEnum('stage').notNull().default('preauth'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -204,6 +208,43 @@ export const sessions = pgTable(
   },
   (t) => ({
     userIdx: index('sessions_user_idx').on(t.userKind, t.userId),
+  })
+);
+
+/* =========================================================
+   MFA: one TOTP secret per user (AES-256-GCM at rest), enrolled once
+   enrolledAt is set; lastUsedStep blocks replay of an accepted code.
+   ========================================================= */
+export const mfaTotp = pgTable(
+  'mfa_totp',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userKind: actorKindEnum('user_kind').notNull(),
+    userId: uuid('user_id').notNull(),
+    secretEnc: text('secret_enc').notNull(),
+    enrolledAt: timestamp('enrolled_at', { withTimezone: true }),
+    lastUsedStep: integer('last_used_step'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userUnique: uniqueIndex('mfa_totp_user_unique').on(t.userKind, t.userId),
+  })
+);
+
+/* Recovery codes: 10 per enrollment, bcrypt-hashed, single use. */
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userKind: actorKindEnum('user_kind').notNull(),
+    userId: uuid('user_id').notNull(),
+    codeHash: text('code_hash').notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userIdx: index('recovery_codes_user_idx').on(t.userKind, t.userId),
   })
 );
 
@@ -247,4 +288,7 @@ export type NewActivity = typeof activities.$inferInsert;
 export type Preset = typeof presets.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
+export type MfaTotp = typeof mfaTotp.$inferSelect;
+export type RecoveryCode = typeof recoveryCodes.$inferSelect;
+export type SessionStage = (typeof sessionStageEnum.enumValues)[number];
 export type NewPreset = typeof presets.$inferInsert;

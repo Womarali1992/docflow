@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { getErrorMessage } from '@/utils/errors';
+import { stagePath } from '@/utils/stage';
 import { I } from '@/components/docflow/icons';
 import '@/components/docflow/styles.css';
 
@@ -39,9 +40,14 @@ const Login = () => {
     setError(null);
     setLoading(true);
     try {
-      const me = await login(email, password, kind);
+      const { me, stage } = await login(email, password, kind);
       const redirect = (location.state as { from?: string } | null)?.from;
-      if (redirect) {
+      // The password is only the first step: the code (or enrollment) screen comes next,
+      // and it forwards to `from` once the session is active.
+      const owed = stagePath(stage);
+      if (owed) {
+        navigate(owed, { replace: true, state: redirect ? { from: redirect } : undefined });
+      } else if (redirect) {
         navigate(redirect, { replace: true });
       } else if (me.kind === 'provider') {
         navigate('/', { replace: true });
@@ -139,7 +145,8 @@ const Login = () => {
                   <>provider <span className="df-mono">sarah@meridiancpa.com / password123</span></>
                 ) : (
                   <>client <span className="df-mono">sarah.johnson@meridian.co / client123</span></>
-                )}.
+                )}. Authenticator code: <span className="df-mono">npm run totp</span> in <span className="df-mono">server/</span> with the
+                secret <span className="df-mono">db:seed</span> printed.
               </div>
             )}
           </form>

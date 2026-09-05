@@ -12,6 +12,7 @@
     "count": "node scripts/count.mjs",
     "integrity": "node scripts/integrity.mjs",
     "db:create": "node scripts/create-db.mjs",
+    "totp": "node scripts/totp.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
@@ -27,7 +28,9 @@
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.3.0",
     "multer": "^2.2.0",
+    "otplib": "^12.0.1",
     "pg": "^8.13.1",
+    "qrcode": "^1.5.4",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -38,6 +41,7 @@
     "@types/multer": "^2.2.0",
     "@types/node": "^22.5.5",
     "@types/pg": "^8.11.10",
+    "@types/qrcode": "^1.5.6",
     "@types/supertest": "^6.0.3",
     "drizzle-kit": "^0.30.0",
     "supertest": "^7.1.4",
