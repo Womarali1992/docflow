@@ -95,3 +95,22 @@ the reader tolerates a BOM); the recorded run is the rerun.
   `APP_ENCRYPTION_KEY` restores accounts nobody can finish signing in to — the admin CLI
   (C1.3) resets their MFA one by one; there is no bulk recovery, so the key is part of the backup.
 - No scheduling yet; C5.3 adds the Task Scheduler job and the offline-drive rotation.
+
+## Accounts (C1.3)
+
+All account administration happens on the server console with `npm run admin -- <command>` from
+`server\` (the process reads `DATABASE_URL` and `APP_BASE_URL` from `.env`). There is no admin
+role inside the app.
+
+| Situation | Command |
+|---|---|
+| First advisor on the firm PC | `npm run admin -- create-advisor --email ann@firm.com --name "Ann Advisor" --firm "Firm CPA"` (password prompted twice, echo off, at least 12 characters) |
+| Advisor forgot the password | `npm run admin -- reset-link --kind provider --email ann@firm.com` → hand over the printed link (one hour, single use; every session of that account ends when it is used) |
+| Lost phone / authenticator | `npm run admin -- reset-mfa --kind client --email jane@example.com` (sessions end; the next sign-in enrolls a new authenticator and issues new recovery codes) |
+| Leaver or compromised account | `npm run admin -- deactivate --kind provider|client --email …`; reversible with `reactivate` |
+| Who can sign in, who is signed in | `npm run admin -- list-users`, `npm run admin -- list-sessions --kind … --email …` |
+| "Too many login attempts" | The throttle is in the API process's memory and clears 15 minutes after the last failed attempt; restart `docflow-api` to clear it now (`npm run admin -- unlock` says the same) |
+
+Clients are never given a password by hand: "New client" in the app shows a one-time invitation
+link (7 days), and the client page has Resend invite, Reset link (one hour) and Deactivate. Every
+CLI change appears in the advisor's activity feed as "Administrator (CLI) …" until C2.1's audit log.

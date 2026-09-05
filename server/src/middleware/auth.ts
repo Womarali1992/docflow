@@ -57,20 +57,32 @@ function reject(res: Response, reason: AuthFailure) {
   return res.status(401).json({ error: FAILURE_MESSAGE[reason], reason });
 }
 
-/** Resolves the account behind a session into the `req.auth` shape; null when the account is gone. */
+/**
+ * Resolves the account behind a session into the `req.auth` shape; null when
+ * the account is gone or deactivated (the caller then revokes the session, so
+ * a deactivation takes effect on the very next request).
+ */
 export async function loadAuth(kind: 'provider' | 'client', id: string): Promise<AuthPayload | null> {
   if (kind === 'provider') {
     const [p] = await db
-      .select({ id: schema.providers.id, email: schema.providers.email, name: schema.providers.name })
+      .select({ id: schema.providers.id, email: schema.providers.email, name: schema.providers.name, deactivatedAt: schema.providers.deactivatedAt })
       .from(schema.providers)
       .where(eq(schema.providers.id, id));
-    return p ? { sub: p.id, kind: 'provider', providerId: p.id, email: p.email, name: p.name } : null;
+    if (!p || p.deactivatedAt) return null;
+    return { sub: p.id, kind: 'provider', providerId: p.id, email: p.email, name: p.name };
   }
   const [c] = await db
-    .select({ id: schema.clients.id, providerId: schema.clients.providerId, email: schema.clients.email, name: schema.clients.name })
+    .select({
+      id: schema.clients.id,
+      providerId: schema.clients.providerId,
+      email: schema.clients.email,
+      name: schema.clients.name,
+      deactivatedAt: schema.clients.deactivatedAt,
+    })
     .from(schema.clients)
     .where(eq(schema.clients.id, id));
-  return c ? { sub: c.id, kind: 'client', providerId: c.providerId, email: c.email, name: c.name } : null;
+  if (!c || c.deactivatedAt) return null;
+  return { sub: c.id, kind: 'client', providerId: c.providerId, email: c.email, name: c.name };
 }
 
 /**

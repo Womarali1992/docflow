@@ -25,8 +25,30 @@ export interface Client {
   unreadMessages: number;
   documentsCount: number;
   lastActivity: Date | null;
+  /** True once the client accepted an invitation (or was given a password): they can sign in. */
+  hasPassword: boolean;
+  /** Expiry of the newest unused invitation, or null when none is pending. */
+  invitePendingUntil: Date | null;
+  /** Set while the client is deactivated: sign-in refused, sessions ended; reversible. */
+  deactivatedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** A one-time link handed to the advisor (email delivery arrives with C1.4). */
+export interface OneTimeLink {
+  link: string;
+  expiresAt: Date;
+  emailQueued: boolean;
+}
+
+/** GET /invitations/:token — who invited whom, shown before the password is set. */
+export interface InvitationInfo {
+  clientName: string;
+  email: string;
+  providerName: string;
+  firmName: string | null;
+  expiresAt: Date;
 }
 
 export interface Document {

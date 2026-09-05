@@ -49,6 +49,25 @@ export const loginEmailLimiter = rateLimit({
   message: { error: 'Too many login attempts for this account. Please try again later.', code: 'rate_limited' },
 });
 
+const ONE_HOUR = 60 * 60 * 1000;
+
+/**
+ * Invitation and reset lookups: 10 / h per IP (every attempt counts, so a token
+ * cannot be guessed and a mailbox cannot be flooded). Factory for the unit test.
+ */
+export function createLookupLimiter(limit: number) {
+  return rateLimit({
+    windowMs: ONE_HOUR,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => `ip:${ipKeyGenerator(req.ip ?? '')}`,
+    message: { error: 'Too many attempts from this network. Please try again later.', code: 'rate_limited' },
+  });
+}
+
+export const lookupLimiter = createLookupLimiter(limitFromEnv('RATE_LIMIT_LOOKUP_IP', 10));
+
 /** 5 wrong codes / 15 min per session; a correct code does not count. */
 export const mfaVerifyLimiter = rateLimit({
   windowMs: FIFTEEN_MINUTES,

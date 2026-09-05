@@ -7,6 +7,7 @@ import { downloadCsv } from '@/utils/csv';
 import { I } from '@/components/docflow/icons';
 import ActivityFeed from '@/components/docflow/ActivityFeed';
 import NewClientDialog from '@/components/docflow/NewClientDialog';
+import { ACCESS_LABEL, accessState } from '@/utils/clientAccess';
 
 const formatRelative = (d: Date | null) => {
   if (!d) return '—';
@@ -47,7 +48,12 @@ const Index = () => {
 
   const visibleClients = useMemo(() => {
     const list = filter === 'attention' ? clients.filter(needsAttention) : clients;
-    return [...list].sort((a, b) => (b.lastActivity?.getTime() ?? 0) - (a.lastActivity?.getTime() ?? 0));
+    // Deactivated clients sink to the bottom; the rest by recent activity.
+    return [...list].sort((a, b) => {
+      const off = Number(!!a.deactivatedAt) - Number(!!b.deactivatedAt);
+      if (off !== 0) return off;
+      return (b.lastActivity?.getTime() ?? 0) - (a.lastActivity?.getTime() ?? 0);
+    });
   }, [clients, filter]);
 
   const exportCsv = () => {
@@ -129,11 +135,12 @@ const Index = () => {
           )}
           {visibleClients.map(c => {
             const initials = c.name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
+            const access = accessState(c);
             return (
               <div
                 key={c.id}
                 className="df-row df-clickable"
-                style={{ gridTemplateColumns: '36px 1fr auto auto auto' }}
+                style={{ gridTemplateColumns: '36px 1fr auto auto auto', opacity: access === 'deactivated' ? 0.6 : 1 }}
                 onClick={() => navigate(`/clients/${c.id}`)}
               >
                 <div className="df-client-avatar" style={{ width: 32, height: 32, fontSize: 12, borderRadius: 8 }}>{initials}</div>
@@ -146,6 +153,7 @@ const Index = () => {
                   <div className="df-meta" style={{ marginTop: 0 }}>AUM</div>
                 </div>
                 <div style={{ display: 'flex', gap: 4 }}>
+                  {access !== 'active' && <span className={'df-pill ' + ACCESS_LABEL[access].cls}>{ACCESS_LABEL[access].label}</span>}
                   {c.pendingUpdates > 0 && <span className="df-pill df-warn">{c.pendingUpdates} pending</span>}
                   {c.unreadMessages > 0 && <span className="df-pill df-accent">{c.unreadMessages} unread</span>}
                 </div>

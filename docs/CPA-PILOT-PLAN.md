@@ -18,7 +18,7 @@
 | C0.3 | `feat(ops): backup + restore scripts for the current schema (pg_dump, uploads copy, manifest) and a rehearsed restore` | SHIPPED 2026-09-05 |
 | C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | SHIPPED 2026-09-05 |
 | C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | SHIPPED 2026-09-05 |
-| C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | NOT STARTED |
+| C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | SHIPPED 2026-09-05 |
 | C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | NOT STARTED |
 | C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | NOT STARTED |
 | C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | NOT STARTED |
@@ -36,8 +36,44 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C1.3** (invitations, password reset, admin CLI, deactivation revokes sessions). Phase 0 complete; C1.1 and
-C1.2 shipped.
+**NEXT = C1.4** (Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback).
+Phase 0 complete; C1.1–C1.3 shipped.
+
+C1.3 notes: migration `0005_invites_resets` (additive: `invitations`, `password_resets`, `providers`/`clients` +
+`deactivatedAt`, `passwordChangedAt`; both tables join `scripts/count.mjs` TABLES). `server/src/auth/passwords.ts`
+= bcrypt cost 12 (`PASSWORD_BCRYPT_COST` lowers it outside production; the test setup uses 4), zod `passwordSchema`
+min 12, `verifyPassword` reports `needsRehash` and login re-hashes cost-10 hashes, `isRefusedDemoPassword` refuses
+`password123` / `client123` when `NODE_ENV=production`. `auth/tokens.ts` (32-byte base64url token, sha256 at rest,
+`tokenState`, `appBaseUrl`), `auth/signin.ts` (`openSession`, `providerMe`, `clientMe`, `AuthState` shared by
+login / signup / invitation accept), `auth/invitations.ts` (7-day single-use link; a new one deletes unused older
+ones; accept sets the password, burns the link, revokes the client's sessions), `auth/resets.ts` (1-hour single-use
+link; `setPassword` stamps `passwordChangedAt`; completing revokes every session). Routes: `POST
+/clients/:id/invitations` → `{link, expiresAt, emailQueued:false}` (409 `deactivated`), `POST
+/clients/:id/password-reset` (copy-link; 409 `not_invited` without a password), `POST /clients/:id/deactivate` (revokes
+sessions, drops unused invitations, idempotent) / `reactivate`; public `GET /invitations/:token` (404
+`invalid_token`, 410 `used` / `expired`; deactivated client → 404) and `POST /invitations/:token/accept {password}` →
+`{stage, me}` + cookie (stage `mfa_enroll` unless already enrolled); `POST /auth/password {currentPassword,
+newPassword}` (400 `wrong_password` — never 401, which would log the UI out; revokes every other session); `POST
+/auth/password-reset/request {email, kind}` always 202 and only creates a row for a live account with a password;
+`POST /auth/password-reset/confirm {token, password}` (400 `invalid_token` / `used` / `expired`). Login refuses a
+deactivated account (401 `deactivated`) and a demo password in production (401 `demo_password`) only after the
+password matched, so a wrong password stays a generic 401. `loadAuth` returns null for a deactivated account so the
+next request of any live session is 401 `revoked`. Throttle: invitation/reset lookups 10 / h per IP
+(`RATE_LIMIT_LOOKUP_IP`; `createLookupLimiter` unit-tested). Client serializer adds `hasPassword`,
+`invitePendingUntil`, `deactivatedAt` (never a hash or token). Admin CLI `server/src/admin.ts` (`npm run admin --
+create-advisor|reset-mfa|reset-link|deactivate|reactivate|list-sessions|list-users|unlock`): password prompted with
+echo off, or `DOCFLOW_ADMIN_PASSWORD` for scripts; every change is recorded as an `activities` row with `actorName
+'Administrator (CLI)'` (the audit bridge until C2.1's `audit_log`). **Deviation:** `unlock` cannot clear the login
+throttle — it lives in the API process's memory (15-minute windows) — so the command prints how to clear it
+(restart `docflow-api`); a DB-backed throttle was not worth adding for the pilot. `reset-link` is the CLI's copy-link
+for an advisor's own reset until C1.4 sends email. Frontend: `/invite/:token` (who invited whom → set password →
+`adopt(state)` → `/mfa/enroll`), `/forgot` (always "if an account exists…", with the copy-link hint), `/reset/:token`,
+"Forgot your password?" on `/login`; `ClientAccess` (state pill Not invited / Invited / Portal access / Deactivated,
+Invite / Resend invite, Reset link, Deactivate with confirm, Reactivate; `LinkModal` shows a one-time link with Copy) on
+the client page header; the home list shows the access pill and sinks deactivated clients; `NewClientDialog` no longer
+takes a password — it creates the client and immediately shows the invitation link; `SecurityCard` gains Change
+password. Tests: `accounts.test.ts` (15), `admin-cli.test.ts` (6, spawns `node tsx src/admin.ts` against
+`docflow_test`), 9 matrix rows; `PASSWORD_BCRYPT_COST=4` and `RATE_LIMIT_LOOKUP_IP=100000` in the test setup.
 
 C1.2 notes: migration `0004_mfa` (additive: enum `session_stage`, tables `mfa_totp` + `recovery_codes`,
 `sessions.stage` default `preauth`; both tables join `scripts/count.mjs` TABLES). `server/src/auth/crypto.ts` =

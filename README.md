@@ -42,6 +42,22 @@ npm run dev                   # API on http://localhost:4000
 > `npm run totp -- <secret>` from `server/`. A brand-new account is walked through enrollment
 > (QR code + recovery codes) on its first sign-in.
 
+> **Accounts.** Advisors are created on the server console, clients by invitation link:
+>
+> ```bash
+> cd server
+> npm run admin -- create-advisor --email ann@firm.com --name "Ann Advisor" --firm "Firm CPA"
+> npm run admin -- reset-mfa --kind client --email jane@example.com   # lost authenticator
+> npm run admin -- reset-link --kind provider --email ann@firm.com    # one-hour password reset link
+> npm run admin -- deactivate|reactivate --kind client --email jane@example.com
+> npm run admin -- list-users | list-sessions --kind … --email …
+> ```
+>
+> "New client" in the app creates the record and shows a one-time invitation link (7 days); the
+> client sets their own password from it. Passwords are at least 12 characters; the demo
+> passwords are refused in production. Email delivery of invitations and resets arrives with C1.4 —
+> until then every link is shown to the advisor to copy.
+
 ### 3. Frontend
 
 In a second terminal, from the repo root:

@@ -26,8 +26,11 @@ if (!/\/docflow_test(\?|$)/.test(testUrl)) {
 process.env.DATABASE_URL = testUrl;
 process.env.NODE_ENV = 'test';
 process.env.APP_BASE_URL = 'http://localhost:8080';
-// The matrix alone makes ~1 000 requests from one IP; the limiter itself is unit-tested in security.test.ts.
+// The matrix alone makes ~1 000 requests from one IP; the limiters themselves are unit-tested in security.test.ts.
 process.env.RATE_LIMIT_GLOBAL = '100000';
+process.env.RATE_LIMIT_LOOKUP_IP = '100000';
+// Fixtures hash passwords at cost 4; the same cost here keeps logins fast and stops the re-hash-on-login from firing.
+process.env.PASSWORD_BCRYPT_COST = '4';
 process.env.UPLOADS_DIR = path.join(here, '.uploads-tmp');
 delete process.env.ALLOW_PROVIDER_SIGNUP;
 

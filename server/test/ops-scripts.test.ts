@@ -34,6 +34,8 @@ describe('ops scripts', () => {
       sessions: 0,
       mfa_totp: 5,
       recovery_codes: 0,
+      invitations: 0,
+      password_resets: 0,
     });
     expect(c.documentsWithFile).toBe(6);
     expect(c.migrations).toBeGreaterThanOrEqual(3);

@@ -3,9 +3,11 @@ import type {
   AuthState,
   Client,
   Document,
+  InvitationInfo,
   Message,
   MfaEnrollment,
   MfaStatus,
+  OneTimeLink,
   Preset,
   RequestFrequency,
   SessionStage,
@@ -17,6 +19,7 @@ const BASE = '/api';
 const DATE_FIELDS = new Set([
   'createdAt', 'updatedAt', 'uploadedAt', 'requestedAt', 'dueDate',
   'updateRequestedAt', 'lastActivity', 'readAt', 'lastSeenAt', 'expiresAt', 'enrolledAt',
+  'deactivatedAt', 'invitePendingUntil', 'passwordChangedAt',
 ]);
 
 function reviveDates<T>(obj: unknown): T {
@@ -112,6 +115,24 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+    /** Change the password while signed in; every other session ends. */
+    changePassword: (input: { currentPassword: string; newPassword: string }) =>
+      request<{ ok: true; revoked: number }>('/auth/password', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    /** Always accepted: the answer never says whether the account exists. */
+    requestPasswordReset: (email: string, kind: 'provider' | 'client') =>
+      request<{ ok: true }>('/auth/password-reset/request', {
+        method: 'POST',
+        body: JSON.stringify({ email, kind }),
+      }),
+    /** Sets the password from a reset link; every session of the account ends. */
+    confirmPasswordReset: (token: string, password: string) =>
+      request<{ ok: true }>('/auth/password-reset/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ token, password }),
+      }),
 
     mfa: {
       status: () => request<MfaStatus>('/auth/mfa/status'),
@@ -150,6 +171,22 @@ export const api = {
       request<Client>(`/clients/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
+      }),
+    /** A fresh invitation link (replaces any unused one). */
+    invite: (id: string) => request<OneTimeLink>(`/clients/${id}/invitations`, { method: 'POST' }),
+    /** A copy-link password reset for a client who already has a password. */
+    resetLink: (id: string) => request<OneTimeLink>(`/clients/${id}/password-reset`, { method: 'POST' }),
+    deactivate: (id: string) => request<Client>(`/clients/${id}/deactivate`, { method: 'POST' }),
+    reactivate: (id: string) => request<Client>(`/clients/${id}/reactivate`, { method: 'POST' }),
+  },
+
+  invitations: {
+    get: (token: string) => request<InvitationInfo>(`/invitations/${encodeURIComponent(token)}`),
+    /** Sets the first password; the answer is a session that still owes its MFA step. */
+    accept: (token: string, password: string) =>
+      request<AuthState>(`/invitations/${encodeURIComponent(token)}/accept`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
       }),
   },
 

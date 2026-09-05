@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { getErrorMessage } from '@/utils/errors';
 import { stagePath } from '@/utils/stage';
@@ -137,6 +137,10 @@ const Login = () => {
                 </>
               )}
             </button>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Link className="df-link" to="/forgot" style={{ fontSize: 11.5 }}>Forgot your password?</Link>
+            </div>
 
             {DEV && (
               <div className="df-muted" style={{ fontSize: 11, marginTop: 4 }}>

@@ -11,6 +11,7 @@ import { I } from './icons';
 import ActivityFeed from './ActivityFeed';
 import MessagesPanel from './MessagesPanel';
 import RequestDocumentDialog from './RequestDocumentDialog';
+import ClientAccess from './ClientAccess';
 
 type Tab = 'uploads' | 'requested' | 'deliverables';
 
@@ -304,6 +305,7 @@ const PageHead: React.FC<{
       </div>
     </div>
     <div className="df-head-actions">
+      <ClientAccess client={client} />
       <button className="df-btn df-ghost" onClick={onExport}><I.Download size={13} /> Export</button>
       <button className="df-btn" onClick={onMessage}><I.Msg size={13} /> Message</button>
       <button className="df-btn df-primary" onClick={onUpload} disabled={uploading}><I.Upload size={13} /> Upload files</button>

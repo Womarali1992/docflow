@@ -33,6 +33,9 @@ export const providers = pgTable('providers', {
   passwordHash: text('password_hash').notNull(),
   firmName: text('firm_name'),
   role: text('role').notNull().default('advisor'),
+  /* Set by the admin CLI; a deactivated account cannot sign in and its sessions are revoked. */
+  deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
+  passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -55,6 +58,9 @@ export const clients = pgTable(
     clientSince: text('client_since'),
     aum: numeric('aum', { precision: 14, scale: 2 }),
     lastActivity: timestamp('last_activity', { withTimezone: true }).defaultNow(),
+    /* Set by the advisor (or the admin CLI); reversible. Sessions are revoked, sign-in refused. */
+    deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
+    passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -249,6 +255,45 @@ export const recoveryCodes = pgTable(
 );
 
 /* =========================================================
+   Invitations: a client's first (or replacement) sign-in link. The raw token
+   travels in the link only; the row keeps its sha256. Single use, 7 days.
+   ========================================================= */
+export const invitations = pgTable(
+  'invitations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    clientId: uuid('client_id')
+      .notNull()
+      .references(() => clients.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdById: uuid('created_by_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    clientIdx: index('invitations_client_idx').on(t.clientId),
+  })
+);
+
+/* Password resets: single use, 1 hour; completing one revokes every session. */
+export const passwordResets = pgTable(
+  'password_resets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userKind: actorKindEnum('user_kind').notNull(),
+    userId: uuid('user_id').notNull(),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userIdx: index('password_resets_user_idx').on(t.userKind, t.userId),
+  })
+);
+
+/* =========================================================
    Relations
    ========================================================= */
 export const providersRelations = relations(providers, ({ many }) => ({
@@ -290,5 +335,7 @@ export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type MfaTotp = typeof mfaTotp.$inferSelect;
 export type RecoveryCode = typeof recoveryCodes.$inferSelect;
+export type Invitation = typeof invitations.$inferSelect;
+export type PasswordReset = typeof passwordResets.$inferSelect;
 export type SessionStage = (typeof sessionStageEnum.enumValues)[number];
 export type NewPreset = typeof presets.$inferInsert;

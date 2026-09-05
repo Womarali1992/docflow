@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
 import mfaRoutes from './routes/mfa.js';
+import invitationRoutes from './routes/invitations.js';
 import clientRoutes from './routes/clients.js';
 import documentRoutes from './routes/documents.js';
 import messageRoutes from './routes/messages.js';
@@ -49,6 +50,8 @@ app.get('/api/health', (_req, res) => {
 // The second factor is mounted first: its routes are the only ones a pre-auth session may reach.
 app.use('/api/auth/mfa', mfaRoutes);
 app.use('/api/auth', authRoutes);
+// Public by design: the invitation link is the credential (single use, 7 days, throttled per IP).
+app.use('/api/invitations', invitationRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/messages', messageRoutes);

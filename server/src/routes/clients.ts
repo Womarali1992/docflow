@@ -1,10 +1,12 @@
-import { Router } from 'express';
-import bcrypt from 'bcryptjs';
+import { Router, type Request, type Response } from 'express';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
 import { revokeAllSessions } from '../auth/sessions.js';
+import { createInvitation, dropUnusedInvitations, invitationLink } from '../auth/invitations.js';
+import { hashPassword, passwordSchema } from '../auth/passwords.js';
+import { createPasswordReset, resetLink } from '../auth/resets.js';
 import { NAME_MAX } from '../security/limits.js';
 
 const router = Router();
@@ -15,6 +17,8 @@ router.use(authenticate);
  * Column set for a client row including the three counters that used to be
  * stored columns — now computed on read via correlated subqueries so they can
  * never drift out of sync. `viewerKind` decides which side "unread" counts from.
+ * Access state (`hasPassword`, `invitePendingUntil`, `deactivatedAt`) lets the
+ * UI show Invite / Resend / Deactivated without ever seeing a hash or a token.
  */
 function clientColumns(viewerKind: 'provider' | 'client') {
   return {
@@ -28,6 +32,8 @@ function clientColumns(viewerKind: 'provider' | 'client') {
     // Cast numeric → float8 so the API returns a JS number (not a string).
     aum: sql<number | null>`${schema.clients.aum}::float8`.as('aum'),
     lastActivity: schema.clients.lastActivity,
+    deactivatedAt: schema.clients.deactivatedAt,
+    hasPassword: sql<boolean>`(${schema.clients.passwordHash} IS NOT NULL)`.as('has_password'),
     createdAt: schema.clients.createdAt,
     updatedAt: schema.clients.updatedAt,
     // NOTE: the correlation must be fully qualified as "clients"."id" — a bare
@@ -45,8 +51,26 @@ function clientColumns(viewerKind: 'provider' | 'client') {
       SELECT COUNT(*)::int FROM ${schema.messages} m
       WHERE m.client_id = ${schema.clients}."id" AND m.read_at IS NULL AND m.sender_kind::text <> ${viewerKind}
     )`.as('unread_messages'),
+    invitePendingUntil: sql<Date | null>`(
+      SELECT MAX(i.expires_at) FROM ${schema.invitations} i
+      WHERE i.client_id = ${schema.clients}."id" AND i.used_at IS NULL AND i.expires_at > now()
+    )`.as('invite_pending_until'),
   };
 }
+
+async function loadClientRow(id: string, viewerKind: 'provider' | 'client') {
+  const [client] = await db.select(clientColumns(viewerKind)).from(schema.clients).where(eq(schema.clients.id, id));
+  return client ?? null;
+}
+
+/** The advisor's own client, or null (the caller answers 404 — out-of-scope ids look missing). */
+async function ownClient(req: Request, id: string) {
+  const [existing] = await db.select().from(schema.clients).where(eq(schema.clients.id, id));
+  if (!existing || existing.providerId !== req.auth!.providerId) return null;
+  return existing;
+}
+
+const notFound = (res: Response) => res.status(404).json({ error: 'Not found' });
 
 router.get('/', requireProvider, async (req, res) => {
   const list = await db
@@ -58,20 +82,13 @@ router.get('/', requireProvider, async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const auth = req.auth!;
-  const [client] = await db
-    .select(clientColumns(auth.kind))
-    .from(schema.clients)
-    .where(eq(schema.clients.id, req.params.id));
-  if (!client) return res.status(404).json({ error: 'Not found' });
+  const client = await loadClientRow(req.params.id, auth.kind);
+  if (!client) return notFound(res);
 
   // Provider can only see their own clients; client can only see themselves.
   // Out-of-scope ids are indistinguishable from missing ones.
-  if (auth.kind === 'provider' && client.providerId !== auth.providerId) {
-    return res.status(404).json({ error: 'Not found' });
-  }
-  if (auth.kind === 'client' && client.id !== auth.sub) {
-    return res.status(404).json({ error: 'Not found' });
-  }
+  if (auth.kind === 'provider' && client.providerId !== auth.providerId) return notFound(res);
+  if (auth.kind === 'client' && client.id !== auth.sub) return notFound(res);
   res.json(client);
 });
 
@@ -81,7 +98,7 @@ const createClientSchema = z.object({
   accountId: z.string().optional(),
   plan: z.string().optional(),
   aum: z.number().nonnegative().nullable().optional(),
-  password: z.string().min(6).optional(),
+  password: passwordSchema.optional(),
 });
 
 router.post('/', requireProvider, async (req, res) => {
@@ -89,7 +106,7 @@ router.post('/', requireProvider, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   const { name, email, accountId, plan, aum, password } = parsed.data;
 
-  const passwordHash = password ? await bcrypt.hash(password, 10) : null;
+  const passwordHash = password ? await hashPassword(password) : null;
   const [created] = await db
     .insert(schema.clients)
     .values({
@@ -97,17 +114,14 @@ router.post('/', requireProvider, async (req, res) => {
       name,
       email,
       passwordHash,
+      passwordChangedAt: passwordHash ? new Date() : null,
       accountId: accountId || `CL-${Date.now().toString().slice(-5)}`,
       plan: plan || 'Core',
       aum: aum === null || aum === undefined ? null : String(aum),
     })
     .returning({ id: schema.clients.id });
 
-  const [client] = await db
-    .select(clientColumns('provider'))
-    .from(schema.clients)
-    .where(eq(schema.clients.id, created.id));
-  res.status(201).json(client);
+  res.status(201).json(await loadClientRow(created.id, 'provider'));
 });
 
 const updateClientSchema = z.object({
@@ -115,35 +129,82 @@ const updateClientSchema = z.object({
   email: z.string().email().optional(),
   plan: z.string().optional(),
   aum: z.number().nonnegative().nullable().optional(),
-  password: z.string().min(6).optional(),
+  password: passwordSchema.optional(),
 });
 
 router.patch('/:id', requireProvider, async (req, res) => {
   const parsed = updateClientSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
 
-  const [existing] = await db.select().from(schema.clients).where(eq(schema.clients.id, req.params.id));
-  if (!existing || existing.providerId !== req.auth!.providerId) {
-    return res.status(404).json({ error: 'Not found' });
-  }
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
 
   const { name, email, plan, aum, password } = parsed.data;
-  const updates: Record<string, unknown> = { updatedAt: new Date() };
+  const now = new Date();
+  const updates: Partial<typeof schema.clients.$inferInsert> = { updatedAt: now };
   if (name !== undefined) updates.name = name;
   if (email !== undefined) updates.email = email;
   if (plan !== undefined) updates.plan = plan;
   if (aum !== undefined) updates.aum = aum === null ? null : String(aum);
-  if (password !== undefined) updates.passwordHash = await bcrypt.hash(password, 10);
+  if (password !== undefined) {
+    updates.passwordHash = await hashPassword(password);
+    updates.passwordChangedAt = now;
+  }
 
   await db.update(schema.clients).set(updates).where(eq(schema.clients.id, req.params.id));
   // A new password ends every session the client had (plan: revocation paths).
   if (password !== undefined) await revokeAllSessions('client', req.params.id);
 
-  const [client] = await db
-    .select(clientColumns('provider'))
-    .from(schema.clients)
-    .where(eq(schema.clients.id, req.params.id));
-  res.json(client);
+  res.json(await loadClientRow(req.params.id, 'provider'));
+});
+
+const DEACTIVATED = { error: 'This client is deactivated. Reactivate them first.', code: 'deactivated' };
+
+/* A fresh invitation link (replaces any unused one). Email goes out from C1.4; the link is always returned. */
+router.post('/:id/invitations', requireProvider, async (req, res) => {
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
+  if (existing.deactivatedAt) return res.status(409).json(DEACTIVATED);
+
+  const { token, expiresAt } = await createInvitation(existing.id, req.auth!.sub);
+  res.status(201).json({ link: invitationLink(token), expiresAt, emailQueued: false });
+});
+
+/* A copy-link password reset for a client who already has a password (otherwise: invite them). */
+router.post('/:id/password-reset', requireProvider, async (req, res) => {
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
+  if (existing.deactivatedAt) return res.status(409).json(DEACTIVATED);
+  if (!existing.passwordHash) {
+    return res.status(409).json({ error: 'This client has not accepted an invitation yet. Send an invitation instead.', code: 'not_invited' });
+  }
+
+  const { token, expiresAt } = await createPasswordReset('client', existing.id);
+  res.json({ link: resetLink(token), expiresAt, emailQueued: false });
+});
+
+/* Reversible: sign-in refused, every session ended, pending invitations dropped. Data untouched. */
+router.post('/:id/deactivate', requireProvider, async (req, res) => {
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
+
+  if (!existing.deactivatedAt) {
+    const now = new Date();
+    await db.update(schema.clients).set({ deactivatedAt: now, updatedAt: now }).where(eq(schema.clients.id, existing.id));
+  }
+  await revokeAllSessions('client', existing.id);
+  await dropUnusedInvitations(existing.id);
+  res.json(await loadClientRow(existing.id, 'provider'));
+});
+
+router.post('/:id/reactivate', requireProvider, async (req, res) => {
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
+
+  if (existing.deactivatedAt) {
+    await db.update(schema.clients).set({ deactivatedAt: null, updatedAt: new Date() }).where(eq(schema.clients.id, existing.id));
+  }
+  res.json(await loadClientRow(existing.id, 'provider'));
 });
 
 export default router;

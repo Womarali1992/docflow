@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Response, Test } from 'supertest';
 import {
   ACTORS,
+  PASSWORD,
   PDF_BYTES,
   app,
   binaryParser,
@@ -97,6 +98,33 @@ const cases: Case[] = [
     expect: S(401, 401, 401, 401, 401, 401),
   },
   {
+    name: 'POST /api/auth/password',
+    req: () => request(app).post('/api/auth/password').send({ currentPassword: PASSWORD, newPassword: 'a-fresh-password-2026' }),
+    expect: S(200, 200, 200, 200, 200, 401),
+    // The matrix actor holds exactly one session, so nothing else is there to revoke.
+    check: (res) => expect(res.body.revoked).toBe(0),
+  },
+  {
+    name: 'POST /api/auth/password-reset/request (always 202)',
+    req: (fx) => request(app).post('/api/auth/password-reset/request').send({ email: fx.client1a.email, kind: 'client' }),
+    expect: S(202, 202, 202, 202, 202, 202),
+  },
+  {
+    name: 'POST /api/auth/password-reset/confirm (bogus token)',
+    req: () => request(app).post('/api/auth/password-reset/confirm').send({ token: 'x'.repeat(43), password: 'a-fresh-password-2026' }),
+    expect: S(400, 400, 400, 400, 400, 400),
+  },
+  {
+    name: 'GET /api/invitations/:token (bogus token, public)',
+    req: () => request(app).get(`/api/invitations/${'x'.repeat(43)}`),
+    expect: S(404, 404, 404, 404, 404, 404),
+  },
+  {
+    name: 'POST /api/invitations/:token/accept (bogus token, public)',
+    req: () => request(app).post(`/api/invitations/${'x'.repeat(43)}/accept`).send({ password: 'a-fresh-password-2026' }),
+    expect: S(404, 404, 404, 404, 404, 404),
+  },
+  {
     name: 'POST /api/auth/logout-all',
     req: () => request(app).post('/api/auth/logout-all'),
     expect: S(200, 200, 200, 200, 200, 401),
@@ -143,6 +171,36 @@ const cases: Case[] = [
     req: (fx) => request(app).get(`/api/clients/${fx.client1a.id}`),
     expect: S(200, 404, 200, 404, 404, 401),
     check: (res) => expect(res.body).not.toHaveProperty('passwordHash'),
+  },
+  {
+    name: 'POST /api/clients/:id/invitations (own client)',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/invitations`),
+    expect: S(201, 404, 403, 403, 403, 401),
+    check: (res) => {
+      expect(res.body.link).toMatch(/\/invite\/[A-Za-z0-9_-]{43}$/);
+      expect(res.body.emailQueued).toBe(false);
+    },
+  },
+  {
+    name: 'POST /api/clients/:id/password-reset (own client)',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/password-reset`),
+    expect: S(200, 404, 403, 403, 403, 401),
+    check: (res) => expect(res.body.link).toMatch(/\/reset\/[A-Za-z0-9_-]{43}$/),
+  },
+  {
+    name: 'POST /api/clients/:id/deactivate (own client)',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/deactivate`),
+    expect: S(200, 404, 403, 403, 403, 401),
+    check: (res) => {
+      expect(res.body.deactivatedAt).not.toBeNull();
+      expect(res.body).not.toHaveProperty('passwordHash');
+    },
+  },
+  {
+    name: 'POST /api/clients/:id/reactivate (own client)',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/reactivate`),
+    expect: S(200, 404, 403, 403, 403, 401),
+    check: (res) => expect(res.body.deactivatedAt).toBeNull(),
   },
   {
     name: 'POST /api/clients',

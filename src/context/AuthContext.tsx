@@ -16,6 +16,8 @@ interface AuthContextValue {
   stage: SessionStage | null;
   loading: boolean;
   login: (email: string, password: string, kind: 'provider' | 'client') => Promise<AuthState>;
+  /** Takes over a session opened elsewhere (accepting an invitation). */
+  adopt: (state: AuthState) => void;
   /** Called by the MFA screens once the server has moved the session to `active`. */
   activate: () => void;
   logout: () => Promise<void>;
@@ -81,6 +83,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return state;
   };
 
+  const adopt = useCallback((state: AuthState) => {
+    setMe(state.me);
+    setStage(state.stage);
+  }, []);
+
   const activate = useCallback(() => setStage('active'), []);
 
   const logout = async () => {
@@ -97,7 +104,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ me, stage, loading, login, activate, logout, logoutAll, refresh }}>
+    <AuthContext.Provider value={{ me, stage, loading, login, adopt, activate, logout, logoutAll, refresh }}>
       {children}
     </AuthContext.Provider>
   );

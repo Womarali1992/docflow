@@ -1,23 +1,22 @@
-import { Router, type Request, type Response } from 'express';
-import bcrypt from 'bcryptjs';
+import { Router } from 'express';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
-import type { SessionStage } from '../db/schema.js';
 import { authenticate, authenticateAnyStage } from '../middleware/auth.js';
 import {
   clearSessionCookie,
-  createSession,
   findSessionByToken,
   listLiveSessions,
   readSessionToken,
   revokeAllSessions,
   revokeSession,
-  setSessionCookie,
   toSessionDto,
 } from '../auth/sessions.js';
-import { getMfa, isEnrolled } from '../auth/mfa.js';
-import { NAME_MAX, loginEmailLimiter, loginIpLimiter } from '../security/limits.js';
+import { hashPassword, isRefusedDemoPassword, passwordSchema, verifyPassword } from '../auth/passwords.js';
+import { completePasswordReset, createPasswordReset, findPasswordReset, setPassword } from '../auth/resets.js';
+import { clientMe, openSession, providerMe, type AuthState, type Me } from '../auth/signin.js';
+import { looksLikeToken, tokenState } from '../auth/tokens.js';
+import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
 
 const router = Router();
 
@@ -27,47 +26,15 @@ const loginSchema = z.object({
   kind: z.enum(['provider', 'client']),
 });
 
-type Me =
-  | { kind: 'provider'; id: string; name: string; email: string; firmName: string | null }
-  | { kind: 'client'; id: string; name: string; email: string; providerId: string; providerName: string | null };
-
-/** Every auth answer says where the session stands (invariant 9): the UI routes on `stage`, not on `me`. */
-interface AuthState {
-  stage: SessionStage;
-  me: Me;
-}
+const INVALID = { error: 'Invalid credentials' };
+const DEACTIVATED = { error: 'This account has been deactivated. Contact your advisor.', code: 'deactivated' };
+const DEMO_REFUSED = { error: 'This demo password is not allowed here. Ask your administrator to set a real one.', code: 'demo_password' };
 
 /**
- * Opens a session after the password check. The stage is never `active` here:
- * an enrolled account owes a code (`preauth`), anyone else owes an enrollment
- * (`mfa_enroll`). /auth/mfa/* moves it forward.
+ * Password step. The order matters: the password is checked before any account
+ * state is revealed, so a deactivated or demo-password account only learns its
+ * status with the right password in hand.
  */
-async function startSession(req: Request, res: Response, userKind: 'provider' | 'client', userId: string): Promise<SessionStage> {
-  const stage: SessionStage = isEnrolled(await getMfa(userKind, userId)) ? 'preauth' : 'mfa_enroll';
-  const { token } = await createSession({
-    userKind,
-    userId,
-    stage,
-    ip: req.ip ?? null,
-    userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
-  });
-  setSessionCookie(res, token);
-  return stage;
-}
-
-async function providerMe(id: string): Promise<Me | null> {
-  const [p] = await db.select().from(schema.providers).where(eq(schema.providers.id, id));
-  if (!p) return null;
-  return { kind: 'provider', id: p.id, name: p.name, email: p.email, firmName: p.firmName };
-}
-
-async function clientMe(id: string): Promise<Me | null> {
-  const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, id));
-  if (!c) return null;
-  const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId));
-  return { kind: 'client', id: c.id, name: c.name, email: c.email, providerId: c.providerId, providerName: prov?.name ?? null };
-}
-
 router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -77,23 +44,33 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
 
   if (kind === 'provider') {
     const [provider] = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
-    if (!provider) return res.status(401).json({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(password, provider.passwordHash);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!provider) return res.status(401).json(INVALID);
+    const check = await verifyPassword(password, provider.passwordHash);
+    if (!check.ok) return res.status(401).json(INVALID);
+    if (isRefusedDemoPassword(password)) return res.status(401).json(DEMO_REFUSED);
+    if (provider.deactivatedAt) return res.status(401).json(DEACTIVATED);
+    if (check.needsRehash) {
+      await db.update(schema.providers).set({ passwordHash: await hashPassword(password) }).where(eq(schema.providers.id, provider.id));
+    }
 
-    const stage = await startSession(req, res, 'provider', provider.id);
+    const stage = await openSession(req, res, 'provider', provider.id);
     const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
     const state: AuthState = { stage, me };
     return res.json(state);
   } else {
     const [client] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
-    if (!client || !client.passwordHash) return res.status(401).json({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(password, client.passwordHash);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!client) return res.status(401).json(INVALID);
+    const check = await verifyPassword(password, client.passwordHash);
+    if (!check.ok) return res.status(401).json(INVALID);
+    if (isRefusedDemoPassword(password)) return res.status(401).json(DEMO_REFUSED);
+    if (client.deactivatedAt) return res.status(401).json(DEACTIVATED);
+    if (check.needsRehash) {
+      await db.update(schema.clients).set({ passwordHash: await hashPassword(password) }).where(eq(schema.clients.id, client.id));
+    }
 
     const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, client.providerId));
 
-    const stage = await startSession(req, res, 'client', client.id);
+    const stage = await openSession(req, res, 'client', client.id);
     const me: Me = {
       kind: 'client',
       id: client.id,
@@ -110,12 +87,13 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
 const signupSchema = z.object({
   name: z.string().min(1).max(NAME_MAX),
   email: z.string().email().max(NAME_MAX),
-  password: z.string().min(6).max(1024),
+  password: passwordSchema,
   firmName: z.string().max(NAME_MAX).optional(),
 });
 
 /* Self-service advisor signup is off unless explicitly enabled; the pilot
-   provisions advisors locally. Read at request time so tests can toggle it. */
+   provisions advisors with `npm run admin -- create-advisor`. Read at request
+   time so tests can toggle it. */
 router.post('/signup-provider', async (req, res) => {
   if (process.env.ALLOW_PROVIDER_SIGNUP !== 'true') {
     return res.status(403).json({ error: 'Advisor signup is disabled. Ask your administrator to create the account.' });
@@ -129,13 +107,13 @@ router.post('/signup-provider', async (req, res) => {
   const existing = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
   if (existing.length > 0) return res.status(409).json({ error: 'Email already registered' });
 
-  const passwordHash = await bcrypt.hash(password, 10);
+  const passwordHash = await hashPassword(password);
   const [provider] = await db
     .insert(schema.providers)
-    .values({ name, email, passwordHash, firmName, role: 'advisor' })
+    .values({ name, email, passwordHash, firmName, role: 'advisor', passwordChangedAt: new Date() })
     .returning();
 
-  const stage = await startSession(req, res, 'provider', provider.id);
+  const stage = await openSession(req, res, 'provider', provider.id);
   const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
   const state: AuthState = { stage, me };
   res.status(201).json(state);
@@ -176,6 +154,84 @@ router.get('/me', authenticateAnyStage, async (req, res) => {
   if (!me) return res.status(404).json({ error: 'Not found' });
   const state: AuthState = { stage: req.session!.stage, me };
   res.json(state);
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(1024),
+  newPassword: passwordSchema,
+});
+
+/* Change the password while signed in. Every other session ends; this one stays.
+   A wrong current password is 400, not 401 — the session itself is fine. */
+router.post('/password', authenticate, async (req, res) => {
+  const parsed = changePasswordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
+  const auth = req.auth!;
+  const { currentPassword, newPassword } = parsed.data;
+
+  const hash =
+    auth.kind === 'provider'
+      ? (await db.select({ h: schema.providers.passwordHash }).from(schema.providers).where(eq(schema.providers.id, auth.sub)))[0]?.h ?? null
+      : (await db.select({ h: schema.clients.passwordHash }).from(schema.clients).where(eq(schema.clients.id, auth.sub)))[0]?.h ?? null;
+  const check = await verifyPassword(currentPassword, hash);
+  if (!check.ok) return res.status(400).json({ error: 'The current password is not right.', code: 'wrong_password' });
+  if (isRefusedDemoPassword(newPassword)) return res.status(400).json(DEMO_REFUSED);
+
+  await setPassword(auth.kind, auth.sub, newPassword);
+  const revoked = await revokeAllSessions(auth.kind, auth.sub, { exceptId: req.session!.id });
+  res.json({ ok: true, revoked });
+});
+
+const resetRequestSchema = z.object({
+  email: z.string().email().max(NAME_MAX),
+  kind: z.enum(['provider', 'client']),
+});
+
+/* Always 202: the answer never says whether the account exists. A reset row is
+   created for a live account; the email goes out once C1.4 adds the mailer, and
+   until then the advisor (or the admin CLI) hands over a copy-link. */
+router.post('/password-reset/request', lookupLimiter, async (req, res) => {
+  const parsed = resetRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
+  const { email, kind } = parsed.data;
+
+  if (kind === 'provider') {
+    const [p] = await db.select({ id: schema.providers.id, deactivatedAt: schema.providers.deactivatedAt }).from(schema.providers).where(eq(schema.providers.email, email));
+    if (p && !p.deactivatedAt) await createPasswordReset('provider', p.id);
+  } else {
+    const [c] = await db
+      .select({ id: schema.clients.id, deactivatedAt: schema.clients.deactivatedAt, passwordHash: schema.clients.passwordHash })
+      .from(schema.clients)
+      .where(eq(schema.clients.email, email));
+    if (c && !c.deactivatedAt && c.passwordHash) await createPasswordReset('client', c.id);
+  }
+  res.status(202).json({ ok: true });
+});
+
+const resetConfirmSchema = z.object({
+  token: z.string().min(1).max(128),
+  password: passwordSchema,
+});
+
+const RESET_STATE_ERRORS = {
+  missing: { error: 'This reset link is not valid.', code: 'invalid_token' },
+  used: { error: 'This reset link was already used. Ask for a new one.', code: 'used' },
+  expired: { error: 'This reset link has expired. Ask for a new one.', code: 'expired' },
+} as const;
+
+/* Completing a reset sets the password and ends every session; the user signs in again (with MFA). */
+router.post('/password-reset/confirm', lookupLimiter, async (req, res) => {
+  const parsed = resetConfirmSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
+  const { token, password } = parsed.data;
+
+  const reset = looksLikeToken(token) ? await findPasswordReset(token) : null;
+  const state = tokenState(reset);
+  if (state !== 'ok' || !reset) return res.status(400).json(RESET_STATE_ERRORS[state === 'ok' ? 'missing' : state]);
+  if (isRefusedDemoPassword(password)) return res.status(400).json(DEMO_REFUSED);
+
+  await completePasswordReset(reset, password);
+  res.json({ ok: true });
 });
 
 export default router;

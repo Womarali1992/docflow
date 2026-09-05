@@ -9,6 +9,9 @@ import { MfaGate, RouteGuard } from "@/components/RouteGuard";
 import Index from "./pages/Index";
 import Mfa from "./pages/Mfa";
 import MfaEnroll from "./pages/MfaEnroll";
+import Invite from "./pages/Invite";
+import Forgot from "./pages/Forgot";
+import Reset from "./pages/Reset";
 import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 import FinancialOverview from "./pages/FinancialOverview";
@@ -30,6 +33,9 @@ const App = () => (
           <Route path="/login" element={<Login />} />
           <Route path="/mfa" element={<MfaGate stage="preauth"><Mfa /></MfaGate>} />
           <Route path="/mfa/enroll" element={<MfaGate stage="mfa_enroll"><MfaEnroll /></MfaGate>} />
+          <Route path="/invite/:token" element={<Invite />} />
+          <Route path="/forgot" element={<Forgot />} />
+          <Route path="/reset/:token" element={<Reset />} />
 
           <Route element={<RouteGuard kind="provider"><DocFlowLayout /></RouteGuard>}>
             <Route path="/" element={<Index />} />

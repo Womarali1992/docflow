@@ -6,6 +6,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { CodeInput, ErrorPill, RecoveryCodeList } from './AuthShell';
+import { NewPasswordFields } from './PasswordFields';
+import { passwordsReady } from '@/utils/passwords';
 import { I } from './icons';
 
 const when = (d: Date) => d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -51,6 +53,13 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
 
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
+  const [changing, setChanging] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changeError, setChangeError] = useState<string | null>(null);
+  const [changeBusy, setChangeBusy] = useState(false);
+
   const load = useCallback(async () => {
     try {
       const [s, list] = await Promise.all([api.auth.mfa.status(), api.auth.sessions()]);
@@ -78,6 +87,34 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
       setRegenError(err instanceof ApiError && err.status === 429 ? 'Too many attempts. Wait 15 minutes and try again.' : getErrorMessage(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const resetChangeForm = () => {
+    setChanging(false);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setChangeError(null);
+  };
+
+  const changePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordsReady(newPassword, confirmPassword)) return;
+    setChangeError(null);
+    setChangeBusy(true);
+    try {
+      const { revoked } = await api.auth.changePassword({ currentPassword, newPassword });
+      toast({
+        title: 'Password changed',
+        description: revoked > 0 ? `${revoked} other session${revoked === 1 ? '' : 's'} ended. This one stays signed in.` : 'This session stays signed in.',
+      });
+      resetChangeForm();
+      await load();
+    } catch (err) {
+      setChangeError(getErrorMessage(err));
+    } finally {
+      setChangeBusy(false);
     }
   };
 
@@ -163,6 +200,43 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
               <I.Check size={12} /> I saved them
             </button>
           </div>
+        )}
+
+        {/* Password */}
+        <div className="df-row" style={{ gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+          <div>
+            <div className="df-name">Password</div>
+            <div className="df-meta">At least 12 characters · changing it signs out every other device</div>
+          </div>
+          {!changing && (
+            <button className="df-btn df-sm" onClick={() => setChanging(true)}>Change password</button>
+          )}
+        </div>
+
+        {changing && (
+          <form onSubmit={changePassword} style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span className="df-muted" style={{ fontSize: 11.5 }}>Current password</span>
+              <input
+                className="df-input"
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                disabled={changeBusy}
+                autoFocus
+                required
+              />
+            </label>
+            <NewPasswordFields password={newPassword} confirm={confirmPassword} onPassword={setNewPassword} onConfirm={setConfirmPassword} disabled={changeBusy} />
+            <ErrorPill message={changeError} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="submit" className="df-btn df-sm df-primary" disabled={changeBusy || !currentPassword || !passwordsReady(newPassword, confirmPassword)}>
+                {changeBusy ? 'Saving…' : 'Change password'}
+              </button>
+              <button type="button" className="df-btn df-sm df-ghost" disabled={changeBusy} onClick={resetChangeForm}>Cancel</button>
+            </div>
+          </form>
         )}
 
         {/* Sessions */}
