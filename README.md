@@ -74,6 +74,12 @@ Root (frontend):
 | `npm run db:generate`              | Generate a Drizzle migration from the schema                       |
 | `npm run db:migrate`               | Apply pending migrations                                           |
 | `npm run db:seed`                  | Seed / self-heal demo data                                         |
+| `npm run count`                    | Row counts + files on record + migrations, as JSON (`--url` to point elsewhere) |
+| `npm run integrity`                | Verify every stored file exists and matches the database / a backup manifest |
+| `npm run db:create -- --name docflow_restore` | Create a scratch database (`docflow_test` / `docflow_restore*` only) |
+
+Backup and restore live in `ops/windows/` (`backup.ps1`, `restore.ps1`); the procedure and the
+drill record are in [`docs/PILOT-RUNBOOK.md`](docs/PILOT-RUNBOOK.md).
 
 ## Tests
 

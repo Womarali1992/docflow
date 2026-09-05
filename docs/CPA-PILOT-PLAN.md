@@ -15,7 +15,7 @@
 |---|--------|--------|
 | C0.1 | `chore(pilot): merge finish-docflow-app; add docs/CPA-PILOT-PLAN.md; vitest+supertest harness on docflow_test; authz matrix for the current API` | SHIPPED 2026-09-05 |
 | C0.2 | `fix(authz): clients cannot review, replace or delete advisor material; cross-tenant ids are 404; storagePath never serialized; signup off by default` | SHIPPED 2026-09-05 |
-| C0.3 | `feat(ops): backup + restore scripts for the current schema (pg_dump, uploads copy, manifest) and a rehearsed restore` | NOT STARTED |
+| C0.3 | `feat(ops): backup + restore scripts for the current schema (pg_dump, uploads copy, manifest) and a rehearsed restore` | SHIPPED 2026-09-05 |
 | C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | NOT STARTED |
 | C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | NOT STARTED |
 | C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | NOT STARTED |
@@ -36,7 +36,14 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C0.3** (backup + restore scripts for the current schema, rehearsed on the dev box).
+**NEXT = C1.1** (opaque server sessions, origin check, helmet, limits). Phase 0 is complete.
+
+C0.3 notes: `ops/windows/{common,backup,restore}.ps1` (Windows PowerShell 5.1) plus
+`server/scripts/{lib,count,integrity,create-db}.mjs` (cwd-independent, `npm run count|integrity|db:create`).
+Backup and restore drill both ran for real on the dev box and are recorded in
+`docs/PILOT-RUNBOOK.md` (PASS; backup 1.8 s, restore 4.0 s). Manifest format v1 is what C2.1's
+`--backup-manifest` check expects. Gotcha found and fixed: PowerShell 5.1 `Set-Content -Encoding UTF8`
+writes a BOM that `JSON.parse` rejects — write manifests with `UTF8Encoding($false)`.
 
 C0.1 notes: 154 matrix tests; 41 of them were `it.fails` cases pinning defects 1, 2 and 6 plus
 the open signup route. The `docflow` role on the dev box lacks CREATEDB, so `docflow_test` was
