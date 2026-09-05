@@ -14,7 +14,7 @@
 | # | Commit | Status |
 |---|--------|--------|
 | C0.1 | `chore(pilot): merge finish-docflow-app; add docs/CPA-PILOT-PLAN.md; vitest+supertest harness on docflow_test; authz matrix for the current API` | SHIPPED 2026-09-05 |
-| C0.2 | `fix(authz): clients cannot review, replace or delete advisor material; cross-tenant ids are 404; storagePath never serialized; signup off by default` | NOT STARTED |
+| C0.2 | `fix(authz): clients cannot review, replace or delete advisor material; cross-tenant ids are 404; storagePath never serialized; signup off by default` | SHIPPED 2026-09-05 |
 | C0.3 | `feat(ops): backup + restore scripts for the current schema (pg_dump, uploads copy, manifest) and a rehearsed restore` | NOT STARTED |
 | C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | NOT STARTED |
 | C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | NOT STARTED |
@@ -36,12 +36,21 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C0.2** (authz hotfix — flip the `it.fails` cases in `server/test/authz.test.ts` to `it`).
+**NEXT = C0.3** (backup + restore scripts for the current schema, rehearsed on the dev box).
 
-C0.1 notes: 154 matrix tests; 41 of them are `it.fails` cases pinning defects 1, 2 and 6 plus
+C0.1 notes: 154 matrix tests; 41 of them were `it.fails` cases pinning defects 1, 2 and 6 plus
 the open signup route. The `docflow` role on the dev box lacks CREATEDB, so `docflow_test` was
 created with `PG_ADMIN_URL=postgres://postgres@localhost:5432/postgres` (the native install
 trusts the postgres superuser on loopback — a dev-box convenience the firm PC must not copy).
+Pushing C0.1 revealed `52f3ba3` on `origin/main` (2026-07-24, a frontend-only mock-data dashboard
+refactor on the pre-backend line); by the user's decision it was recorded with `git merge -s ours`
+(`e1a9771`) and contributes no content — the pilot continues on the API-wired line.
+
+C0.2 notes: every `it.fails` flipped; the matrix guards that none remain. Also landed: the
+upload route resolves and authorizes its target **before** the multipart body is parsed
+(bytes still buffer in memory once authorized — C2.3 replaces that with staging), and
+malformed document ids answer 404 instead of 500. Defects 1, 2, 4 and 6 from "Context" are
+closed; 3 is half-closed; 5 and 7 remain for C2.1 / C1.x.
 
 ## Context — what exists on 2026-09-05 (verified in code)
 

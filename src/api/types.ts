@@ -38,7 +38,8 @@ export interface Document {
   size?: string | null;
   folder?: string | null;
   url?: string | null;
-  storagePath?: string | null;
+  /** True when bytes are stored for this document; the storage path itself never leaves the server. */
+  hasFile: boolean;
   mimeType?: string | null;
   sizeBytes?: number | null;
   uploadedByKind?: ActorKind | null;

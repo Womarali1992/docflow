@@ -40,8 +40,9 @@ router.post('/', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const [preset] = await db.select().from(schema.presets).where(eq(schema.presets.id, req.params.id));
-  if (!preset) return res.status(404).json({ error: 'Not found' });
-  if (preset.providerId !== req.auth!.providerId) return res.status(403).json({ error: 'Forbidden' });
+  if (!preset || preset.providerId !== req.auth!.providerId) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   await db.delete(schema.presets).where(eq(schema.presets.id, req.params.id));
   res.json({ ok: true });
 });

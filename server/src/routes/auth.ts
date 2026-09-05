@@ -86,7 +86,12 @@ const signupSchema = z.object({
   firmName: z.string().optional(),
 });
 
+/* Self-service advisor signup is off unless explicitly enabled; the pilot
+   provisions advisors locally. Read at request time so tests can toggle it. */
 router.post('/signup-provider', async (req, res) => {
+  if (process.env.ALLOW_PROVIDER_SIGNUP !== 'true') {
+    return res.status(403).json({ error: 'Advisor signup is disabled. Ask your administrator to create the account.' });
+  }
   const parsed = signupSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });

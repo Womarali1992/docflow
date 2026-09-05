@@ -108,7 +108,7 @@ const DocumentPage = () => {
           </div>
         </div>
         <div className="df-head-actions">
-          {doc.storagePath && (
+          {doc.hasFile && (
             <a href={api.documents.downloadUrl(doc.id, { attachment: true })} className="df-btn df-ghost">
               <I.Download size={13} /> Download
             </a>
@@ -150,7 +150,7 @@ const DocumentPage = () => {
                   {(isRequested ? doc.requestedAt : doc.uploadedAt)?.toLocaleString() || '—'}
                   {isRequested
                     ? <> · by {providerName}</>
-                    : (doc.storagePath ? <> · by {uploadedByName}</> : null)}
+                    : (doc.hasFile ? <> · by {uploadedByName}</> : null)}
                 </dd>
 
                 {doc.requestFrequency && (

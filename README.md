@@ -93,4 +93,7 @@ Status ledger says which commit is next.
 ## Notes
 
 - Uploads accept PDF, images, and common Office/CSV types up to **25 MB**.
+- Advisor self-signup is disabled unless `ALLOW_PROVIDER_SIGNUP=true`; the seed creates the demo advisor.
+- Clients can upload to their own requests and re-upload their own files; only the advisor can
+  review, delete, or replace advisor deliverables. Ids outside your firm answer 404, never 403.
 - `drilldown/` is an unrelated standalone prototype and is not part of this app.

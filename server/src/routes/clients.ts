@@ -62,12 +62,13 @@ router.get('/:id', async (req, res) => {
     .where(eq(schema.clients.id, req.params.id));
   if (!client) return res.status(404).json({ error: 'Not found' });
 
-  // Provider can only see their own clients; client can only see themselves
+  // Provider can only see their own clients; client can only see themselves.
+  // Out-of-scope ids are indistinguishable from missing ones.
   if (auth.kind === 'provider' && client.providerId !== auth.providerId) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return res.status(404).json({ error: 'Not found' });
   }
   if (auth.kind === 'client' && client.id !== auth.sub) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return res.status(404).json({ error: 'Not found' });
   }
   res.json(client);
 });
@@ -120,8 +121,9 @@ router.patch('/:id', requireProvider, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
 
   const [existing] = await db.select().from(schema.clients).where(eq(schema.clients.id, req.params.id));
-  if (!existing) return res.status(404).json({ error: 'Not found' });
-  if (existing.providerId !== req.auth!.providerId) return res.status(403).json({ error: 'Forbidden' });
+  if (!existing || existing.providerId !== req.auth!.providerId) {
+    return res.status(404).json({ error: 'Not found' });
+  }
 
   const { name, email, plan, aum, password } = parsed.data;
   const updates: Record<string, unknown> = { updatedAt: new Date() };

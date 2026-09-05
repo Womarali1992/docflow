@@ -1,9 +1,9 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'node:fs';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, type AuthPayload } from '../middleware/auth.js';
 import { uploadSingle } from '../middleware/upload.js';
 import {
   absPathFor,
@@ -17,6 +17,43 @@ import { recordActivity } from '../db/activity-log.js';
 const router = Router();
 router.use(authenticate);
 
+type DocumentRow = typeof schema.documents.$inferSelect;
+
+/**
+ * Public shape of a document. Storage details never leave the server; the
+ * frontend only needs to know whether bytes exist.
+ */
+export function serializeDocument(doc: DocumentRow) {
+  const { storagePath, ...rest } = doc;
+  return { ...rest, hasFile: !!storagePath };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Load a document the caller is allowed to see. Returns null when it does not
+ * exist OR belongs to another tenant; callers answer 404 either way, so an id
+ * never confirms existence across tenants.
+ */
+async function findScopedDocument(auth: AuthPayload, id: string): Promise<DocumentRow | null> {
+  if (!UUID_RE.test(id)) return null;
+  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, id));
+  if (!doc) return null;
+  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return null;
+  if (auth.kind === 'client' && doc.clientId !== auth.sub) return null;
+  return doc;
+}
+
+const notFound = (res: Response) => res.status(404).json({ error: 'Not found' });
+const advisorOnly = (res: Response) =>
+  res.status(403).json({ error: 'Only your advisor can do that.' });
+
+/** A client may attach bytes to their own open requests and re-upload their own files — never to advisor material. */
+function clientMayReplaceFile(doc: DocumentRow): boolean {
+  if (doc.folder === 'Reports') return false;
+  return !!doc.isRequested || doc.uploadedByKind === 'client';
+}
+
 /** Strip characters that would break a Content-Disposition header. */
 function safeFilename(name: string): string {
   // eslint-disable-next-line no-control-regex
@@ -29,23 +66,13 @@ router.get('/', async (req, res) => {
   const clientId = req.query.clientId as string | undefined;
 
   if (auth.kind === 'provider') {
-    if (clientId) {
-      const list = await db
-        .select()
-        .from(schema.documents)
-        .where(
-          and(
-            eq(schema.documents.providerId, auth.providerId),
-            eq(schema.documents.clientId, clientId)
-          )
-        );
-      return res.json(list);
-    }
+    const conditions = [eq(schema.documents.providerId, auth.providerId)];
+    if (clientId) conditions.push(eq(schema.documents.clientId, clientId));
     const list = await db
       .select()
       .from(schema.documents)
-      .where(eq(schema.documents.providerId, auth.providerId));
-    return res.json(list);
+      .where(and(...conditions));
+    return res.json(list.map(serializeDocument));
   }
 
   // client
@@ -53,26 +80,20 @@ router.get('/', async (req, res) => {
     .select()
     .from(schema.documents)
     .where(eq(schema.documents.clientId, auth.sub));
-  return res.json(list);
+  return res.json(list.map(serializeDocument));
 });
 
 /* Get single doc */
 router.get('/:id', async (req, res) => {
-  const auth = req.auth!;
-  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, req.params.id));
-  if (!doc) return res.status(404).json({ error: 'Not found' });
-  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
-  if (auth.kind === 'client' && doc.clientId !== auth.sub) return res.status(403).json({ error: 'Forbidden' });
-  res.json(doc);
+  const doc = await findScopedDocument(req.auth!, req.params.id);
+  if (!doc) return notFound(res);
+  res.json(serializeDocument(doc));
 });
 
 /* Download the stored file — authenticated; works from a same-origin <a href>. */
 router.get('/:id/download', async (req, res) => {
-  const auth = req.auth!;
-  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, req.params.id));
-  if (!doc) return res.status(404).json({ error: 'Not found' });
-  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
-  if (auth.kind === 'client' && doc.clientId !== auth.sub) return res.status(403).json({ error: 'Forbidden' });
+  const doc = await findScopedDocument(req.auth!, req.params.id);
+  if (!doc) return notFound(res);
   if (!doc.storagePath) return res.status(404).json({ error: 'No file attached' });
 
   let abs: string;
@@ -99,16 +120,24 @@ router.get('/:id/download', async (req, res) => {
   stream.pipe(res);
 });
 
-/* Upload / replace the file for a document (multipart field: file) */
-router.post('/:id/file', uploadSingle, async (req, res) => {
+/* Upload / replace the file for a document (multipart field: file).
+   The target is resolved and authorized BEFORE the multipart body is parsed. */
+router.post('/:id/file', async (req: Request, res: Response, next: NextFunction) => {
+  const auth = req.auth!;
+  const doc = await findScopedDocument(auth, req.params.id);
+  if (!doc) return notFound(res);
+  if (auth.kind === 'client' && !clientMayReplaceFile(doc)) return advisorOnly(res);
+
+  uploadSingle(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    attachFile(req, res, doc).catch(next);
+  });
+});
+
+async function attachFile(req: Request, res: Response, doc: DocumentRow) {
   const auth = req.auth!;
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'No file provided' });
-
-  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, req.params.id));
-  if (!doc) return res.status(404).json({ error: 'Not found' });
-  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
-  if (auth.kind === 'client' && doc.clientId !== auth.sub) return res.status(403).json({ error: 'Forbidden' });
 
   const fileName = storedFileName(doc.id, file.mimetype);
   // Clean up a previous file if the extension changed (otherwise it's overwritten in place).
@@ -160,8 +189,8 @@ router.post('/:id/file', uploadSingle, async (req, res) => {
     targetId: updated.id,
   });
 
-  res.json(updated);
-});
+  res.json(serializeDocument(updated));
+}
 
 /* Create / request document (provider creates a request, or a metadata record) */
 const createSchema = z.object({
@@ -181,15 +210,15 @@ router.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   const data = parsed.data;
 
-  // Resolve providerId based on caller
+  // Resolve providerId based on caller. A client id outside the caller's scope
+  // is indistinguishable from a missing one.
   let providerId: string;
   if (auth.kind === 'provider') {
     providerId = auth.providerId;
-    // Verify client belongs to this provider
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, data.clientId));
-    if (!c || c.providerId !== providerId) return res.status(403).json({ error: 'Forbidden' });
+    if (!c || c.providerId !== providerId) return notFound(res);
   } else {
-    if (data.clientId !== auth.sub) return res.status(403).json({ error: 'Forbidden' });
+    if (data.clientId !== auth.sub) return notFound(res);
     providerId = auth.providerId;
   }
 
@@ -223,10 +252,10 @@ router.post('/', async (req, res) => {
     targetId: doc.id,
   });
 
-  res.status(201).json(doc);
+  res.status(201).json(serializeDocument(doc));
 });
 
-/* Update document metadata / status / update-requests */
+/* Update document metadata / status / update-requests — advisor only */
 const updateSchema = z.object({
   name: z.string().optional(),
   folder: z.string().optional(),
@@ -241,10 +270,9 @@ const updateSchema = z.object({
 
 router.patch('/:id', async (req, res) => {
   const auth = req.auth!;
-  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, req.params.id));
-  if (!doc) return res.status(404).json({ error: 'Not found' });
-  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
-  if (auth.kind === 'client' && doc.clientId !== auth.sub) return res.status(403).json({ error: 'Forbidden' });
+  const doc = await findScopedDocument(auth, req.params.id);
+  if (!doc) return notFound(res);
+  if (auth.kind !== 'provider') return advisorOnly(res);
 
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
@@ -270,7 +298,7 @@ router.patch('/:id', async (req, res) => {
   const [updated] = await db
     .update(schema.documents)
     .set(updates)
-    .where(eq(schema.documents.id, req.params.id))
+    .where(eq(schema.documents.id, doc.id))
     .returning();
 
   // Record activity for meaningful changes
@@ -296,17 +324,17 @@ router.patch('/:id', async (req, res) => {
     });
   }
 
-  res.json(updated);
+  res.json(serializeDocument(updated));
 });
 
+/* Delete — advisor only */
 router.delete('/:id', async (req, res) => {
   const auth = req.auth!;
-  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, req.params.id));
-  if (!doc) return res.status(404).json({ error: 'Not found' });
-  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
-  if (auth.kind === 'client' && doc.clientId !== auth.sub) return res.status(403).json({ error: 'Forbidden' });
+  const doc = await findScopedDocument(auth, req.params.id);
+  if (!doc) return notFound(res);
+  if (auth.kind !== 'provider') return advisorOnly(res);
   await deleteStoredFile(doc.storagePath);
-  await db.delete(schema.documents).where(eq(schema.documents.id, req.params.id));
+  await db.delete(schema.documents).where(eq(schema.documents.id, doc.id));
   res.json({ ok: true });
 });
 

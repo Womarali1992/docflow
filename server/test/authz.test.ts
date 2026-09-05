@@ -1,11 +1,11 @@
 /**
  * Authorization matrix for every current API route.
  *
- * Each case lists the expected status for all six actors. Expectations describe
- * the TARGET behaviour from docs/CPA-PILOT-PLAN.md (cross-tenant ids are 404,
- * clients cannot review or delete, storage paths are never serialized). Cases
- * where the current code still misbehaves are listed in `fails` and run with
- * `it.fails`, so the suite is green today and C0.2 must flip them to `it`.
+ * Each case lists the expected status for all six actors, following
+ * docs/CPA-PILOT-PLAN.md: cross-tenant ids are 404 (never 403), clients cannot
+ * review, delete or overwrite advisor material, storage paths are never
+ * serialized. If a later commit knowingly breaks a case, list the actor in
+ * `fails` (the case then runs as `it.fails`) and flip it back in the fix.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
@@ -30,7 +30,7 @@ interface Case {
   name: string;
   req: (fx: Fixture) => Test;
   expect: Statuses;
-  /** Actors whose target expectation the current code does not meet yet (defects). */
+  /** Actors whose target expectation the current code does not meet yet (known defects). */
   fails?: Actor[];
   /** Restrict the case to these actors. */
   only?: Actor[];
@@ -47,8 +47,6 @@ const S = (p1: number, p2: number, c1a: number, c1b: number, c2a: number, anon: 
   anonymous: anon,
 });
 
-const LOGGED_IN: Actor[] = ['provider1', 'provider2', 'client1a', 'client1b', 'client2a'];
-const CROSS_TENANT: Actor[] = ['provider2', 'client1b', 'client2a'];
 const CLIENTS: Actor[] = ['client1a', 'client1b', 'client2a'];
 
 const attachPdf = (t: Test) =>
@@ -73,7 +71,6 @@ const cases: Case[] = [
         .post('/api/auth/signup-provider')
         .send({ name: 'Walk-in', email: 'walkin@example.test', password: 'walkin-pass-123' }),
     expect: S(403, 403, 403, 403, 403, 403),
-    fails: [...ACTORS],
   },
 
   /* ------------------------------------------------------------- clients */
@@ -92,7 +89,6 @@ const cases: Case[] = [
     name: 'GET /api/clients/:id',
     req: (fx) => request(app).get(`/api/clients/${fx.client1a.id}`),
     expect: S(200, 404, 200, 404, 404, 401),
-    fails: CROSS_TENANT,
     check: (res) => expect(res.body).not.toHaveProperty('passwordHash'),
   },
   {
@@ -105,7 +101,6 @@ const cases: Case[] = [
     name: 'PATCH /api/clients/:id',
     req: (fx) => request(app).patch(`/api/clients/${fx.client1a.id}`).send({ name: 'Renamed' }),
     expect: S(200, 404, 403, 403, 403, 401),
-    fails: ['provider2'],
   },
 
   /* ----------------------------------------------------------- documents */
@@ -128,31 +123,33 @@ const cases: Case[] = [
     name: 'GET /api/documents never serializes storagePath',
     req: () => request(app).get('/api/documents'),
     expect: S(200, 200, 200, 200, 200, 401),
-    fails: LOGGED_IN,
     check: (res) => {
-      for (const d of res.body) expect(d).not.toHaveProperty('storagePath');
+      for (const d of res.body) {
+        expect(d).not.toHaveProperty('storagePath');
+        expect(typeof d.hasFile).toBe('boolean');
+      }
     },
   },
   {
     name: 'GET /api/documents/:id',
     req: (fx) => request(app).get(`/api/documents/${fx.client1a.upload}`),
     expect: S(200, 404, 200, 404, 404, 401),
-    fails: CROSS_TENANT,
   },
   {
     name: 'GET /api/documents/:id never serializes storagePath',
     req: (fx) => request(app).get(`/api/documents/${fx.client1a.upload}`),
     expect: S(200, 404, 200, 404, 404, 401),
     only: ['provider1', 'client1a'],
-    fails: ['provider1', 'client1a'],
-    check: (res) => expect(res.body).not.toHaveProperty('storagePath'),
+    check: (res) => {
+      expect(res.body).not.toHaveProperty('storagePath');
+      expect(res.body.hasFile).toBe(true);
+    },
   },
   {
     name: 'GET /api/documents/:id/download (client upload)',
     req: (fx) =>
       request(app).get(`/api/documents/${fx.client1a.upload}/download`).buffer(true).parse(binaryParser),
     expect: S(200, 404, 200, 404, 404, 401),
-    fails: CROSS_TENANT,
     check: (res) => {
       expect(res.headers['content-type']).toBe('application/pdf');
       expect(res.headers['content-disposition']).toMatch(/^inline;/);
@@ -162,9 +159,11 @@ const cases: Case[] = [
   {
     name: 'GET /api/documents/:id/download (advisor deliverable)',
     req: (fx) =>
-      request(app).get(`/api/documents/${fx.client1a.deliverable}/download?disposition=attachment`).buffer(true).parse(binaryParser),
+      request(app)
+        .get(`/api/documents/${fx.client1a.deliverable}/download?disposition=attachment`)
+        .buffer(true)
+        .parse(binaryParser),
     expect: S(200, 404, 200, 404, 404, 401),
-    fails: CROSS_TENANT,
     check: (res) => {
       expect(res.headers['content-disposition']).toMatch(/^attachment;/);
       expect(Buffer.from(res.body as Buffer).equals(PDF_BYTES)).toBe(true);
@@ -174,46 +173,43 @@ const cases: Case[] = [
     name: 'POST /api/documents/:id/file fulfils an open request',
     req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.request}/file`)),
     expect: S(200, 404, 200, 404, 404, 401),
-    fails: CROSS_TENANT,
     check: (res) => {
       expect(res.body.isRequested).toBe(false);
       expect(res.body.status).toBe('pending');
+      expect(res.body.hasFile).toBe(true);
+      expect(res.body).not.toHaveProperty('storagePath');
     },
   },
   {
     name: 'POST /api/documents/:id/file cannot overwrite an advisor deliverable as a client',
     req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.deliverable}/file`)),
     expect: S(200, 404, 403, 404, 404, 401),
-    fails: ['client1a', ...CROSS_TENANT],
   },
   {
     name: 'POST /api/documents (create for a client)',
     req: (fx) => request(app).post('/api/documents').send({ clientId: fx.client1a.id, name: 'Adhoc.pdf' }),
     expect: S(201, 404, 201, 404, 404, 401),
-    fails: CROSS_TENANT,
     check: (res, fx) => {
       expect(res.body.clientId).toBe(fx.client1a.id);
       expect(res.body.providerId).toBe(fx.provider1.id);
+      expect(res.body.hasFile).toBe(false);
     },
   },
   {
     name: 'PATCH /api/documents/:id (review state is advisor-only)',
     req: (fx) => request(app).patch(`/api/documents/${fx.client1a.upload}`).send({ status: 'reviewed' }),
     expect: S(200, 404, 403, 404, 404, 401),
-    fails: ['client1a', ...CROSS_TENANT],
     check: (res) => expect(res.body.status).toBe('reviewed'),
   },
   {
     name: 'DELETE /api/documents/:id (advisor deliverable)',
     req: (fx) => request(app).delete(`/api/documents/${fx.client1a.deliverable}`),
     expect: S(200, 404, 403, 404, 404, 401),
-    fails: ['client1a', ...CROSS_TENANT],
   },
   {
     name: 'DELETE /api/documents/:id (client upload — clients never delete)',
     req: (fx) => request(app).delete(`/api/documents/${fx.client1a.upload}`),
     expect: S(200, 404, 403, 404, 404, 401),
-    fails: ['client1a', ...CROSS_TENANT],
   },
 
   /* ------------------------------------------------------------ messages */
@@ -221,7 +217,6 @@ const cases: Case[] = [
     name: 'GET /api/messages?clientId= (clients are self-scoped regardless of the param)',
     req: (fx) => request(app).get(`/api/messages?clientId=${fx.client1a.id}`),
     expect: S(200, 404, 200, 200, 200, 401),
-    fails: ['provider2'],
     check: (res, fx, actor) => {
       const list = res.body as { id: string; clientId: string }[];
       if (actor === 'provider1' || actor === 'client1a') {
@@ -244,7 +239,6 @@ const cases: Case[] = [
     name: 'POST /api/messages',
     req: (fx) => request(app).post('/api/messages').send({ clientId: fx.client1a.id, content: 'hello' }),
     expect: S(201, 404, 201, 201, 201, 401),
-    fails: ['provider2'],
     check: (res, fx, actor) => {
       const self = selfClient(fx, actor);
       expect(res.body.clientId).toBe(self ? self.id : fx.client1a.id);
@@ -255,7 +249,6 @@ const cases: Case[] = [
     name: 'PATCH /api/messages/read',
     req: (fx) => request(app).patch('/api/messages/read').send({ clientId: fx.client1a.id }),
     expect: S(200, 404, 200, 200, 200, 401),
-    fails: ['provider2'],
     check: (res, _fx, actor) => {
       // Only the two parties of client1a's thread have anything to mark.
       const expected = actor === 'provider1' || actor === 'client1a' ? 1 : 0;
@@ -309,7 +302,6 @@ const cases: Case[] = [
     name: 'DELETE /api/presets/:id',
     req: (fx) => request(app).delete(`/api/presets/${fx.provider1.preset}`),
     expect: S(200, 404, 403, 403, 403, 401),
-    fails: ['provider2'],
   },
 ];
 
@@ -338,7 +330,8 @@ describe('authorization matrix', () => {
     });
   }
 
-  it('lists every actor at least once', () => {
+  it('has no case left running as an expected failure', () => {
+    expect(cases.filter((c) => c.fails && c.fails.length > 0).map((c) => c.name)).toEqual([]);
     expect(CLIENTS.every((a) => ACTORS.includes(a))).toBe(true);
   });
 });

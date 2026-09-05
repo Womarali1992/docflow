@@ -103,7 +103,7 @@ const DocumentsPage = () => {
                   <div className="df-meta" style={{ marginTop: 0 }}>{clientName(d.clientId)}</div>
                   <div>{status && <span className={'df-pill ' + status.cls}>{status.label}</span>}</div>
                   <div>
-                    {d.storagePath && (
+                    {d.hasFile && (
                       <a
                         href={api.documents.downloadUrl(d.id, { attachment: true })}
                         className="df-btn df-ghost df-sm"

@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
     resolvedClientId = clientId;
     // Verify client belongs to this provider
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, resolvedClientId));
-    if (!c || c.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
+    if (!c || c.providerId !== auth.providerId) return res.status(404).json({ error: 'Not found' });
   }
 
   const conditions = [eq(schema.messages.clientId, resolvedClientId)];
@@ -53,7 +53,7 @@ router.patch('/read', async (req, res) => {
     if (!parsed.data.clientId) return res.status(400).json({ error: 'clientId required' });
     clientId = parsed.data.clientId;
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, clientId));
-    if (!c || c.providerId !== auth.providerId) return res.status(403).json({ error: 'Forbidden' });
+    if (!c || c.providerId !== auth.providerId) return res.status(404).json({ error: 'Not found' });
   }
 
   const conditions = [
@@ -94,7 +94,7 @@ router.post('/', async (req, res) => {
     clientId = parsed.data.clientId;
     providerId = auth.providerId;
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, clientId));
-    if (!c || c.providerId !== providerId) return res.status(403).json({ error: 'Forbidden' });
+    if (!c || c.providerId !== providerId) return res.status(404).json({ error: 'Not found' });
   }
 
   const [msg] = await db
