@@ -583,6 +583,48 @@ const cases: Case[] = [
     check: (res) => expect(res.body.archivedAt).toBeNull(),
   },
 
+  /* ------------------------------------------------------------ delivery */
+  {
+    name: 'GET /api/documents/:id/versions/:vid/download',
+    req: (fx) =>
+      request(app)
+        .get(`/api/documents/${fx.client1a.upload}/versions/${fx.client1a.uploadVersion}/download`)
+        .buffer(true)
+        .parse(binaryParser),
+    expect: S(200, 404, 200, 404, 404, 401),
+    check: (res) => {
+      expect(res.headers['content-disposition']).toMatch(/^attachment;/);
+      expect(res.headers['x-content-type-options']).toBe('nosniff');
+      expect(res.headers['cache-control']).toBe('private, no-store');
+      expect(Buffer.from(res.body as Buffer).equals(PDF_BYTES)).toBe(true);
+    },
+  },
+  {
+    name: 'GET /api/documents/:id/versions/:vid/preview',
+    req: (fx) =>
+      request(app)
+        .get(`/api/documents/${fx.client1a.upload}/versions/${fx.client1a.uploadVersion}/preview`)
+        .buffer(true)
+        .parse(binaryParser),
+    expect: S(200, 404, 200, 404, 404, 401),
+    check: (res) => {
+      expect(res.headers['content-disposition']).toMatch(/^inline;/);
+      // Rendered in a browser with a live session: nothing in it may act.
+      expect(res.headers['content-security-policy']).toBe('sandbox');
+      expect(res.headers['content-type']).toBe('application/pdf');
+    },
+  },
+  {
+    // The advisor's own deliverable, which the fixture leaves shared.
+    name: 'GET /api/documents/:id/versions/:vid/download (deliverable)',
+    req: (fx) =>
+      request(app)
+        .get(`/api/documents/${fx.client1a.deliverable}/versions/${fx.client1a.deliverableVersion}/download`)
+        .buffer(true)
+        .parse(binaryParser),
+    expect: S(200, 404, 200, 404, 404, 401),
+  },
+
   /* ------------------------------------------------------------- uploads */
   {
     // Only the client answers their own checklist line; a foreign id is 404,

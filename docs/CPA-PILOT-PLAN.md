@@ -23,7 +23,7 @@
 | C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | SHIPPED 2026-09-06 |
 | C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | SHIPPED 2026-09-06 |
 | C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | SHIPPED 2026-09-06 |
-| C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | NOT STARTED |
+| C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | SHIPPED 2026-09-06 |
 | C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | NOT STARTED |
 | C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | NOT STARTED |
 | C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | NOT STARTED |
@@ -36,8 +36,35 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C2.4** (per-version download/preview with the delivery headers; the legacy URL resolves the
-current version). Phase 0, Phase 1, C2.1, C2.2 and C2.3 shipped.
+**NEXT = C3.1** (React Query data layer, auth screens, shadcn primitives on df tokens, self-hosted
+Plex). **Phase 2 is complete** — Phase 0, Phase 1 and C2.1–C2.4 shipped. C3.1 is a phase boundary:
+re-read the plan's "Frontend architecture" section before coding, and note that C3.1 gates every later
+C3.x / C4.x screen.
+
+C2.4 notes: `GET /documents/:id/versions/:vid/{download,preview}` added to `routes/versions.ts` (which
+already owned the version routes). Shared `deliver()` enforces the rules in one place:
+
+- **Only a `clean`, published version is served.** Anything else is **409 with a reason** —
+  `infected` when the scan found something, `not_available_yet` for pending / error / unpublished — so
+  "still being checked" never looks like "not found". A missing file on disk is 404.
+- **`Content-Type` comes from the SNIFFED bytes**, not the stored `mimeType`, because the browser acts
+  on that header and a row could be wrong. Only the first 4100 bytes are read (`sniffHead`) — a 25 MB
+  file is not loaded twice to answer one question. (`fileTypeFromFile` is missing from the installed
+  `file-type` typings; `fileTypeFromBuffer` on the head is used instead.)
+- **`preview` is deliberately narrower than `download`:** PDF + PNG/JPEG/GIF/WebP only, else **415
+  `not_previewable`**. Inline responses carry `Content-Security-Policy: sandbox`; both carry
+  `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`, `Content-Length`, and
+  `Content-Disposition` with both `filename=` and `filename*=UTF-8''`.
+- **Every successful read is audited** (`document.downloaded` / `document.previewed`, with documentId
+  and versionNo, never content). A refused read records nothing.
+- Cross-tenant and unshared-deliverable reads are 404 via `findVersion` → `findDocument`, so delivery
+  inherits the same visibility rules as the rest of the API.
+
+`GET /documents/:id/download` (legacy) already resolved the current version from C2.3 and keeps doing
+so; `documents.url` is unchanged, so the current frontend needs no edit.
+
+Gate: **660 tests / 14 files** (was 626 / 13); the authz matrix alone is 466 cases (was 448).
+No migration; no frontend change in this commit.
 
 C2.3 notes: `files/{staging,validate,scan,publish}.ts` added beside the existing `files/store.ts`
 (extended with `stagingDir/ensureStagingDir/stagedPath/discardStaged/commitStaged`). `middleware/upload.ts`
@@ -849,7 +876,7 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 | `api.presets.create/remove` → `/templates` bins↔items adapter (frontend) | C2.2 | C3.2 |
 | `POST /documents/:id/file` → creates a version | C2.3 | C5.4 |
 | `GET /documents/:id/download` resolves the current version (brought forward from C2.4) | C2.3 | kept (public contract) |
-| `GET /documents/:id/download` → current version | C2.4 | kept (public contract) |
+| `GET /documents/:id/download` → current version | C2.3 | kept (public contract) |
 | `presets` read-only shim over templates | C2.2 | C5.4 |
 | `req.auth` shape from the JWT era | C1.1 | kept |
 | `server/uploads/` on disk | — | C5.4 after integrity |
