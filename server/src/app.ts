@@ -1,4 +1,6 @@
 import express from 'express';
+import { sql } from 'drizzle-orm';
+import { db } from './db/client.js';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import authRoutes from './routes/auth.js';
@@ -51,8 +53,21 @@ app.use(cookieParser());
 app.use('/api', globalLimiter);
 app.use('/api', originCheck);
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
+/**
+ * Health, for the service manager and `ops/windows/verify.ps1`.
+ *
+ * It touches the database on purpose: a process that is listening but cannot
+ * reach Postgres is not healthy, it is a 500 waiting for the first visitor.
+ * Public and deliberately dull — an up/down answer and the time, nothing about
+ * the database, the version or the machine.
+ */
+app.get('/api/health', async (_req, res) => {
+  try {
+    await db.execute(sql`select 1`);
+    res.json({ ok: true, db: true, time: new Date().toISOString() });
+  } catch {
+    res.status(503).json({ ok: false, db: false, time: new Date().toISOString() });
+  }
 });
 
 // The second factor is mounted first: its routes are the only ones a pre-auth session may reach.

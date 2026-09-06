@@ -4,6 +4,192 @@ Operational procedures for the CPA pilot. Sections are added as the programme in
 [`CPA-PILOT-PLAN.md`](CPA-PILOT-PLAN.md) delivers them; each one records when it was last
 exercised for real.
 
+## Installing on the firm PC (C5.3)
+
+Everything here happens once, on the machine that will host the pilot. Read the whole section before
+starting: two of the steps need someone else (the DNS record, the router) and one needs a decision
+that cannot be undone quietly (BitLocker's recovery key).
+
+### Prerequisites — things only a person can do
+
+| # | What | Why it cannot be scripted |
+|---|---|---|
+| 1 | **Windows 11 Pro** (not Home) | BitLocker. On Home the data volume cannot be encrypted, and a laptop full of clients' tax documents without disk encryption is not a pilot, it is an incident waiting. |
+| 2 | **A second volume** for data (`D:`), BitLocker-encrypted, recovery key printed and stored off the machine | If the key is only on the machine it protects, it is not a backup of anything. |
+| 3 | **Node 22 LTS**, **PostgreSQL 17**, **ClamAV**, **Caddy**, **WinSW** installed | Licences and installer choices are the firm's. |
+| 4 | **A hostname** (`docs.<firm>.com`) with a public A record pointing at this machine's address | Let's Encrypt has to reach it. |
+| 5 | **Ports 80 and 443 forwarded** to this machine on the router | Certificate issuance uses 80; clients use 443. |
+| 6 | **A static or reserved DHCP address** for the machine | A portal that moves when the router reboots is a portal that is down. |
+| 7 | **SMTP credentials** (optional) | Without them invitations and resets are copy-link only, which works — the advisor sends the link themselves. |
+| 8 | **The firm's timezone** | Reminders go out at 08:00 there, and "overdue" is measured against that calendar. |
+
+### Install order
+
+```powershell
+# 1. Clone, elevated, into C:\docflow\app
+git clone https://github.com/Womarali1992/docflow.git C:\docflow\app
+cd C:\docflow\app
+
+# 2. Postgres: config, roles, database
+#    - copy ops\windows\postgresql.conf.snippet into <PGDATA>\postgresql.conf
+#    - replace <PGDATA>\pg_hba.conf with ops\windows\pg_hba.conf.example
+#    - Restart-Service postgresql-x64-17
+#    - create the roles and database (SQL is in pg_hba.conf.example)
+
+# 3. ClamAV: copy both example configs, run freshclam ONCE by hand (~250 MB),
+#    then install clamd and freshclam as services.
+
+# 4. WinSW: download WinSW.NET461.exe into C:\docflow\services\
+
+# 5. The installer: account, folders, ACLs, build, services, firewall, backup task
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\install.ps1 `
+    -DataRoot D:\docflow-data -BackupDest E:\docflow-backups
+
+# 6. Edit server\.env — the production block at the bottom of .env.example says
+#    exactly which lines. Generate the two secrets ON THIS MACHINE.
+
+# 7. Migrations
+cd server; npm run db:migrate; cd ..
+
+# 8. Caddy: copy ops\windows\Caddyfile.example to C:\docflow\caddy\Caddyfile and
+#    put the real hostname in it. Download caddy.exe into C:\docflow\caddy\.
+
+# 9. Start everything
+Start-Service docflow-api, docflow-worker, caddy
+
+# 10. Prove it
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\verify.ps1 -HostName docs.firm.com
+```
+
+### The certificate
+
+Caddy asks Let's Encrypt for one the first time a request arrives for the hostname. It needs DNS
+already pointing here and port 80 reachable **at that moment**. If it fails:
+
+- `Get-Content C:\docflow\services\logs\caddy.out.log -Tail 50` says why, in plain words.
+- The usual causes, in order of likelihood: the A record has not propagated, the router forwards 443
+  but not 80, or the ISP blocks 80 (some residential lines do — the firm then needs the DNS-01
+  challenge, which is a different Caddyfile and an API token from the DNS provider).
+- `verify.ps1 -HostName …` prints the days remaining once it works. Renewal is automatic and needs
+  nothing from anyone; the check exists so a failed renewal is noticed before it expires.
+
+### The first advisor
+
+There is no sign-up page — `ALLOW_PROVIDER_SIGNUP` stays `false`, so the only way an advisor account
+exists is somebody with a shell on this machine creating it:
+
+```powershell
+cd C:\docflow\app\server
+npm run admin -- create-advisor --email sarah@firm.com --name "Sarah Chen" --firm "Chen & Co CPA"
+```
+
+It prints a one-time link. Open it in a browser **on the firm PC**, set a password, and enroll the
+authenticator app when prompted — two-step verification is not optional for anyone, including the
+advisor. Save the ten recovery codes somewhere that is not the same laptop.
+
+### The first client
+
+From the advisor's own screen, not the command line: **Clients → New client**, then hand over the
+invitation link it shows. With SMTP configured the client is emailed as well; without it, the
+advisor sends the link themselves (text, in person, whatever they normally use). The link is single
+use and lasts seven days.
+
+Then, in the client's page: **New engagement**, pick a template, and the checklist exists. That is
+the whole onboarding.
+
+## Running it day to day (C5.3)
+
+**Every morning (10 seconds):** open `/settings/system`. It answers the only four questions that
+matter — did last night's backup work, is the scanner answering, is the disk filling, is anything
+stuck. Everything green means nothing needs doing.
+
+**Every week:** swap the offline backup drive (see "Offline copy rotation"). Glance at the failed
+jobs count; a non-zero one is almost always email credentials.
+
+**Every month:** run a restore drill against the most recent set. A backup nobody has restored is a
+hypothesis.
+
+**When updating:**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\update.ps1 -HostName docs.firm.com
+```
+
+It backs up first, refuses to run on a dirty working tree, builds before stopping anything, migrates,
+restarts and verifies. The portal is down only for the migration and two service restarts.
+
+## When something is wrong (C5.3)
+
+### The virus scanner is not answering
+
+**What the client sees:** uploads still work and say "Received — being checked". Nothing is lost.
+**What is actually happening:** every new version is stored with `scanStatus = error` and a retry job
+is queued (30 attempts over about a day). Nothing is served until it passes.
+
+```powershell
+Get-Service clamd
+Start-Service clamd
+Get-Content C:\ProgramData\ClamAV\clamd.log -Tail 30
+```
+
+The usual cause is the `Example` line still present in `clamd.conf` after an upgrade replaced it.
+Once clamd answers, the retry jobs publish everything by themselves — there is nothing to re-upload.
+
+### The disk is filling
+
+Ordered by what buys the most room soonest:
+
+1. Old backup sets on this machine (`-Keep 30` should be pruning them; check the destination is not
+   also the data volume).
+2. Postgres logs in `<PGDATA>\log`.
+3. Service logs in `C:\docflow\services\logs`.
+
+**Never** delete anything under `DATA_ROOT\files`. Those are the documents themselves, they are
+immutable by design, and `npm run integrity` will fail for every one that is missing.
+
+### The certificate did not renew
+
+The portal is down and every client sees a browser warning. `caddy.out.log` says why. While it is
+being fixed the advisor can still work locally on `http://127.0.0.1:4000` — but no client can reach
+anything, so tell them.
+
+### An update went wrong
+
+`update.ps1` takes a backup before it touches anything, so the last good copy is minutes old.
+
+```powershell
+# 1. Stop the services
+Stop-Service docflow-api, docflow-worker
+
+# 2. Put the code back
+cd C:\docflow\app; git reset --hard <the commit update.ps1 printed as "before">
+
+# 3. Rebuild
+npm ci; npm run build; cd server; npm ci; npm run build; cd ..
+
+# 4. If a MIGRATION was the problem, the database has to go back too — restore
+#    the pre-update set into docflow_restore, check it, then promote it. Never
+#    pg_restore over the live database while it is the only copy.
+
+# 5. Start and verify
+Start-Service docflow-api, docflow-worker
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\verify.ps1 -HostName docs.firm.com
+```
+
+### Somebody is locked out
+
+- **Lost authenticator:** they use one of their ten recovery codes. If those are gone too:
+  `npm run admin -- reset-mfa --email them@example.com`, then they enroll again on next sign-in.
+- **Forgotten password:** the advisor sends a reset link from the client's page (Reset link). The
+  self-service "forgot password" form only works when SMTP is configured.
+- **Too many attempts:** the throttle is in memory and clears itself in fifteen minutes. Restarting
+  `docflow-api` clears it immediately.
+
+### Someone has left the firm, or a client has
+
+`npm run admin -- deactivate --email them@example.com` — sign-in refused, every live session ended,
+pending invitations dropped, and nothing on the file changes. It is reversible with `reactivate`.
+
 ## Backup and restore (legacy schema, v1 — C0.3)
 
 Until the immutable-version storage lands (C2.x), uploaded files live in `server\uploads` and

@@ -1,0 +1,67 @@
+# clamd.conf for the DocFlow pilot machine (C5.3).
+#
+# Copy to C:\Program Files\ClamAV\clamd.conf, then:
+#   "C:\Program Files\ClamAV\clamd.exe" --install
+#   Start-Service clamd
+#
+# DocFlow talks to clamd over a TCP socket on loopback and streams each upload
+# to it (INSTREAM) before publishing. Nothing a client sends is readable by
+# anyone until this service has passed it.
+
+# The single most important line: the stock file ships with `Example` set,
+# which makes clamd refuse to start. Removing it is not optional.
+# Example
+
+# --- Socket ------------------------------------------------------------------
+# Loopback only. clamd has no authentication of its own: anything that can open
+# this socket can ask it to scan any file it can read.
+TCPSocket 3310
+TCPAddr 127.0.0.1
+
+LogFile C:\ProgramData\ClamAV\clamd.log
+LogFileMaxSize 20M
+LogRotate yes
+LogTime yes
+PidFile C:\ProgramData\ClamAV\clamd.pid
+DatabaseDirectory C:\ProgramData\ClamAV\db
+TemporaryDirectory C:\ProgramData\ClamAV\tmp
+
+# --- Limits ------------------------------------------------------------------
+# The app refuses anything over 25 MB before it reaches here (MAX_UPLOAD_MB).
+# These are set a little above that so the scanner is never the thing that
+# rejects a legitimate file — a refusal from clamd arrives as "error", which the
+# app treats as "could not check", not as "bad file".
+MaxFileSize 30M
+MaxScanSize 60M
+StreamMaxLength 30M
+
+# Archives: a client emailing a zip of statements is normal. Ten levels is far
+# past anything genuine and stops a zip bomb from occupying the scanner.
+ScanArchive yes
+MaxRecursion 10
+MaxFiles 500
+
+# Office documents and PDFs are what this firm actually receives.
+ScanOLE2 yes
+ScanPDF yes
+ScanHTML yes
+ScanMail no
+
+# A file that cannot be parsed (encrypted, truncated, malformed) is reported
+# rather than passed. The app already refuses encrypted PDFs and OOXML, and
+# treats a scanner error as "not clean" — these two make the two layers agree.
+AlertEncrypted yes
+AlertBrokenExecutables yes
+
+# --- Behaviour ---------------------------------------------------------------
+# One firm's uploads are not a load problem; a couple of threads is plenty and
+# leaves the machine usable as a desktop.
+MaxThreads 4
+MaxQueue 50
+ReadTimeout 120
+CommandReadTimeout 30
+SelfCheck 3600
+
+# clamd runs as the local SYSTEM account by default on Windows. It only ever
+# reads from the staging directory, and DocFlow deletes the staged file itself
+# once the verdict is in.

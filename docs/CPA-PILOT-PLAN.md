@@ -33,16 +33,80 @@
 | C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | SHIPPED 2026-09-07 |
 | C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | SHIPPED 2026-09-07 |
 | C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | SHIPPED 2026-09-07 |
-| C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
+| C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | SHIPPED 2026-09-07 |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C5.3** — `ops/windows/`: `Caddyfile.example`, the three WinSW service definitions
-(`docflow-api.xml`, `docflow-worker.xml`, `caddy.xml`), `install.ps1` / `update.ps1` / `verify.ps1` /
-`firewall.ps1`, the Postgres and ClamAV configuration snippets, the production block in
-`server/.env.example`, and the rest of `docs/PILOT-RUNBOOK.md`. **These are authored here and
-executed on the firm PC** — this box is Windows 11 *Home*, so BitLocker, WinSW services, ClamAV and
-Caddy cannot be exercised locally. Everything that *can* be checked here (syntax, `verify.ps1`
-against a running dev server) must be.
+**NEXT = C5.4 — the last commit, and it needs the USER.** Two halves:
+
+1. **Release checks executed on the firm PC** (or a staging Windows box) and recorded in the runbook
+   with dates. The [A] ones run here; the manual ones — a client's full journey on a desktop *and* a
+   phone, three consecutive nightly backups, a restore drill on a clean Windows machine, and
+   `Test-NetConnection` from another machine proving only 80/443 answer — **cannot be done from this
+   session**. They are the pilot's gate.
+2. **Then contract**, in this order: run the full suite; drop the legacy `documents` columns and the
+   `presets` table; remove `POST /documents/:id/file` and the legacy list shape; apply the
+   **`FinancialOverview` decision** (a user call — keep at `/overview`, or delete); add the unique
+   index on `clients.emailNormalized` (**fails if duplicates remain — resolve first**); and delete
+   `server/uploads/` only after `npm run integrity` passes. Mark the program COMPLETE in memory.
+
+C5.3 notes: the deployment surface. Authored here, executed on the firm PC — this box is Windows 11
+**Home**, so BitLocker, WinSW, ClamAV and Caddy could not be exercised locally; everything that
+*could* be run here was.
+
+- **`Caddyfile.example`** — TLS, HSTS, the SPA fallback, `/api` to `127.0.0.1:4000` with
+  `X-Forwarded-Proto` and the real client IP, a 300 s proxy timeout (a 25 MB upload over a phone
+  connection is not a page load), and a **26 MB body cap deliberately above the app's 25 MB** so a
+  refusal comes from the API with an explanation rather than from Caddy as a bare 413. A catch-all
+  `:80, :443 { respond 404 }` so a scanner hitting the bare IP gets nothing.
+- **Three WinSW services** — `docflow-api`, `docflow-worker`, `caddy`, all as the non-administrator
+  `docflow-svc`, all depending on Postgres, all restarting on failure with a backoff, all rolling
+  their logs. Caddy depends on the API so the first request through the proxy has something to
+  reach. Secrets stay in `server\.env`: service definitions are world-readable.
+- **`install.ps1`** — creates the account (with a password it generates and immediately forgets),
+  the folders, and the ACLs: **modify** on `DATA_ROOT` and the Caddy directory, **read/execute** on
+  the code, nothing else. Builds both halves, installs the services *stopped*, applies the firewall
+  and registers the 02:00 backup task. It deliberately does **not** install Postgres/Node/ClamAV/
+  Caddy, create the database, or turn on BitLocker — each needs a human decision.
+- **`update.ps1`** — the only way code reaches the firm PC. **Backs up first** (so a bad migration is
+  minutes from a good copy), refuses a dirty working tree, **builds both halves before stopping
+  anything** (a failed build leaves the running system untouched), then stop → migrate → start →
+  `verify.ps1`. Caddy is not restarted: it serves the built files from disk and restarting it would
+  drop live connections.
+- **`verify.ps1`** — services, API health, the public path through Caddy, **certificate expiry**
+  (a renewal that fails takes the portal down silently until someone visits), clamd PING *and*
+  signature age, disk, and the last recorded backup. It reads `backup_runs` through a new
+  `scripts/last-backup.mjs` rather than `/ops/status`, because **a verification script that has to
+  log in is one nobody runs**.
+- **`firewall.ps1`** — allow 80/443, and *explicitly block* 4000/5432/3310 as a second lock behind
+  their loopback binds. No LAN rule for Postgres: that is an SSH tunnel, not a firewall entry.
+- **`postgresql.conf.snippet` / `pg_hba.conf.example`** — `listen_addresses = localhost`,
+  scram-sha-256 everywhere, **no `trust` line to forget**, IPv6 loopback included (Windows resolves
+  `localhost` to `::1` first, and its absence looks exactly like a password problem), durability
+  settings marked do-not-tune, and the two roles (`docflow_app` owner, `docflow_backup` read-only for
+  `pg_dump`).
+- **`clamd.conf.example` / `freshclam.conf.example`** — loopback socket, limits a little above the
+  app's 25 MB so the scanner is never what rejects a legitimate file, `AlertEncrypted` so both layers
+  agree about password-protected files, and the `# Example` line commented out in both (leaving it is
+  the single most common reason clamd will not start).
+- **`GET /api/health` now touches the database** (`select 1`, 503 when it cannot) — a process that is
+  listening but cannot reach Postgres is not healthy, it is a 500 waiting for the first visitor.
+- **`server/.env.example` gained a production block**, and the runbook gained **Installing on the
+  firm PC** (prerequisites table of the eight things only a person can do, install order, the
+  certificate, the first advisor via the CLI, the first client), **Running it day to day** (a
+  ten-second morning check, the weekly drive swap, the monthly drill) and **When something is
+  wrong** (scanner down, disk filling, certificate not renewed, an update that went wrong with its
+  rollback, somebody locked out, someone has left).
+
+**What was actually run here:** all seven PowerShell scripts parse cleanly, and `verify.ps1` was run
+end to end against the built API — it correctly reported `api health PASS` (including the new
+database check), `postgresql-x64-17 PASS`, `disk PASS`, **`backup PASS — 0 hours ago, 5 file(s)`**
+(reading `backup_runs` through the new script), `WARN` for the three services this box does not have,
+and **`FAIL` for clamd, which is correct**: it is not installed here, and on the firm PC that failure
+is exactly what an operator needs to see.
+
+Gate: root `npm run typecheck` / `npm run build` clean; server `npm run build` + `typecheck:test`
+clean, `security.test.ts` 9 passed (it exercises the health route's neighbours). No app behaviour
+changed beyond the health check; no migration.
 
 C5.2 notes: the operational half — what a backup is worth, and what the log knows.
 

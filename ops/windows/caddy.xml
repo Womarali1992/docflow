@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Caddy as a Windows service (WinSW).
+
+  Caddy is the only process on this machine that listens on a public port. It
+  terminates TLS, serves the built frontend from C:\docflow\app\dist and proxies
+  /api to 127.0.0.1:4000.
+
+  It runs as docflow-svc like the others. Windows lets a non-administrator bind
+  80 and 443, so nothing here needs to be SYSTEM — and the account that holds
+  the firm's TLS private keys should be the one that can do least.
+
+  Its data directory (certificates, account key) must be writable by that
+  account, and must be backed up: losing it means re-issuing certificates,
+  which needs port 80 reachable at that moment.
+-->
+<service>
+  <id>caddy</id>
+  <name>Caddy (DocFlow)</name>
+  <description>TLS termination and reverse proxy for DocFlow. The only service on this machine reachable from the network.</description>
+
+  <executable>C:\docflow\caddy\caddy.exe</executable>
+  <arguments>run --config C:\docflow\caddy\Caddyfile</arguments>
+  <workingdirectory>C:\docflow\caddy</workingdirectory>
+
+  <!-- Caddy defaults these under the service account's profile, which a service
+       may not have. Pinning them keeps the certificates where the backup
+       expects to find them. -->
+  <env name="XDG_DATA_HOME" value="C:\docflow\caddy\data" />
+  <env name="XDG_CONFIG_HOME" value="C:\docflow\caddy\config" />
+
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- Start after the API so the first request through the proxy has something
+       to reach. Caddy would answer 502 for a few seconds otherwise. -->
+  <depend>docflow-api</depend>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <logpath>C:\docflow\services\logs</logpath>
+
+  <stoptimeout>20 sec</stoptimeout>
+</service>

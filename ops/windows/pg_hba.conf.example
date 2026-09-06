@@ -1,0 +1,41 @@
+# pg_hba.conf for the DocFlow pilot machine (C5.3).
+#
+# Replace <PGDATA>\pg_hba.conf with this, then:
+#   Restart-Service postgresql-x64-17
+#
+# Three rules and nothing else. Every line here is a decision:
+#
+#   * No `trust`, anywhere — not even for local connections. On a stock Windows
+#     install the default is `scram-sha-256` already, but a "just for a minute"
+#     trust line added during troubleshooting and forgotten is one of the
+#     easiest ways to lose a database. There is no line here to forget.
+#   * No `host all all 0.0.0.0/0` and no LAN range. If someone needs to look at
+#     the database from another machine, that is an SSH tunnel to this one, not
+#     an entry here.
+#   * IPv6 loopback is listed as well as IPv4: Windows resolves "localhost" to
+#     ::1 first, so leaving it out produces a connection failure that looks like
+#     a password problem and wastes an afternoon.
+
+# TYPE  DATABASE   USER          ADDRESS         METHOD
+
+# Local socket connections (psql on this machine, run by an administrator).
+local   all        all                           scram-sha-256
+
+# The application, the worker and the backup scripts. All on this machine.
+host    all        all           127.0.0.1/32    scram-sha-256
+host    all        all           ::1/128         scram-sha-256
+
+# --- Roles this expects (create them once, see the runbook) ------------------
+#
+#   docflow_app     owns the database; the API and worker connect as this.
+#   docflow_backup  login + pg_read_all_data; the nightly pg_dump uses it, so a
+#                   leaked backup credential cannot write anything.
+#
+#   CREATE ROLE docflow_app LOGIN PASSWORD '...';
+#   CREATE DATABASE docflow OWNER docflow_app;
+#   CREATE ROLE docflow_backup LOGIN PASSWORD '...';
+#   GRANT pg_read_all_data TO docflow_backup;
+#
+# Both passwords go into a password manager, and docflow_app's also into
+# server\.env — which is why that file, and the config\ folder of every backup
+# set, must live on an encrypted volume.

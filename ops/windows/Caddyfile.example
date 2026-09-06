@@ -1,0 +1,69 @@
+# DocFlow reverse proxy (C5.3).
+#
+# Copy to C:\docflow\caddy\Caddyfile, replace docs.example.com with the firm's
+# hostname, and reload:  caddy reload --config C:\docflow\caddy\Caddyfile
+#
+# Caddy terminates TLS and serves the built frontend; the API and the worker
+# listen on loopback only and are never reachable from the network. That is the
+# whole shape of the deployment: one public port pair, two private processes.
+#
+# Certificates come from Let's Encrypt over HTTP-01 / TLS-ALPN, which needs
+# public DNS pointing at this machine and ports 80 and 443 forwarded to it.
+# Caddy renews on its own; nothing to remember.
+
+docs.example.com {
+	encode gzip zstd
+
+	# The API's own limit is 25 MB per file (server/.env MAX_UPLOAD_MB). This is
+	# deliberately a little higher: a request refused *here* arrives as a bare
+	# 413 with no JSON, so the app can never explain it. Let the API refuse it.
+	request_body {
+		max_size 26MB
+	}
+
+	header {
+		# One year, and this host will never be plain HTTP again.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		# The app sends its own CSP; nothing here should add a second one.
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:4000 {
+			# The app reads the real client IP from this (TRUST_PROXY=1), and
+			# writes it into the session and audit rows.
+			header_up X-Forwarded-Proto https
+			header_up X-Real-IP {remote_host}
+			# A 25 MB upload over a phone connection takes longer than a page load.
+			transport http {
+				read_timeout 300s
+				write_timeout 300s
+			}
+		}
+	}
+
+	handle {
+		root * C:\docflow\app\dist
+		# Single-page app: every unknown path is a route, not a 404.
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output file C:\docflow\caddy\access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+		# Request URLs can carry a document id; keep them off the shared log format.
+		format json
+	}
+}
+
+# Anything asking for this machine by another name gets nothing. Without this a
+# scanner hitting the bare IP would be served the app and a certificate error.
+:80, :443 {
+	respond 404
+}

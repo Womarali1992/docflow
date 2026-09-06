@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The DocFlow background worker as a Windows service (WinSW).
+
+  Separate from the API on purpose: a mail server that has stopped answering,
+  or a virus scan of a 25 MB file, must never hold up somebody's page load. The
+  queue is the database, so restarting either process loses nothing — a job
+  that was in flight is simply claimed again.
+
+  This is also what runs the daily reminders and the hourly sweeper: if this
+  service is stopped, uploads and reviews carry on working, but nobody is
+  chased and stale staging files are not cleaned up.
+-->
+<service>
+  <id>docflow-worker</id>
+  <name>DocFlow worker</name>
+  <description>DocFlow background jobs: email, virus-scan retries, the hourly sweeper and the daily client reminders.</description>
+
+  <executable>node</executable>
+  <arguments>dist\worker.js</arguments>
+  <workingdirectory>C:\docflow\app\server</workingdirectory>
+
+  <env name="NODE_ENV" value="production" />
+
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+
+  <depend>postgresql-x64-17</depend>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <logpath>C:\docflow\services\logs</logpath>
+
+  <!-- A scan in progress should be allowed to finish rather than leave a
+       version unpublished for the sweeper to flag. -->
+  <stoptimeout>60 sec</stoptimeout>
+</service>

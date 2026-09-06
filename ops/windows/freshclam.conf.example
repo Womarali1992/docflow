@@ -1,0 +1,42 @@
+# freshclam.conf for the DocFlow pilot machine (C5.3).
+#
+# Copy to C:\Program Files\ClamAV\freshclam.conf, then run ONCE by hand — the
+# first download is ~250 MB and needs internet:
+#   "C:\Program Files\ClamAV\freshclam.exe"
+# then install it as a service so it keeps itself current:
+#   "C:\Program Files\ClamAV\freshclam.exe" --install
+#   Start-Service freshclam
+#
+# A scanner with month-old signatures is a scanner that will pass the thing it
+# was installed to catch. `/settings/system` shows the signature age, and
+# verify.ps1 warns past seven days — but this file is what keeps it fresh.
+
+# As with clamd.conf: the stock file ships with `Example` set and will not run
+# until it is removed.
+# Example
+
+DatabaseDirectory C:\ProgramData\ClamAV\db
+DatabaseMirror database.clamav.net
+UpdateLogFile C:\ProgramData\ClamAV\freshclam.log
+LogFileMaxSize 10M
+LogRotate yes
+LogTime yes
+PidFile C:\ProgramData\ClamAV\freshclam.pid
+
+# Twelve times a day is ClamAV's own recommendation and is polite to the
+# mirrors. The firm PC is on all day; there is no reason to check less often.
+Checks 12
+
+# Tell clamd to reload as soon as new signatures land, so an update does not
+# wait for the next restart.
+NotifyClamd C:\Program Files\ClamAV\clamd.conf
+
+# A firm PC behind a corporate proxy needs these; most do not.
+# HTTPProxyServer proxy.firm.local
+# HTTPProxyPort 8080
+
+# If the network blocks database.clamav.net, freshclam fails silently in its own
+# log. That is what the seven-day warning in verify.ps1 and the system status
+# panel are for — someone finds out in a week, not in an incident.
+ConnectTimeout 60
+ReceiveTimeout 120

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The DocFlow API as a Windows service (WinSW).
+
+  Install:
+    copy WinSW.NET461.exe C:\docflow\services\docflow-api.exe
+    copy this file        C:\docflow\services\docflow-api.xml
+    C:\docflow\services\docflow-api.exe install
+    C:\docflow\services\docflow-api.exe start
+
+  It runs as docflow-svc, a non-administrator local account that can write only
+  to the data volume. If this process is ever compromised, what it can reach is
+  the documents it was already serving — not the machine.
+
+  The database URL, session secret and encryption key live in
+  C:\docflow\app\server\.env, which is read by the app itself. They are NOT put
+  in this file: service definitions are world-readable by default.
+-->
+<service>
+  <id>docflow-api</id>
+  <name>DocFlow API</name>
+  <description>DocFlow document portal API (Express). Listens on 127.0.0.1:4000; Caddy is the only thing in front of it.</description>
+
+  <executable>node</executable>
+  <arguments>dist\index.js</arguments>
+  <workingdirectory>C:\docflow\app\server</workingdirectory>
+
+  <!-- Everything else comes from server\.env. NODE_ENV is here because it
+       changes how the app treats missing configuration: in production a
+       missing DATA_ROOT or APP_ENCRYPTION_KEY is a refusal to start, not a
+       default. -->
+  <env name="NODE_ENV" value="production" />
+
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <onfailure action="restart" delay="60 sec" />
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- Postgres must be up first, or the first connection fails and the service
+       burns a restart before anything can happen. -->
+  <depend>postgresql-x64-17</depend>
+
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>true</delayedAutoStart>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <logpath>C:\docflow\services\logs</logpath>
+
+  <!-- Give in-flight uploads a chance to finish before the process is killed. -->
+  <stoptimeout>30 sec</stoptimeout>
+</service>
