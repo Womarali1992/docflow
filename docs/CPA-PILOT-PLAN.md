@@ -151,7 +151,7 @@ Gate: root `npm run typecheck` clean, `npm run lint` 0 errors / 9 warnings, `npm
 `audit` 6 + `auth` 3 = 18 passed**, and the `GET /api/ops/status` matrix row re-run (6 cases green).
 **The full authz matrix was not re-run** — this box had 542 MB free and it has been OOM-killed twice
 at ~25 minutes; C5.2 adds no route and changes no status, only the ops response body (whose row was
-run). **C5.4's release gate runs the suite whole.** Suite total 680. No migration.
+run). **C5.4's release gate runs the suite whole** — it since has: **678 passed / 16 files** at `0eb75f1`. (The 680 written here at the time was arithmetic, not a measurement.) No migration.
 
 **Real run, 2026-09-07:** backup OK in 4.4 s (dump 59.5 KB, 5 version files + 5 legacy files, all
 hashes recorded, `backup_runs` written, `backup.run` audit row confirmed in the database); restore
@@ -1341,22 +1341,35 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 
 ## Release checks (pilot gate, C5.4) — [A] = automated in `npm test`
 
+**Automated checks: ALL GREEN on 2026-09-07** — the whole server suite run end to end at `0eb75f1`:
+**678 tests / 16 files passed** in 10.7 minutes (`cd server && npm test`), plus 30 frontend tests,
+root typecheck / lint (0 errors, 9 inherited warnings) / build clean. That is every `[A]` line below.
+Re-run it on the release build before the contraction.
+
 - [ ] A client completes invitation → MFA setup → upload → correction → resubmission →
       final-document download on desktop and on a phone (manual, recorded in the runbook).
-- [A] Cross-client access fails (404) for lists, files, previews, versions, messages and linked
-      ids; clients cannot approve, waive, share, or see private deliverables (`authz.test.ts`).
-- [A] Failed, oversized, spoofed, infected, encrypted, interrupted and duplicate-retried uploads
-      leave no published partial records, no staged leftovers, and never lose a previous version
-      (`upload.test.ts`).
-- [A] Logout, idle expiry, absolute expiry, password reset, password change and deactivation
-      invalidate sessions immediately (`sessions.test.ts`).
-- [A] The legacy import preserves counts, ids, links and file checksums (`import.test.ts`); the
-      real-data `migration-report.json` shows zero unexplained gaps (manual review).
-- [ ] Nightly backup ran on ≥ 3 consecutive nights; a restore drill on a clean Windows
-      environment passes `npm run integrity` (manual, recorded).
+      **USER — needs the firm PC and a real phone.**
+- [x] **[A]** Cross-client access fails (404) for lists, files, previews, versions, messages and
+      linked ids; clients cannot approve, waive, share, or see private deliverables
+      (`authz.test.ts`, 460 cases). **Verified 2026-09-07.**
+- [x] **[A]** Failed, oversized, spoofed, infected, encrypted, interrupted and duplicate-retried
+      uploads leave no published partial records, no staged leftovers, and never lose a previous
+      version (`uploads.test.ts`). **Verified 2026-09-07.**
+- [x] **[A]** Logout, idle expiry, absolute expiry, password reset, password change and
+      deactivation invalidate sessions immediately (`sessions.test.ts`). **Verified 2026-09-07.**
+- [x] **[A]** The legacy import preserves counts, ids, links and file checksums
+      (`import.test.ts`). **Verified 2026-09-07.** The real-data `migration-report.json` review
+      stays manual — it was run against the dev database on 2026-09-06 (3 engagements / 3 requests /
+      5 versions, zero missing files).
+- [ ] Nightly backup ran on ≥ 3 consecutive nights; a restore drill on a clean Windows environment
+      passes `npm run integrity` (manual, recorded). **USER — needs the firm PC over three nights.**
+      *Partially done:* the drill itself passed on this box on 2026-09-07 (see the runbook), but "on
+      a clean Windows environment, three nights running" is the part that proves the scheduled task.
 - [ ] Only 80/443 answer from another LAN machine (`Test-NetConnection`); API, DB and clamd
-      refuse non-loopback (manual).
+      refuse non-loopback (manual). **USER — needs a second machine on the firm's network.**
 - [ ] Keyboard-only walkthrough of both portals; contrast audit; all gates clean.
+      **Contrast audit done in C5.1** (computed, one real defect found and fixed); the keyboard walk
+      needs a person at the keyboard. **USER.**
 - [x] The production bundle contains no dev credentials or Google Fonts references. **Verified C5.1**
       (2026-09-07): `password123`, `client123` and both demo addresses are absent from `dist/`, and
       so are `googleapis` / `gstatic` / `lovable`. Re-run at C5.4 on the release build.
