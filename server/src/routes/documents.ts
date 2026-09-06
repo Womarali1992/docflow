@@ -28,6 +28,7 @@ import { absPathForKey } from '../files/store.js';
 import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
 import { serializeDocument, serializeReview } from './serialize.js';
+import { notify } from '../notify.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, isId, notFound } from './scope.js';
 import type { Document } from '../db/schema.js';
 
@@ -199,6 +200,14 @@ router.post('/:id/share', async (req, res) => {
     .where(eq(schema.documents.id, doc.id))
     .returning();
 
+  await notify({
+    userKind: 'client',
+    userId: doc.clientId,
+    type: 'deliverable.shared',
+    title: `Your accountant shared: ${updated.displayName ?? updated.name}`,
+    body: 'It is ready to download from your portal.',
+    link: '/portal/shared',
+  });
   await auditRequest(req, { action: 'document.shared', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
   await recordActivity({
     providerId: doc.providerId,

@@ -15,6 +15,8 @@ import { claim, complete, fail } from './queue.js';
 import { sendEmailJob } from './handlers/email.js';
 import { scanRetryJob } from './handlers/scan_retry.js';
 import { sweeperJob } from './handlers/sweeper.js';
+import { remindersJob } from './handlers/reminders.js';
+import { ensureScheduledJobs } from './schedule.js';
 
 export type Handler = (job: Job) => Promise<unknown>;
 
@@ -22,12 +24,21 @@ export const handlers: Record<string, Handler> = {
   email: (job) => sendEmailJob(job),
   scan_retry: scanRetryJob,
   sweeper: sweeperJob,
+  reminders: remindersJob,
 };
 
 /** How often an idle worker asks for work. Short enough that an invitation email feels immediate. */
 export const POLL_INTERVAL_MS = Number.parseInt(process.env.WORKER_POLL_MS || '5000', 10);
 /** Jobs taken per tick. One CPA firm's queue is tiny; this is about fairness, not throughput. */
 export const BATCH_SIZE = Number.parseInt(process.env.WORKER_BATCH || '5', 10);
+
+/**
+ * How often the recurring schedule is re-asserted. The work is idempotent, but
+ * it is two writes, and nothing it schedules is finer-grained than an hour —
+ * doing it on every five-second poll would be noise in the write-ahead log for
+ * no benefit.
+ */
+export const SCHEDULE_CHECK_MS = 60_000;
 
 /**
  * One pass: claim a batch and run it. Returns how many jobs were processed, so
@@ -75,10 +86,19 @@ export function startWorker(workerId = `${process.pid}-${randomUUID().slice(0, 8
       }
     });
 
+  let lastScheduleCheck = 0;
+
   const loop = async (): Promise<void> => {
     while (!stopped) {
       let processed = 0;
       try {
+        // Recurring work is scheduled from here rather than from cron: the
+        // dedupe keys make it idempotent, and a worker that was down all
+        // morning still runs the day's reminders when it comes back.
+        if (Date.now() - lastScheduleCheck >= SCHEDULE_CHECK_MS) {
+          lastScheduleCheck = Date.now();
+          await ensureScheduledJobs();
+        }
         processed = await runOnce(workerId);
       } catch (err) {
         // A database hiccup must not kill the service; wait a poll and try again.

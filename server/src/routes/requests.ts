@@ -30,6 +30,7 @@ import { auditRequest } from '../db/audit.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, clientOnly, findRequest, isId, notFound } from './scope.js';
+import { notify } from '../notify.js';
 import type { Request as RequestRow } from '../db/schema.js';
 
 const router = Router();
@@ -147,6 +148,14 @@ router.post('/:id/accept', async (req, res) => {
     clientId: request.clientId,
     meta: { versionId },
   });
+  await notify({
+    userKind: 'client',
+    userId: request.clientId,
+    type: 'request.accepted',
+    title: `Accepted: ${request.title}`,
+    body: 'Nothing more to do for this one.',
+    link: '/portal/requests',
+  });
   await recordActivity({
     providerId: request.providerId,
     clientId: request.clientId,
@@ -210,6 +219,14 @@ router.post('/:id/request-correction', async (req, res) => {
     targetId: request.id,
     clientId: request.clientId,
     meta: { versionId },
+  });
+  await notify({
+    userKind: 'client',
+    userId: request.clientId,
+    type: 'request.correction',
+    title: `Another look needed: ${request.title}`,
+    body: 'Your accountant has left a note about what to send instead.',
+    link: '/portal',
   });
   await recordActivity({
     providerId: request.providerId,
@@ -326,6 +343,15 @@ router.post('/:id/respond', async (req, res) => {
     .where(eq(schema.requests.id, request.id))
     .returning();
 
+  // Only the advisor can take a line off the list, so they have to hear about it.
+  await notify({
+    userKind: 'provider',
+    userId: request.providerId,
+    type: 'request.not_applicable',
+    title: `${auth.name} says they do not have: ${request.title}`,
+    body: parsed.data.note ?? null,
+    link: `/engagements/${request.engagementId}`,
+  });
   await recordActivity({
     providerId: request.providerId,
     clientId: request.clientId,

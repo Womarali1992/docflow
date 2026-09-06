@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { recordActivity } from '../db/activity-log.js';
+import { notify } from '../notify.js';
 import { MESSAGE_MAX } from '../security/limits.js';
 
 const router = Router();
@@ -111,6 +112,26 @@ router.post('/', async (req, res) => {
     })
     .returning();
 
+  /* To the other side of the thread, and never with the message text: the
+     notification list is glanced at, and a subject line is not a safe place
+     for something a client wrote about their tax affairs. */
+  await notify(
+    auth.kind === 'client'
+      ? {
+          userKind: 'provider',
+          userId: providerId,
+          type: 'message.new',
+          title: `New message from ${auth.name}`,
+          link: `/clients/${clientId}`,
+        }
+      : {
+          userKind: 'client',
+          userId: clientId,
+          type: 'message.new',
+          title: 'New message from your accountant',
+          link: '/portal/messages',
+        }
+  );
   await recordActivity({
     providerId,
     clientId,

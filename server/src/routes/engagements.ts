@@ -17,6 +17,7 @@ import { recordActivity } from '../db/activity-log.js';
 import { itemsToRequests, type TemplateItem } from '../workflow/starter-templates.js';
 import { serializeDocument, serializeEngagement, serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
+import { notify } from '../notify.js';
 
 const router = Router();
 router.use(authenticate);
@@ -340,6 +341,16 @@ router.post('/:id/requests', async (req, res) => {
     actorKind: 'provider',
     actorId: auth.sub,
     meta: { count: created.length, fromTemplate: parsed.data.templateId ?? null },
+  });
+  // One notice for the batch: a ten-line checklist is one thing that happened
+  // to the client, not ten.
+  await notify({
+    userKind: 'client',
+    userId: engagement.clientId,
+    type: 'request.created',
+    title: `${created.length} new document${created.length === 1 ? '' : 's'} requested`,
+    body: `Your accountant has added ${created.length} item${created.length === 1 ? '' : 's'} to ${engagement.title}.`,
+    link: '/portal',
   });
   await recordActivity({
     providerId: auth.providerId,

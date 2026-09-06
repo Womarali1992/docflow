@@ -30,19 +30,59 @@
 | C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | SHIPPED 2026-09-07 |
 | C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | SHIPPED 2026-09-07 |
 | C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | SHIPPED 2026-09-07 |
-| C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | NOT STARTED |
+| C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | SHIPPED 2026-09-07 |
 | C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | NOT STARTED |
 | C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | NOT STARTED |
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C4.3** — notifications and reminders: the `notifications` table (empty since C2.1) wired
-for request created / correction requested / deliverable shared / accepted on the client side and
-upload received / not-applicable / new message on the advisor side; unread badges from
-`GET /notifications`; `jobs/handlers/reminders.ts` on the C1.4 queue (daily 08:00 firm tz, 3 days
-before → on the day → weekly while overdue, one consolidated email per client per day, stop on
-submit or waive, `dedupeKey = reminder:<clientId>:<date>`); `FIRM_TIMEZONE`. It is the first commit
-since C2.3 with real server work and a migration-free but job-heavy surface — tests use fixed clocks.
+**NEXT = C5.1** — the UX pass that makes the pilot presentable: empty / loading / error / offline
+states everywhere, a `:focus-visible` ring on the df tokens, contrast and touch-target audit, an
+error boundary, and a keyboard-only walk of both portals. It is also where the **production bundle**
+is checked for dev credentials (`DEV_CREDS` in `Login.tsx` is gated on `import.meta.env.DEV`) and
+Google Fonts references — the latter already verified absent since C3.1. **Phase 4 is complete.**
+
+C4.3 notes: the app now tells people things, and chases a deadline without becoming noise.
+
+- **`server/src/notify.ts`** — `notify()` / `notifyMany()`, and like the audit helper they **swallow
+  their own errors**: a checklist created but whose notice failed is a small problem, a 500 on "add
+  items" because the notice failed is a bigger one. Two rules stated in the file: the badge is the
+  server's (invariant 15), and a notification is **not** an email — it is read inside a session by
+  the person it belongs to, so it may name the item; the email may not.
+- **Wired at seven points.** To the client: a batch of new checklist lines (**one** notice, not ten),
+  a correction asked for, an acceptance, a deliverable shared, the daily reminder. To the advisor: an
+  upload received (their own deliverable is not news), a client saying "I don't have this", and a new
+  message — **never with the message text**, because a notification list is glanced at and a subject
+  line is not a safe place for what a client wrote about their tax affairs.
+- **`jobs/schedule.ts`** — recurring work keyed to the **firm's own day** (`FIRM_TIMEZONE`, default
+  `America/Chicago`), because a reminder that says "due tomorrow" has to go out in the morning where
+  the firm is. `Intl.DateTimeFormat` does the calendar; the one thing it cannot do — turn a local
+  wall time back into an instant — is an offset round-trip, which near a DST transition can land an
+  hour out and is not worth a dependency for an 08:00 email.
+- **The scheduler lives in the worker loop**, not in cron: `ensureScheduledJobs()` re-enqueues
+  today's `reminders` and this hour's `sweeper` under dedupe keys, so it is idempotent, a second
+  worker cannot double-send, and **a worker that was down all morning still runs the day's reminders
+  when it comes back** (the job's `runAt` is in the past, not skipped). **This also fixes a real gap:
+  nothing had ever enqueued the C2.3 sweeper.**
+- **`jobs/handlers/reminders.ts`** — three days out, on the day, then **weekly** while overdue. Not
+  daily: a daily email about the same missing form is how a client learns to filter the sender. One
+  notice per client per day however many items are due; **counts, never contents**; deactivated
+  clients are not chased; and answered items drop out on their own because the query only looks at
+  `requested` / `needs_correction` — there is no separate cancellation to forget. The email carries
+  `dedupeKey reminder:<clientId>:<date>`.
+- **`NotificationsPopover` is on `GET /notifications`.** It used to compare activity timestamps to a
+  value in *this browser's* localStorage, which made the badge wrong in the second tab, wrong on the
+  phone, and clearable by looking at it in the wrong place. Opening the list marks it read for the
+  account, everywhere. The portal gets the same bell.
+- **Tests: `reminders.test.ts`, 11 cases.** The schedule is pure date arithmetic, so it is tested
+  against fixed dates rather than a clock — including that 02:00 UTC is still yesterday in Chicago,
+  and that 08:00 local is 13:00 UTC in April but 14:00 in January. The run is then driven against
+  the real database with an explicit `today`, exactly as the job does it.
+
+`FIRM_TIMEZONE` added to `.env.example`. No migration — the `notifications` table has been waiting
+since C2.1. Gate: root `npm run typecheck` clean, `npm run lint` 0 errors / 9 warnings, `npm run
+build` OK, `npm test` 30 passed; server `npm run build` + `typecheck:test` clean, **`reminders.test.ts`
+11 passed**, and `jobs` / `workflow` / `documents` re-run green. Suite total 665.
 
 C4.2 notes: uploading is now a queue, and the portal survives a phone.
 

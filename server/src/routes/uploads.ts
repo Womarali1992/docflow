@@ -24,6 +24,7 @@ import { publishStagedUpload } from '../files/publish.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, notFound } from './scope.js';
+import { notify } from '../notify.js';
 import type { Document } from '../db/schema.js';
 
 const router = Router();
@@ -60,6 +61,17 @@ async function finish(req: Request, res: Response, resolveDocument: () => Promis
     return res.status(outcome.status).json({ error: outcome.error, code: outcome.code });
   }
 
+  // The advisor hears about a client's upload; their own deliverable is not news.
+  if (auth.kind === 'client') {
+    await notify({
+      userKind: 'provider',
+      userId: document.providerId,
+      type: 'upload.received',
+      title: `${auth.name} sent ${document.displayName ?? document.name}`,
+      body: outcome.status === 202 ? 'It is being checked before it can be opened.' : null,
+      link: `/review/${document.id}`,
+    });
+  }
   await recordActivity({
     providerId: document.providerId,
     clientId: document.clientId,

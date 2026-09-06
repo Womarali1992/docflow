@@ -16,7 +16,7 @@ import { db, schema } from '../db/client.js';
 import type { Job } from '../db/schema.js';
 
 /** Job types this build knows about. The worker refuses anything else. */
-export const JOB_TYPES = ['email', 'scan_retry', 'sweeper'] as const;
+export const JOB_TYPES = ['email', 'scan_retry', 'sweeper', 'reminders'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 /** A lock this old belonged to a worker that is gone; the job may be claimed again. */

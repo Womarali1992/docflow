@@ -2,6 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { I } from './icons';
 import { useAuth } from '@/context/AuthContext';
+import NotificationsPopover from './NotificationsPopover';
 
 interface ClientTopbarProps {
   onMenuClick?: () => void;
@@ -45,6 +46,7 @@ const ClientTopbar: React.FC<ClientTopbarProps> = ({ onMenuClick }) => {
         <span className="df-now">{title}</span>
       </div>
       <div className="df-spacer" />
+      <NotificationsPopover />
       <button className="df-btn" onClick={handleLogout}>Sign out</button>
     </div>
   );
