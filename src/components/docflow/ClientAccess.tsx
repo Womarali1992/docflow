@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import { api } from '@/api/client';
 import type { Client } from '@/api/types';
-import { useClients } from '@/context/ClientsContext';
+import { useClientResetLink, useDeactivateClient, useInviteClient, useReactivateClient } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { ACCESS_LABEL, accessState } from '@/utils/clientAccess';
@@ -15,8 +14,13 @@ import { I } from './icons';
  * a copy-link password reset, and deactivate / reactivate with a confirm.
  */
 const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
-  const { refresh } = useClients();
   const { toast } = useToast();
+  /* Each mutation invalidates the client row and the list it sits in, so the
+     access pill and the directory follow without a manual refresh. */
+  const inviteClient = useInviteClient();
+  const resetLinkFor = useClientResetLink();
+  const deactivateClient = useDeactivateClient();
+  const reactivateClient = useReactivateClient();
   const [link, setLink] = useState<OneTimeLinkView | null>(null);
   const [confirmOff, setConfirmOff] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -38,19 +42,18 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
 
   const invite = () =>
     guard(async () => {
-      const r = await api.clients.invite(client.id);
+      const r = await inviteClient.mutateAsync(client.id);
       setLink({
         title: state === 'invited' ? `New invitation for ${client.name}` : `Invite ${client.name}`,
         link: r.link,
         expiresAt: r.expiresAt,
         hint: invitationHint(r.emailQueued, 'client-page'),
       });
-      await refresh();
     }, 'Could not create the invitation');
 
   const resetLink = () =>
     guard(async () => {
-      const r = await api.clients.resetLink(client.id);
+      const r = await resetLinkFor.mutateAsync(client.id);
       setLink({
         title: `Password reset for ${client.name}`,
         link: r.link,
@@ -61,17 +64,15 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
 
   const deactivate = () =>
     guard(async () => {
-      await api.clients.deactivate(client.id);
+      await deactivateClient.mutateAsync(client.id);
       setConfirmOff(false);
       toast({ title: 'Client deactivated', description: `${client.name} is signed out and cannot sign in until reactivated.` });
-      await refresh();
     }, 'Could not deactivate');
 
   const reactivate = () =>
     guard(async () => {
-      await api.clients.reactivate(client.id);
+      await reactivateClient.mutateAsync(client.id);
       toast({ title: 'Client reactivated', description: `${client.name} can sign in again.` });
-      await refresh();
     }, 'Could not reactivate');
 
   return (

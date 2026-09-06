@@ -395,33 +395,16 @@ const cases: Case[] = [
     check: (res) => expect(res.body).toHaveLength(0),
   },
 
-  /* ------------------------- presets (read-only shim over templates, C2.2) */
+  /* ------------------- presets: removed in C3.2, and staying removed */
   {
-    // Still answers, still in the old bins shape, but the rows now come from
-    // request_templates — one place the data lives (Compatibility ledger).
-    name: 'GET /api/presets (read-only shim over templates)',
+    // The shim existed only so the old Settings screen kept working while the
+    // data moved to request_templates. The templates editor replaced that
+    // screen, so the route is gone — 404 for everyone, including the advisor
+    // who used to own it. A row here rather than silence: a compatibility
+    // route that quietly comes back is how a legacy surface survives forever.
+    name: 'GET /api/presets (removed in C3.2 — templates replaced it)',
     req: () => request(app).get('/api/presets'),
-    expect: S(200, 200, 403, 403, 403, 401),
-    check: (res, fx, actor) => {
-      const rows = res.body as Array<{ id: string; providerId: string; name: string; bins: Array<{ label: string; items: unknown[] }> }>;
-      // The starter templates, seeded on first read and scoped to this advisor.
-      expect(rows.map((r) => r.name).sort()).toEqual(['Business tax return', 'Individual tax return']);
-      expect(rows.every((r) => r.providerId === selfProvider(fx, actor)!.id)).toBe(true);
-      expect(rows.every((r) => r.bins.length > 0)).toBe(true);
-    },
-  },
-  {
-    name: 'POST /api/presets (gone — use /templates)',
-    req: () =>
-      request(app)
-        .post('/api/presets')
-        .send({ name: 'Quarterly pack', bins: [{ id: 'b1', label: 'Quarterly', items: [{ name: 'P&L' }] }] }),
-    expect: S(410, 410, 403, 403, 403, 401),
-  },
-  {
-    name: 'DELETE /api/presets/:id (gone — use /templates)',
-    req: (fx) => request(app).delete(`/api/presets/${fx.provider1.preset}`),
-    expect: S(410, 410, 403, 403, 403, 401),
+    expect: S(404, 404, 404, 404, 404, 404),
   },
 
   /* --------------------------------------------------------- engagements */

@@ -1,41 +1,56 @@
 import React, { useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { I } from './icons';
-import { useClients } from '@/context/ClientsContext';
-import { useDocumentsStore } from '@/context/DocumentsContext';
+import { useClient, useEngagement } from '@/api/queries';
 import { useAuth } from '@/context/AuthContext';
 import SearchPalette from './SearchPalette';
 import NotificationsPopover from './NotificationsPopover';
-import RequestDocumentDialog from './RequestDocumentDialog';
 
 interface TopbarProps {
   onMenuClick?: () => void;
 }
 
+/**
+ * Breadcrumbs, search, refresh, sign out.
+ *
+ * "New request" used to live here and created a bare requested-document row
+ * outside any engagement — the exact shape C2.1 replaced. Requests now belong
+ * to a checklist, so they are added where the checklist is.
+ */
 const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const params = useParams();
-  const { clients, refresh: refreshClients } = useClients();
-  const { documents, refresh: refreshDocs } = useDocumentsStore();
+  const queryClient = useQueryClient();
   const { logout } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
-  const [requestOpen, setRequestOpen] = useState(false);
 
-  const crumbs: { label: string; muted?: boolean }[] = (() => {
+  const clientId = params.clientId as string | undefined;
+  const engagementId = params.engagementId as string | undefined;
+  const { data: client } = useClient(clientId);
+  const { data: engagement } = useEngagement(engagementId);
+
+  const crumbs: { label: string; to?: string; muted?: boolean }[] = (() => {
     if (pathname === '/') return [{ label: 'Overview' }];
-    if (pathname === '/overview') return [{ label: 'Calendar' }];
-    if (pathname === '/settings') return [{ label: 'Settings' }];
-    if (pathname === '/documents') return [{ label: 'Documents' }];
-    if (pathname.startsWith('/clients')) {
-      const id = params.clientId as string | undefined;
-      const client = id ? clients.find(c => c.id === id) : undefined;
-      return [{ label: 'Clients', muted: true }, { label: client?.name || 'Client' }];
+    if (pathname === '/overview') return [{ label: 'Financial overview' }];
+    if (pathname.startsWith('/settings')) return [{ label: 'Settings' }];
+    if (pathname.startsWith('/templates')) return [{ label: 'Templates' }];
+    if (pathname === '/clients') return [{ label: 'Clients' }];
+    if (pathname.startsWith('/clients/')) {
+      return [{ label: 'Clients', to: '/clients', muted: true }, { label: client?.name || 'Client' }];
     }
+    if (pathname.startsWith('/engagements/')) {
+      const c = engagement?.engagement.clientId;
+      return [
+        { label: 'Clients', to: '/clients', muted: true },
+        ...(c ? [{ label: client?.name || 'Client', to: `/clients/${c}`, muted: true }] : []),
+        { label: engagement?.engagement.title || 'Engagement' },
+      ];
+    }
+    if (pathname === '/documents') return [{ label: 'Documents' }];
     if (pathname.startsWith('/documents/')) {
-      const id = params.documentId as string | undefined;
-      const doc = id ? documents.find(d => d.id === id) : undefined;
-      return [{ label: 'Documents', muted: true }, { label: doc?.name || 'Document' }];
+      return [{ label: 'Documents', to: '/documents', muted: true }, { label: 'Document' }];
     }
     return [{ label: 'Not found' }];
   })();
@@ -45,18 +60,15 @@ const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
     navigate('/login', { replace: true });
   };
 
+  /** Everything on screen comes from the cache, so a refresh is an invalidation. */
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([refreshClients(), refreshDocs()]);
+      await queryClient.invalidateQueries();
     } finally {
       setRefreshing(false);
     }
   };
-
-  // Request target: the client currently in view, else the first client.
-  const routeClientId = params.clientId as string | undefined;
-  const requestClient = clients.find(c => c.id === routeClientId) || clients[0];
 
   return (
     <div className="df-topbar">
@@ -67,7 +79,11 @@ const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
         {crumbs.map((c, i) => (
           <React.Fragment key={i}>
             {i > 0 && <span className="df-sep">/</span>}
-            <span className={c.muted ? '' : 'df-now'}>{c.label}</span>
+            {c.to ? (
+              <button className="df-link" onClick={() => navigate(c.to!)}>{c.label}</button>
+            ) : (
+              <span className={c.muted ? '' : 'df-now'}>{c.label}</span>
+            )}
           </React.Fragment>
         ))}
       </div>
@@ -78,18 +94,6 @@ const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
       </button>
       <NotificationsPopover />
       <button className="df-btn" onClick={handleLogout} title="Sign out">Sign out</button>
-      <button className="df-btn df-primary" disabled={!requestClient} onClick={() => setRequestOpen(true)}>
-        <I.Plus size={13} /> New request
-      </button>
-
-      {requestClient && (
-        <RequestDocumentDialog
-          open={requestOpen}
-          onClose={() => setRequestOpen(false)}
-          clientId={requestClient.id}
-          clientName={requestClient.name}
-        />
-      )}
     </div>
   );
 };

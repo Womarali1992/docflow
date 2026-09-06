@@ -15,6 +15,9 @@ import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 import FinancialOverview from "./pages/FinancialOverview";
 import Client from "./pages/Client";
+import Clients from "./pages/Clients";
+import Engagement from "./pages/Engagement";
+import Templates from "./pages/Templates";
 import ClientPortal from "./pages/ClientPortal";
 import DocumentsPage from "./pages/Documents";
 import DocumentPage from "./pages/Document";
@@ -37,7 +40,10 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/overview" element={<FinancialOverview />} />
+          <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:clientId" element={<Client />} />
+          <Route path="/engagements/:engagementId" element={<Engagement />} />
+          <Route path="/templates" element={<Templates />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/documents/:documentId" element={<DocumentPage />} />
         </Route>

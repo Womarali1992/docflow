@@ -15,7 +15,6 @@ import notificationRoutes from './routes/notifications.js';
 import uploadRoutes from './routes/uploads.js';
 import documentRoutes from './routes/documents.js';
 import messageRoutes from './routes/messages.js';
-import presetRoutes from './routes/presets.js';
 import activityRoutes from './routes/activities.js';
 import opsRoutes from './routes/ops.js';
 import { appOrigin, originCheck } from './auth/csrf.js';
@@ -75,7 +74,6 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/messages', messageRoutes);
-app.use('/api/presets', presetRoutes);
 app.use('/api/activities', activityRoutes);
 // Advisor-only operational status (queue depth, mail configuration); grows in C5.2.
 app.use('/api/ops', opsRoutes);

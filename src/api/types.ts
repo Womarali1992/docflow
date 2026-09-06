@@ -125,15 +125,6 @@ export interface Activity {
   createdAt: Date;
 }
 
-export interface Preset {
-  id: string;
-  providerId: string;
-  name: string;
-  bins: { id: string; label: string; items: { name: string }[] }[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
 /** A live server session of the current user (GET /auth/sessions). */
 export interface SessionSummary {
   id: string;
@@ -193,6 +184,22 @@ export type ScanStatus = 'pending' | 'clean' | 'infected' | 'encrypted' | 'error
 export type ReviewDecision = 'accepted' | 'needs_correction';
 export type TemplateKind = 'individual_tax' | 'business_tax' | 'custom';
 
+/**
+ * Where an engagement's checklist stands, counted on the server.
+ *
+ * `outstanding` is with the client, `submitted` is with the advisor, and
+ * `overdue` is a slice of `outstanding` — deliberately overlapping, because
+ * "late" and "waiting" are two different questions about the same line.
+ */
+export interface EngagementCounts {
+  total: number;
+  outstanding: number;
+  submitted: number;
+  accepted: number;
+  waived: number;
+  overdue: number;
+}
+
 /** The unit of work a checklist hangs off ("2026 Individual Tax Return"). */
 export interface Engagement {
   id: string;
@@ -206,6 +213,8 @@ export interface Engagement {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Only on the list route: a single engagement is read with its requests anyway. */
+  requestCounts?: EngagementCounts;
 }
 
 /**

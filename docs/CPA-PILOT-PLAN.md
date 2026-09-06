@@ -25,7 +25,7 @@
 | C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | SHIPPED 2026-09-06 |
 | C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | SHIPPED 2026-09-06 |
 | C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | SHIPPED 2026-09-06 |
-| C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | NOT STARTED |
+| C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | SHIPPED 2026-09-07 |
 | C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | NOT STARTED |
 | C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | NOT STARTED |
 | C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | NOT STARTED |
@@ -36,11 +36,64 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C3.2** (client directory, client page with engagements, engagement checklist, templates
-editor). Phases 0–2 are complete and **C3.1 has shipped**, so the data layer, the fonts and the
-token remap every later screen needs are in place. C3.2 is the first screen commit: it builds on
-`src/api/queries/*` and **removes both presets shims** (the read-only `GET /presets` route and the
-frontend bins↔items adapter in `api.presets`).
+**NEXT = C3.3** (the review workspace at `/review/:documentId`: preview, version history, thread,
+Accept / Request correction / Waive, and `Document.tsx` redirecting there). C3.1 and **C3.2 have
+shipped**, so the data layer and the advisor's engagement screens exist; C3.3 is where a document is
+actually looked at, and it is the last screen before C3.4 removes the two contexts.
+
+C3.2 notes: the advisor's workspace, rebuilt around engagements instead of a heap of documents.
+
+- **New screens.** `/clients` (`pages/Clients.tsx`) — search, three filters (all / needs attention /
+  no portal access), sort, CSV export, invite status. `/clients/:id` (`pages/Client.tsx`, rewritten)
+  — engagements with progress bars, activity, thread, account controls. `/engagements/:id`
+  (`pages/Engagement.tsx`) — four live counts and three tabs (Checklist · Client uploads ·
+  Deliverables) beside the thread. `/templates` (`pages/Templates.tsx`) — the checklist editor.
+- **`DocFlowDashboard.tsx` (584 lines) and `RequestDocumentDialog.tsx` are DELETED.** The dialog
+  created a bare requested-document row outside any engagement — the exact shape C2.1 replaced — and
+  the Topbar's "New request" button went with it: a request belongs to a checklist, so it is added
+  where the checklist is.
+- **Components:** `docflow/engagement/{Checklist,ChecklistItem,AddItemsDialog,Deliverables,Uploads}.tsx`,
+  plus `NewEngagementDialog`, `EngagementProgress` and a reusable `ReasonDialog` (the note a client
+  reads, the reason a waiver carries — both refused empty by the server, so the button stays
+  disabled until something is typed).
+- **The actions offered are the ones the server will accept in that state.** No Accept on a line
+  nothing has been submitted against: the server answers `nothing_submitted`, and a button that
+  fails is worse than no button. Sharing a deliverable is confirmed, and disabled until the scan has
+  passed.
+- **Reordering renumbers the whole list** rather than swapping two `sortOrder` values — an imported
+  checklist can arrive with every value at zero, where a swap would do nothing at all.
+- **Server change (additive):** `GET /engagements` now answers each row with
+  `requestCounts {total, outstanding, submitted, accepted, waived, overdue}` from **one grouped
+  query**. Without it a client page with eight engagements would be nine round trips. `overdue`
+  repeats `serialize.ts#isOverdue` (outstanding *and* past its date) and the two must move together.
+  Two tests in `workflow.test.ts` cover the counts, including an engagement with no checklist
+  answering zeros rather than omitting the field.
+- **Both presets shims are gone** (Compatibility ledger): `server/src/routes/presets.ts` deleted and
+  unmounted, the frontend `api.presets` bins↔items adapter and the `Preset` type deleted, and the
+  Settings presets screen replaced by a pointer to Templates. The authz matrix keeps **one** row for
+  `GET /api/presets` asserting **404 for every actor** — a compatibility route that quietly comes
+  back is how a legacy surface survives forever. The legacy `presets` *table* stays until C5.4; the
+  importer still reads it.
+- **Migrated off the contexts** (C3.4 deletes them): `useMessageThread` now wraps the query layer
+  (threads poll at 5 s and mark read once per thread, not once per refresh), `ClientAccess`,
+  `NewClientDialog`, `Sidebar` and `Topbar`. `Topbar`'s refresh is now
+  `queryClient.invalidateQueries()`. `Index.tsx`, `Documents.tsx`, `Document.tsx` and
+  `ClientPortal.tsx` still use them until C3.4 / C4.1.
+- **Deviation, deliberate:** the spec says "drag reorder" for the templates editor; both editors use
+  **up/down buttons** instead. Drag needs a keyboard alternative to pass C5.1's keyboard-only walk
+  anyway, and two buttons are that alternative — one control instead of two.
+- **New CSS** in `styles.css` (df tokens only, no new palette): `.df-progress`/`.df-progress-fill`,
+  `.df-reorder`, `.df-note`/`.df-note-warn`, and `.df-row.df-selected`.
+
+Gate: root `npm run typecheck` clean, `npm run lint` 0 errors / 11 inherited warnings, `npm run
+build` OK, `npm test` 18 passed; server `npm run build` + `typecheck:test` clean. **The 660-test
+baseline was re-run in full and confirmed BEFORE any edit** (14 files, 12.5 min) — which also closed
+the gate C3.1 could not finish. After the change, the two files this commit touches were run:
+**`authz.test.ts` 454 passed** (466 − 18 preset cases + 6 for the row asserting the route stays
+removed) and **`workflow.test.ts` 26 passed** (+2 new). The suite total is therefore 650; it has not
+been re-run end to end since, because a full run on this box now takes ~25 min under memory pressure
+and no other file touches `/api/presets` or the engagements list. Run it whole at the start of C3.3.
+No migration.
 
 C3.1 notes (`a062c34`): the commit is the foundation the C3.x/C4.x screens stand on, so most of it is
 infrastructure rather than pixels.
@@ -934,12 +987,12 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 | `documents` workflow columns nullable (`kind IS NULL` = not imported) | C2.1 | C5.4 |
 | `GET /documents` legacy list shape | C2.2 | C3.4 |
 | `PATCH /documents/:id` still accepts the legacy review fields | C2.2 | C3.4 |
-| `GET /presets` read-only shim over `request_templates` (POST/DELETE → 410) | C2.2 | C3.2 |
-| `api.presets.create/remove` → `/templates` bins↔items adapter (frontend) | C2.2 | C3.2 |
+| ~~`GET /presets` read-only shim over `request_templates` (POST/DELETE → 410)~~ | C2.2 | **REMOVED in C3.2** — the route is gone; an authz row asserts 404 |
+| ~~`api.presets.create/remove` → `/templates` bins↔items adapter (frontend)~~ | C2.2 | **REMOVED in C3.2** — with the `Preset` type and the Settings presets screen |
 | `POST /documents/:id/file` → creates a version | C2.3 | C5.4 |
 | `GET /documents/:id/download` resolves the current version (brought forward from C2.4) | C2.3 | kept (public contract) |
 | `GET /documents/:id/download` → current version | C2.3 | kept (public contract) |
-| `presets` read-only shim over templates | C2.2 | C5.4 |
+| legacy `presets` **table** (read by the importer, no route reads it since C3.2) | — | C5.4 |
 | `req.auth` shape from the JWT era | C1.1 | kept |
 | `server/uploads/` on disk | — | C5.4 after integrity |
 

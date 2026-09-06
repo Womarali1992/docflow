@@ -3,8 +3,7 @@ import Modal from './Modal';
 import LinkModal, { type OneTimeLinkView } from './LinkModal';
 import { invitationHint } from './linkHints';
 import { I } from './icons';
-import { api } from '@/api/client';
-import { useClients } from '@/context/ClientsContext';
+import { useCreateClient, useInviteClient } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import type { Client } from '@/api/types';
@@ -21,8 +20,9 @@ interface Props {
  * passwords are typed on the advisor's side.
  */
 const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
-  const { refresh } = useClients();
   const { toast } = useToast();
+  const createClient = useCreateClient();
+  const inviteClient = useInviteClient();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [plan, setPlan] = useState('Core');
@@ -46,18 +46,16 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
     if (!name.trim() || !email.trim() || busy) return;
     setBusy(true);
     try {
-      const c = await api.clients.create({
+      const c = await createClient.mutateAsync({
         name: name.trim(),
         email: email.trim(),
         plan: plan.trim() || 'Core',
         aum: aum.trim() ? Number(aum) : null,
       });
-      await refresh();
       toast({ title: 'Client created', description: `${c.name} was added.` });
       setCreated(c);
       try {
-        const link = await api.clients.invite(c.id);
-        await refresh();
+        const link = await inviteClient.mutateAsync(c.id);
         setInvite({
           title: `Invite ${c.name}`,
           link: link.link,

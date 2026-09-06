@@ -1,58 +1,43 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api } from '@/api/client';
-import type { Message } from '@/api/types';
-import { useClients } from '@/context/ClientsContext';
+import { useCallback, useEffect, useRef } from 'react';
+import { useMarkThreadRead, useMessages, useSendMessage, type ThreadRef } from '@/api/queries';
 
 /**
- * Loads a message thread (optionally scoped to a document), marks the other
- * party's messages as read on open, and refreshes the clients list so unread
- * badges clear. Providers must pass a clientId; clients are self-scoped server-side.
+ * One message thread — the client's, or one scoped to a document.
+ *
+ * Since C3.2 this is a thin wrapper over the query layer: the thread refreshes
+ * itself every five seconds (those refreshes carry the poll header, so a thread
+ * left open on a second monitor does not hold the session open), and sending
+ * invalidates the unread counts the advisor's screens read.
+ *
+ * Opening a thread marks the other party's messages read — once per thread, not
+ * once per refresh, or the badge would clear again every five seconds.
  */
-export function useMessageThread(params: { clientId?: string; documentId?: string }) {
-  const { clientId, documentId } = params;
-  const { refresh: refreshClients } = useClients();
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [sending, setSending] = useState(false);
+export function useMessageThread(thread: ThreadRef) {
+  const { clientId, documentId } = thread;
+  const { data: messages = [], isPending: loading } = useMessages({ clientId, documentId });
+  const sendMessage = useSendMessage({ clientId, documentId });
+  const markRead = useMarkThreadRead({ clientId, documentId });
 
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await api.messages.list({ clientId, documentId });
-      setMessages(list);
-    } catch {
-      setMessages([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [clientId, documentId]);
+  const markReadRef = useRef(markRead.mutate);
+  markReadRef.current = markRead.mutate;
 
+  const threadKey = `${clientId ?? ''}|${documentId ?? ''}`;
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      await reload();
-      if (cancelled) return;
-      try {
-        const res = await api.messages.markRead({ clientId, documentId });
-        if (res.updated > 0) refreshClients();
-      } catch {
-        /* mark-read is best-effort */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [reload, clientId, documentId, refreshClients]);
+    if (!clientId && !documentId) return;
+    markReadRef.current(undefined, {
+      // Best-effort: a thread that will not mark read is still readable.
+      onError: () => undefined,
+    });
+  }, [threadKey, clientId, documentId]);
 
-  const send = useCallback(async (content: string) => {
-    const body = content.trim();
-    if (!body) return;
-    setSending(true);
-    try {
-      const created = await api.messages.send({ clientId, documentId, content: body });
-      setMessages((prev) => [...prev, created]);
-    } finally {
-      setSending(false);
-    }
-  }, [clientId, documentId]);
+  const send = useCallback(
+    async (content: string) => {
+      const body = content.trim();
+      if (!body) return;
+      await sendMessage.mutateAsync(body);
+    },
+    [sendMessage]
+  );
 
-  return { messages, loading, sending, send, reload };
+  return { messages, loading, sending: sendMessage.isPending, send };
 }

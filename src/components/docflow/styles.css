@@ -1231,3 +1231,58 @@
 /* Theme: forest */
 .df-root.df-theme-forest { --df-accent: oklch(40% 0.10 160); --df-accent-hover: oklch(35% 0.11 160); --df-accent-soft: oklch(96% 0.025 160); --df-accent-ink: oklch(32% 0.10 160); }
 /* Theme: sand (default) handled by base */
+
+/* Checklists and engagements (C3.2) ======================= */
+
+/* How far through a checklist an engagement is. Hairline track, accent fill —
+   no gradient, no animation: it is a fact, not a celebration. */
+.df-root .df-progress {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--df-panel-3);
+  border: 1px solid var(--df-border-soft);
+  overflow: hidden;
+}
+.df-root .df-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--df-accent);
+  border-radius: 999px;
+  min-width: 2px;
+}
+
+/* Move-up / move-down, stacked in the row gutter. */
+.df-root .df-reorder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+.df-root .df-reorder .df-icon-btn {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+}
+
+/* An inline explanation attached to a row: a waiver's reason, a scan that has
+   not finished, a client saying they do not have something. */
+.df-root .df-note {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--df-border);
+  border-left: 2px solid var(--df-border-strong);
+  border-radius: var(--df-radius-sm);
+  background: var(--df-panel-2);
+  font-size: 12px;
+  color: var(--df-ink-2);
+}
+.df-root .df-note-warn {
+  border-left-color: var(--df-warn);
+  background: var(--df-warn-soft);
+}
+
+/* The templates list marks the checklist being edited. */
+.df-root .df-row.df-selected {
+  background: var(--df-accent-soft);
+  border-color: var(--df-accent);
+}

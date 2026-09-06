@@ -14,7 +14,6 @@ import type {
   NotificationList,
   OneTimeLink,
   OpsStatus,
-  Preset,
   RequestFrequency,
   RequestItem,
   RequestTemplate,
@@ -145,50 +144,6 @@ async function upload(path: string, file: File): Promise<UploadResult> {
   fd.append('file', file);
   const { status, data } = await send<Omit<UploadResult, 'status'>>(path, { method: 'POST', body: fd });
   return { ...data, status };
-}
-
-/* ---- Presets ↔ templates adapter (C2.2; removed with the C3.2 editor) ---- */
-
-interface TemplateItemDto {
-  key: string;
-  title: string;
-  category: string | null;
-  instructions: string | null;
-  required: boolean;
-}
-
-interface TemplateDto {
-  id: string;
-  providerId: string;
-  name: string;
-  items: TemplateItemDto[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-/** A bin becomes the category of each item it holds. */
-function binsToItems(bins: Preset['bins']): TemplateItemDto[] {
-  return bins.flatMap((bin) =>
-    bin.items.map((item) => ({
-      key: `${bin.id}:${item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60) || 'item'}`,
-      title: item.name,
-      category: bin.label,
-      instructions: null,
-      required: true,
-    }))
-  );
-}
-
-/** …and back again, so the existing Settings screen keeps its shape. */
-function templateToPreset(t: TemplateDto): Preset {
-  const byLabel = new Map<string, Preset['bins'][number]>();
-  for (const item of t.items ?? []) {
-    const label = item.category ?? 'Documents';
-    const bin = byLabel.get(label) ?? { id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'), label, items: [] };
-    bin.items.push({ name: item.title });
-    byLabel.set(label, bin);
-  }
-  return { id: t.id, providerId: t.providerId, name: t.name, bins: [...byLabel.values()], createdAt: t.createdAt, updatedAt: t.updatedAt };
 }
 
 export const api = {
@@ -482,21 +437,4 @@ export const api = {
     },
   },
 
-  /**
-   * Request presets. The server renamed these to *templates* in C2.2: reads still
-   * come back in the old bins shape from the read-only /presets shim, and writes
-   * go straight to /templates. C3.2 replaces this whole surface with a real
-   * templates editor and this adapter goes away with it.
-   */
-  presets: {
-    list: () => request<Preset[]>('/presets'),
-    create: async (input: { name: string; bins: Preset['bins'] }) => {
-      const created = await request<TemplateDto>('/templates', {
-        method: 'POST',
-        body: JSON.stringify({ name: input.name, items: binsToItems(input.bins) }),
-      });
-      return templateToPreset(created);
-    },
-    remove: (id: string) => request<{ ok: true }>(`/templates/${id}`, { method: 'DELETE' }),
-  },
 };

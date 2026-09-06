@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode, useCallback } from 'react';
 import { api } from '@/api/client';
-import type { Document, RequestFrequency, Preset } from '@/api/types';
+import type { Document, RequestFrequency } from '@/api/types';
 import { useAuth } from './AuthContext';
 
 type DocumentPatch = Partial<{
@@ -37,11 +37,6 @@ interface DocumentsContextValue {
   updateRequestFrequency: (documentId: string, frequency: RequestFrequency) => Promise<void>;
   updateDocumentDueDate: (documentId: string, dueDate: Date | undefined) => Promise<void>;
   deleteRequestedDocument: (documentId: string) => Promise<void>;
-
-  // Presets
-  presets: Preset[];
-  savePreset: (name: string, bins: Preset['bins']) => Promise<Preset>;
-  deletePreset: (id: string) => Promise<void>;
 }
 
 const DocumentsContext = createContext<DocumentsContextValue | undefined>(undefined);
@@ -51,23 +46,16 @@ const extOf = (fileName: string) => fileName.split('.').pop()?.toLowerCase() || 
 export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
   const { me } = useAuth();
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!me) {
       setDocuments([]);
-      setPresets([]);
       return;
     }
     setLoading(true);
     try {
-      const [docs, ps] = await Promise.all([
-        api.documents.list(),
-        me.kind === 'provider' ? api.presets.list() : Promise.resolve([] as Preset[]),
-      ]);
-      setDocuments(docs);
-      setPresets(ps);
+      setDocuments(await api.documents.list());
     } finally {
       setLoading(false);
     }
@@ -160,17 +148,6 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
     []
   );
 
-  const savePreset = useCallback<DocumentsContextValue['savePreset']>(async (name, bins) => {
-    const created = await api.presets.create({ name, bins });
-    setPresets((prev) => [created, ...prev]);
-    return created;
-  }, []);
-
-  const deletePreset = useCallback<DocumentsContextValue['deletePreset']>(async (id) => {
-    await api.presets.remove(id);
-    setPresets((prev) => prev.filter((p) => p.id !== id));
-  }, []);
-
   const value = useMemo(
     () => ({
       documents,
@@ -183,15 +160,11 @@ export const DocumentsProvider = ({ children }: { children: ReactNode }) => {
       updateRequestFrequency,
       updateDocumentDueDate,
       deleteRequestedDocument,
-      presets,
-      savePreset,
-      deletePreset,
     }),
     [
-      documents, loading, presets, refresh,
+      documents, loading, refresh,
       requestDocument, fulfillRequest, uploadDocument, patchDocument,
       updateRequestFrequency, updateDocumentDueDate, deleteRequestedDocument,
-      savePreset, deletePreset,
     ]
   );
 

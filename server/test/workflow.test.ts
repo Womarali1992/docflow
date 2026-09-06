@@ -400,6 +400,56 @@ describe('engagements and templates', () => {
     expect(res.body.code).toBe('engagement_closed');
   });
 
+  it('answers the engagement list with the checklist counts behind each progress bar', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const engagementId = fx.client1a.engagement;
+
+    // The fixture's engagement has one request, already answered by an upload.
+    const before = await request(app).get(`/api/engagements?clientId=${fx.client1a.id}`).set('Cookie', advisor);
+    expect(before.status).toBe(200);
+    const start = (before.body as Array<{ id: string; requestCounts: Record<string, number> }>).find((e) => e.id === engagementId)!;
+    expect(start.requestCounts.total).toBe(1);
+
+    // Two more lines: one plain, one already a day late.
+    const added = await request(app)
+      .post(`/api/engagements/${engagementId}/requests`)
+      .set('Cookie', advisor)
+      .send({
+        items: [{ title: 'Counted item' }, { title: 'Late item' }],
+        dueDate: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      });
+    expect(added.status).toBe(201);
+
+    // The seeded line is still outstanding; answer it, then accept the answer.
+    await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+    const accepted = await request(app).post(`/api/requests/${fx.client1a.request}/accept`).set('Cookie', advisor);
+    expect(accepted.status).toBe(200);
+
+    const after = await request(app).get(`/api/engagements?clientId=${fx.client1a.id}`).set('Cookie', advisor);
+    const counts = (after.body as Array<{ id: string; requestCounts: Record<string, number> }>).find((e) => e.id === engagementId)!.requestCounts;
+
+    expect(counts.total).toBe(3);
+    expect(counts.accepted).toBe(1);
+    expect(counts.outstanding).toBe(2);
+    // Overdue is a slice of outstanding, not a bucket beside it.
+    expect(counts.overdue).toBe(2);
+    expect(counts.submitted).toBe(0);
+    expect(counts.waived).toBe(0);
+  });
+
+  it('counts nothing for an engagement with no checklist, rather than omitting the field', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const created = await request(app)
+      .post('/api/engagements')
+      .set('Cookie', advisor)
+      .send({ clientId: fx.client1a.id, title: 'Empty engagement' });
+    expect(created.status).toBe(201);
+
+    const list = await request(app).get(`/api/engagements?clientId=${fx.client1a.id}`).set('Cookie', advisor);
+    const row = (list.body as Array<{ id: string; requestCounts: Record<string, number> }>).find((e) => e.id === created.body.id)!;
+    expect(row.requestCounts).toEqual({ total: 0, outstanding: 0, submitted: 0, accepted: 0, waived: 0, overdue: 0 });
+  });
+
   it('will not attach a document to another client’s engagement', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const res = await request(app)

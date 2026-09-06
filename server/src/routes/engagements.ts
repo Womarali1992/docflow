@@ -7,7 +7,7 @@
  * PATCH edits wording and dates, `close` / `reopen` move the engagement.
  */
 import { Router, type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
@@ -48,6 +48,48 @@ const createSchema = z.object({
   taxYear: z.number().int().min(1900).max(2200).nullable().optional(),
 });
 
+/**
+ * Where each engagement's checklist stands, in one grouped query.
+ *
+ * The alternative — reading every engagement's tree to count its lines — turns
+ * a client page with eight engagements into nine round trips, so the numbers
+ * come back with the list. `overdue` repeats the definition in
+ * `serialize.ts#isOverdue` (outstanding *and* past its date); the two must move
+ * together, which is why the statuses are spelled out rather than implied.
+ */
+async function countRequestsByEngagement(ids: string[], now: Date) {
+  const counts = new Map<string, { total: number; outstanding: number; submitted: number; accepted: number; waived: number; overdue: number }>();
+  if (ids.length === 0) return counts;
+
+  const rows = await db
+    .select({
+      engagementId: schema.requests.engagementId,
+      total: sql<number>`count(*)::int`,
+      outstanding: sql<number>`count(*) FILTER (WHERE ${schema.requests.status} IN ('requested', 'needs_correction'))::int`,
+      submitted: sql<number>`count(*) FILTER (WHERE ${schema.requests.status} IN ('submitted', 'in_review'))::int`,
+      accepted: sql<number>`count(*) FILTER (WHERE ${schema.requests.status} = 'accepted')::int`,
+      waived: sql<number>`count(*) FILTER (WHERE ${schema.requests.status} = 'waived')::int`,
+      overdue: sql<number>`count(*) FILTER (WHERE ${schema.requests.status} IN ('requested', 'needs_correction') AND ${schema.requests.dueDate} IS NOT NULL AND ${schema.requests.dueDate} < ${now})::int`,
+    })
+    .from(schema.requests)
+    .where(and(inArray(schema.requests.engagementId, ids), isNull(schema.requests.archivedAt)))
+    .groupBy(schema.requests.engagementId);
+
+  for (const row of rows) {
+    counts.set(row.engagementId, {
+      total: Number(row.total),
+      outstanding: Number(row.outstanding),
+      submitted: Number(row.submitted),
+      accepted: Number(row.accepted),
+      waived: Number(row.waived),
+      overdue: Number(row.overdue),
+    });
+  }
+  return counts;
+}
+
+const NO_REQUESTS = { total: 0, outstanding: 0, submitted: 0, accepted: 0, waived: 0, overdue: 0 } as const;
+
 /* The advisor's engagements (optionally one client's); a client sees only their own. */
 router.get('/', async (req, res) => {
   const auth = req.auth!;
@@ -61,7 +103,14 @@ router.get('/', async (req, res) => {
       : eq(schema.engagements.clientId, auth.sub);
 
   const list = await db.select().from(schema.engagements).where(where).orderBy(desc(schema.engagements.createdAt));
-  res.json(list.map(serializeEngagement));
+  const counts = await countRequestsByEngagement(list.map((e) => e.id), new Date());
+
+  res.json(
+    list.map((e) => ({
+      ...serializeEngagement(e),
+      requestCounts: counts.get(e.id) ?? { ...NO_REQUESTS },
+    }))
+  );
 });
 
 router.post('/', requireProvider, async (req, res) => {
