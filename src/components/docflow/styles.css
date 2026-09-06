@@ -1358,3 +1358,54 @@
   box-shadow: var(--df-shadow-pop);
 }
 .df-root .df-kpi-button.df-kpi-live .df-kpi-value { color: var(--df-accent-ink); }
+
+/* Client portal — next steps (C4.1) ======================= */
+
+.df-root .df-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A card per thing the client has to do. Bigger type and bigger targets than
+   the advisor's rows: this is read once a month, on a phone, by someone who
+   does not use the app for a living. */
+.df-root .df-step {
+  border: 1px solid var(--df-border);
+  border-radius: var(--df-radius);
+  background: var(--df-panel);
+  box-shadow: var(--df-shadow-card);
+  padding: 14px;
+}
+.df-root .df-step-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.df-root .df-step-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.df-root .df-step-body {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--df-ink-2);
+}
+.df-root .df-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+/* 44 px targets in the portal: a thumb, not a mouse. */
+.df-root .df-step-actions .df-btn {
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+@media (max-width: 640px) {
+  .df-root .df-step-actions .df-btn { flex: 1 1 auto; min-height: 44px; justify-content: center; }
+  .df-root .df-step-head { flex-direction: column; }
+}

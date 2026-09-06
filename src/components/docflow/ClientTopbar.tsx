@@ -1,35 +1,33 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { I } from './icons';
-import { useClient } from '@/api/queries';
 import { useAuth } from '@/context/AuthContext';
 
 interface ClientTopbarProps {
   onMenuClick?: () => void;
 }
 
-/** Fired by the Upload button; ClientPortal listens and opens its file picker
- *  synchronously so the browser keeps the user-gesture that allows the dialog. */
-export const CLIENT_UPLOAD_EVENT = 'docflow:client-upload';
+const TITLES: Record<string, string> = {
+  '/portal': 'Your next steps',
+  '/portal/requests': 'Everything asked for',
+  '/portal/documents': 'My documents',
+  '/portal/shared': 'Shared with me',
+  '/portal/messages': 'Messages',
+  '/portal/security': 'Security',
+};
 
+/**
+ * The portal's top bar. Since C4.1 the portal is real routes, so this shows
+ * where you are rather than driving the page underneath it — the global search
+ * box and the upload button went with the single-page portal: uploading belongs
+ * on the item being answered, not floating above everything.
+ */
 const ClientTopbar: React.FC<ClientTopbarProps> = ({ onMenuClick }) => {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { logout, me } = useAuth();
-  const { data: client } = useClient(me?.kind === 'client' ? me.id : undefined);
-  const [params, setParams] = useSearchParams();
-  const [q, setQ] = useState(params.get('q') || '');
 
-  // Debounce search into ?q= so ClientPortal can filter its document groups.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setParams((prev) => {
-        const next = new URLSearchParams(prev);
-        if (q) next.set('q', q); else next.delete('q');
-        return next;
-      }, { replace: true });
-    }, 250);
-    return () => clearTimeout(t);
-  }, [q, setParams]);
+  const title = TITLES[pathname] ?? 'Your portal';
 
   const handleLogout = async () => {
     await logout();
@@ -42,19 +40,12 @@ const ClientTopbar: React.FC<ClientTopbarProps> = ({ onMenuClick }) => {
         <I.Menu size={18} />
       </button>
       <div className="df-crumbs">
-        <span className="df-now">My portal</span>
+        <span>{me?.kind === 'client' ? me.providerName || 'Your accountant' : 'Portal'}</span>
         <span className="df-sep">/</span>
-        <span>{client?.name || ''}</span>
+        <span className="df-now">{title}</span>
       </div>
       <div className="df-spacer" />
-      <div className="df-search">
-        <I.Search size={14} />
-        <input placeholder="Search my documents…" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
       <button className="df-btn" onClick={handleLogout}>Sign out</button>
-      <button className="df-btn df-primary" onClick={() => window.dispatchEvent(new CustomEvent(CLIENT_UPLOAD_EVENT))}>
-        <I.Upload size={13} /> Upload
-      </button>
     </div>
   );
 };

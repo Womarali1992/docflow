@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import DocFlowLayout from "@/components/docflow/Layout";
 import ClientLayout from "@/components/docflow/ClientLayout";
 import { MfaGate, RouteGuard } from "@/components/RouteGuard";
@@ -20,7 +20,12 @@ import Engagement from "./pages/Engagement";
 import Templates from "./pages/Templates";
 import Review from "./pages/Review";
 import Work from "./pages/Work";
-import ClientPortal from "./pages/ClientPortal";
+import PortalHome from "./pages/portal/Home";
+import PortalRequests from "./pages/portal/Requests";
+import PortalDocuments from "./pages/portal/Documents";
+import PortalShared from "./pages/portal/Shared";
+import PortalMessages from "./pages/portal/Messages";
+import PortalSecurity from "./pages/portal/Security";
 import DocumentsPage from "./pages/Documents";
 import DocumentPage from "./pages/Document";
 import Login from "./pages/Login";
@@ -53,7 +58,14 @@ const App = () => (
         </Route>
 
         <Route element={<RouteGuard kind="client"><ClientLayout /></RouteGuard>}>
-          <Route path="/client/:clientId" element={<ClientPortal />} />
+          <Route path="/portal" element={<PortalHome />} />
+          <Route path="/portal/requests" element={<PortalRequests />} />
+          <Route path="/portal/documents" element={<PortalDocuments />} />
+          <Route path="/portal/shared" element={<PortalShared />} />
+          <Route path="/portal/messages" element={<PortalMessages />} />
+          <Route path="/portal/security" element={<PortalSecurity />} />
+          {/* The portal used to live under the client's own id; keep those links working. */}
+          <Route path="/client/:clientId" element={<Navigate to="/portal" replace />} />
         </Route>
 
         <Route element={<DocFlowLayout />}>

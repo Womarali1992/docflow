@@ -40,7 +40,7 @@ const Invite = () => {
     try {
       const state = await api.invitations.accept(token, password);
       adopt(state);
-      navigate(stagePath(state.stage) || `/client/${state.me.id}`, { replace: true });
+      navigate(stagePath(state.stage) || '/portal', { replace: true });
     } catch (err) {
       if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
         setLinkError(getErrorMessage(err));

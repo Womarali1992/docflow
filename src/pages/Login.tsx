@@ -52,7 +52,7 @@ const Login = () => {
       } else if (me.kind === 'provider') {
         navigate('/', { replace: true });
       } else {
-        navigate(`/client/${me.id}`, { replace: true });
+        navigate('/portal', { replace: true });
       }
     } catch (err) {
       setError(getErrorMessage(err));

@@ -10,13 +10,17 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 import type { Message } from '../types';
 import { keys, type ThreadRef } from './keys';
-import { useScope, useSignedIn } from './auth';
+import { useMe, useScope, useSignedIn } from './auth';
 import { POLL, useLiveQuery } from './live';
 
 export function useMessages(thread: ThreadRef, options?: { live?: boolean }) {
   const scope = useScope();
   const signedIn = useSignedIn();
-  const addressed = Boolean(thread.clientId || thread.documentId);
+  const { data: session } = useMe();
+  /* A client has exactly one thread, so no address *is* the address: the server
+     scopes it to them. An advisor has to say which client they mean. */
+  const selfScoped = session?.me.kind === 'client';
+  const addressed = Boolean(thread.clientId || thread.documentId) || selfScoped;
   return useLiveQuery<Message[]>({
     key: keys.thread(scope, thread),
     fetch: ({ poll }) => api.messages.list(thread, { poll }),

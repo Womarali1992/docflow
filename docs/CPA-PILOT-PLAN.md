@@ -28,7 +28,7 @@
 | C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | SHIPPED 2026-09-07 |
 | C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | SHIPPED 2026-09-07 |
 | C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | SHIPPED 2026-09-07 |
-| C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | NOT STARTED |
+| C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | SHIPPED 2026-09-07 |
 | C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | NOT STARTED |
 | C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | NOT STARTED |
 | C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | NOT STARTED |
@@ -36,11 +36,47 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C4.1** — the client portal's "Your next steps": request cards (upload / ask / I don't have
-this) and separate views instead of one long page. **Phase 3 is complete.** The portal currently
-runs on the *legacy* upload path (`POST /documents/:id/file`, and create-then-attach for an ad-hoc
-file); C4.1 moves it onto `POST /requests/:id/uploads` and `POST /engagements/:id/uploads`, which is
-what makes an upload land against a checklist line instead of beside it.
+**NEXT = C4.2** — the upload queue: `UploadQueue` + `useUploadQueue` (multi-file per request,
+per-item progress over XHR, cancel, retry, the server's `code` turned into copy), the five states
+**Submitted / Received, checking / Accepted / Needs correction / Waived**, the ≤ 640 px layout and
+camera capture. The reducer is where the vitest + jsdom harness set up in C3.1 finally earns its
+keep. C4.1 left the portal uploading one file at a time through `useUploadToRequest`, which is the
+seam C4.2 replaces.
+
+C4.1 notes: the client portal is a portal now — real routes, and one question answered on the front
+page.
+
+- **`/portal` is "Your next steps"** (`pages/portal/Home.tsx`), ordered the way the work should be
+  done: needs correction → overdue → due soon → everything else open (`useClientWork` in
+  `api/queries/portal.ts` does the bucketing). Anything already sent drops below into "With your
+  accountant", where it is reassurance rather than a task. The progress counter is the
+  **accountant's** counter — an item is done when they accepted it or agreed it was not needed, not
+  when a file was uploaded.
+- **`RequestCard`** carries the three ways out of a line: **Upload**, **Ask a question**, and **I
+  don't have this**. The third is the one that matters: without it a client with no brokerage
+  account is stuck looking at a line they cannot clear. It records an answer and deliberately does
+  **not** move the status — only the advisor takes something off the list.
+- **"Ask a question"** posts to the *document's* thread once something has been uploaded, and to the
+  general thread before that, quoting the item — an answer about the bank statement is then filed
+  with the bank statement.
+- **Real routes:** `/portal`, `/portal/requests`, `/portal/documents` (grouped by engagement and
+  year), `/portal/shared` (deliverables, download), `/portal/messages`, `/portal/security`. The
+  sidebar is `NavLink`s instead of anchor scrolling, so a client can use the back button and link to
+  where they are. **`ClientPortal.tsx` is DELETED**; `/client/:clientId` redirects to `/portal`, and
+  login / invitation / MFA landings point there.
+- **The portal is off the legacy upload path.** Answers go to `POST /requests/:id/uploads`; the
+  unprompted file ("Send something else" on `/portal/documents`) goes to
+  `POST /engagements/:id/uploads`, landing in the newest open engagement rather than in a pile with
+  no context. **No screen calls `POST /documents/:id/file` any more** — the route stays until C5.4 as
+  a contract, not as a dependency.
+- **Two threading fixes** the portal needed: `useMessages` and `useMessageThread` now treat *no
+  address* as the address **for a client** (the server scopes their single thread), so the portal's
+  thread loads and marks itself read.
+- New CSS: `.df-steps` / `.df-step*` — bigger type and 40 px (44 px on a phone) targets, because
+  this page is read once a month, on a phone, by someone who does not use the app for a living.
+
+Frontend-only: no server file changed. Gate: root `npm run typecheck` clean, `npm run lint` 0
+errors / 9 warnings, `npm run build` OK, `npm test` 18 passed. Server unchanged (654).
 
 C3.4 notes: the advisor's day now starts on a queue, and the two contexts are gone.
 
@@ -1067,7 +1103,7 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 | ~~`PATCH /documents/:id` still accepts the legacy review fields~~ | C2.2 | **REMOVED in C3.4** — the schema is `.strict()` and answers `use_review_actions` |
 | ~~`GET /presets` read-only shim over `request_templates` (POST/DELETE → 410)~~ | C2.2 | **REMOVED in C3.2** — the route is gone; an authz row asserts 404 |
 | ~~`api.presets.create/remove` → `/templates` bins↔items adapter (frontend)~~ | C2.2 | **REMOVED in C3.2** — with the `Preset` type and the Settings presets screen |
-| `POST /documents/:id/file` → creates a version | C2.3 | C5.4 |
+| `POST /documents/:id/file` → creates a version (**no app screen calls it since C4.1**) | C2.3 | C5.4 |
 | `GET /documents/:id/download` resolves the current version (brought forward from C2.4) | C2.3 | kept (public contract) |
 | `GET /documents/:id/download` → current version | C2.3 | kept (public contract) |
 | legacy `presets` **table** (read by the importer, no route reads it since C3.2) | — | C5.4 |

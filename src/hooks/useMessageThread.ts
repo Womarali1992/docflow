@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { useMarkThreadRead, useMessages, useSendMessage, type ThreadRef } from '@/api/queries';
+import { useMarkThreadRead, useMe, useMessages, useSendMessage, type ThreadRef } from '@/api/queries';
 
 /**
  * One message thread — the client's, or one scoped to a document.
@@ -14,6 +14,9 @@ import { useMarkThreadRead, useMessages, useSendMessage, type ThreadRef } from '
  */
 export function useMessageThread(thread: ThreadRef) {
   const { clientId, documentId } = thread;
+  const { data: session } = useMe();
+  /* A client's thread needs no address — the server scopes it to them. */
+  const selfScoped = session?.me.kind === 'client';
   const { data: messages = [], isPending: loading } = useMessages({ clientId, documentId });
   const sendMessage = useSendMessage({ clientId, documentId });
   const markRead = useMarkThreadRead({ clientId, documentId });
@@ -23,12 +26,12 @@ export function useMessageThread(thread: ThreadRef) {
 
   const threadKey = `${clientId ?? ''}|${documentId ?? ''}`;
   useEffect(() => {
-    if (!clientId && !documentId) return;
+    if (!clientId && !documentId && !selfScoped) return;
     markReadRef.current(undefined, {
       // Best-effort: a thread that will not mark read is still readable.
       onError: () => undefined,
     });
-  }, [threadKey, clientId, documentId]);
+  }, [threadKey, clientId, documentId, selfScoped]);
 
   const send = useCallback(
     async (content: string) => {

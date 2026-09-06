@@ -35,7 +35,7 @@ export const RouteGuard: React.FC<Props> = ({ kind, children }) => {
 
   if (me.kind !== kind) {
     // Redirect to their natural home
-    return <Navigate to={me.kind === 'provider' ? '/' : `/client/${me.id}`} replace />;
+    return <Navigate to={me.kind === 'provider' ? '/' : '/portal'} replace />;
   }
 
   return <>{children}</>;
@@ -54,7 +54,7 @@ export const MfaGate: React.FC<{ stage: 'preauth' | 'mfa_enroll'; children: Reac
   if (!me || !stage) return <Navigate to="/login" replace />;
   if (stage === 'active') {
     const from = (location.state as { from?: string } | null)?.from;
-    return <Navigate to={from || (me.kind === 'provider' ? '/' : `/client/${me.id}`)} replace />;
+    return <Navigate to={from || (me.kind === 'provider' ? '/' : '/portal')} replace />;
   }
   if (stage !== wanted) return <Navigate to={stagePath(stage)!} state={location.state} replace />;
   return <>{children}</>;

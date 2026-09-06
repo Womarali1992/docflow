@@ -19,7 +19,7 @@ const Mfa = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const home = me?.kind === 'client' ? `/client/${me.id}` : '/';
+  const home = me?.kind === 'client' ? '/portal' : '/';
   const from = (location.state as { from?: string } | null)?.from;
 
   const submit = async (e: React.FormEvent) => {

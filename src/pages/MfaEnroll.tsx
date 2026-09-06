@@ -29,7 +29,7 @@ const MfaEnroll = () => {
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const home = me?.kind === 'client' ? `/client/${me.id}` : '/';
+  const home = me?.kind === 'client' ? '/portal' : '/';
   const from = (location.state as { from?: string } | null)?.from;
 
   useEffect(() => {
