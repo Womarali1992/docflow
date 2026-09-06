@@ -1,11 +1,14 @@
 import React, { useRef, useState } from 'react';
 import type { PortalStep } from '@/api/queries/portal';
-import { useRespondToRequest, useUploadToRequest } from '@/api/queries';
+import { useRespondToRequest } from '@/api/queries';
+import { useUploadQueue } from '@/components/upload/useUploadQueue';
+import UploadQueue from '@/components/upload/UploadQueue';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
 import Modal from '../Modal';
 import AskDialog from './AskDialog';
+import { clientRequestState } from './requestState';
 
 /**
  * One thing the client still has to do.
@@ -15,10 +18,14 @@ import AskDialog from './AskDialog';
  * looking at a line they cannot clear, and the accountant is left wondering
  * whether it is coming. Saying so is recorded as an answer — it does not take
  * the line off the list, because only the accountant can decide that.
+ *
+ * Uploading goes through the queue (C4.2): several files at once, each with its
+ * own progress, cancel and — when one is refused — its own sentence explaining
+ * why, without losing the ones that worked.
  */
 
 const BUCKET_PILL: Record<PortalStep['bucket'], { label: string; cls: string } | null> = {
-  needs_correction: { label: 'Needs another look', cls: 'df-danger' },
+  needs_correction: null, // the state pill already says it
   overdue: { label: 'Overdue', cls: 'df-danger' },
   due_soon: { label: 'Due soon', cls: 'df-warn' },
   open: null,
@@ -29,35 +36,18 @@ const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'long', d
 const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
   const { request, engagement, answer } = step;
   const { toast } = useToast();
-  const upload = useUploadToRequest();
   const respond = useRespondToRequest();
+  const queue = useUploadQueue();
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const cameraRef = useRef<HTMLInputElement | null>(null);
 
   const [askOpen, setAskOpen] = useState(false);
   const [naOpen, setNaOpen] = useState(false);
   const [naNote, setNaNote] = useState('');
 
-  const pill = BUCKET_PILL[step.bucket];
+  const bucketPill = BUCKET_PILL[step.bucket];
+  const status = clientRequestState(request, answer);
   const alreadySaid = Boolean(request.clientResponseKind);
-  const busy = upload.isPending || respond.isPending;
-
-  const handleFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    for (const file of Array.from(files)) {
-      try {
-        const result = await upload.mutateAsync({ id: request.id, file });
-        toast({
-          title: result.status === 202 ? 'Received — being checked' : 'Sent',
-          description:
-            result.status === 202
-              ? `${file.name} is with your accountant. It becomes readable once the security check finishes.`
-              : `${file.name} is with your accountant.`,
-        });
-      } catch (err) {
-        toast({ title: `Could not send ${file.name}`, description: getErrorMessage(err), variant: 'destructive' });
-      }
-    }
-  };
 
   const sayNotApplicable = async () => {
     try {
@@ -84,17 +74,16 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
             {!request.required ? ' · optional' : null}
           </div>
         </div>
-        {pill && <span className={'df-pill ' + pill.cls}>{pill.label}</span>}
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {bucketPill && <span className={'df-pill ' + bucketPill.cls}>{bucketPill.label}</span>}
+          <span className={'df-pill ' + status.cls}>{status.label}</span>
+        </div>
       </div>
 
       {request.instructions && <div className="df-step-body">{request.instructions}</div>}
 
-      {request.status === 'needs_correction' && (
-        <div className="df-note df-note-warn">
-          Your accountant has asked for a corrected copy. Their note is in the messages for this item.
-        </div>
-      )}
-      {answer && request.status !== 'needs_correction' && (
+      {status.note && <div className={'df-note' + (status.state === 'needs_correction' ? ' df-note-warn' : '')}>{status.note}</div>}
+      {answer && status.state === 'waiting_on_you' && (
         <div className="df-note">You sent {answer.displayName ?? answer.name}. Sending another replaces it.</div>
       )}
       {alreadySaid && (
@@ -104,6 +93,14 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
         </div>
       )}
 
+      <UploadQueue
+        items={queue.items}
+        onCancel={queue.cancel}
+        onRetry={queue.retry}
+        onRemove={queue.remove}
+        onClearFinished={queue.clearFinished}
+      />
+
       <div className="df-step-actions">
         <input
           ref={fileRef}
@@ -111,16 +108,30 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
           multiple
           accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
           style={{ display: 'none' }}
-          onChange={(e) => { handleFiles(e.target.files); e.currentTarget.value = ''; }}
+          onChange={(e) => { if (e.target.files) queue.enqueue(e.target.files, { kind: 'request', id: request.id }); e.currentTarget.value = ''; }}
         />
-        <button className="df-btn df-primary" onClick={() => fileRef.current?.click()} disabled={busy}>
-          <I.Upload size={13} /> {upload.isPending ? 'Sending…' : 'Upload'}
+        {/* On a phone this opens the camera; on a desktop the browser ignores
+            `capture` and it behaves like any other file picker. */}
+        <input
+          ref={cameraRef}
+          type="file"
+          accept="image/*,application/pdf"
+          capture="environment"
+          style={{ display: 'none' }}
+          onChange={(e) => { if (e.target.files) queue.enqueue(e.target.files, { kind: 'request', id: request.id }); e.currentTarget.value = ''; }}
+        />
+
+        <button className="df-btn df-primary" onClick={() => fileRef.current?.click()}>
+          <I.Upload size={13} /> {queue.busy ? 'Sending…' : 'Upload'}
         </button>
-        <button className="df-btn" onClick={() => setAskOpen(true)} disabled={busy}>
+        <button className="df-btn df-camera-only" onClick={() => cameraRef.current?.click()}>
+          <I.Doc size={13} /> Take a photo
+        </button>
+        <button className="df-btn" onClick={() => setAskOpen(true)}>
           <I.Msg size={13} /> Ask a question
         </button>
         {!alreadySaid && (
-          <button className="df-btn df-ghost" onClick={() => setNaOpen(true)} disabled={busy}>
+          <button className="df-btn df-ghost" onClick={() => setNaOpen(true)} disabled={respond.isPending}>
             I don’t have this
           </button>
         )}

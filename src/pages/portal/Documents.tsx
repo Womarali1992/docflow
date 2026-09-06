@@ -1,9 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { useClientWork } from '@/api/queries/portal';
-import { useUploadToEngagement } from '@/api/queries';
+import { useUploadQueue } from '@/components/upload/useUploadQueue';
+import UploadQueue from '@/components/upload/UploadQueue';
 import type { Document } from '@/api/types';
-import { useToast } from '@/hooks/use-toast';
-import { getErrorMessage } from '@/utils/errors';
 import { I } from '@/components/docflow/icons';
 
 /**
@@ -25,8 +24,7 @@ const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', 
 
 const PortalDocuments: React.FC = () => {
   const work = useClientWork();
-  const { toast } = useToast();
-  const upload = useUploadToEngagement();
+  const queue = useUploadQueue();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState('');
 
@@ -36,20 +34,6 @@ const PortalDocuments: React.FC = () => {
     [work.engagements]
   );
 
-  const sendFiles = async (files: FileList | null) => {
-    if (!files || files.length === 0 || !target) return;
-    for (const file of Array.from(files)) {
-      try {
-        const result = await upload.mutateAsync({ engagementId: target.id, file });
-        toast({
-          title: result.status === 202 ? 'Received — being checked' : 'Sent',
-          description: `${file.name} is with your accountant.`,
-        });
-      } catch (err) {
-        toast({ title: `Could not send ${file.name}`, description: getErrorMessage(err), variant: 'destructive' });
-      }
-    }
-  };
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -93,18 +77,32 @@ const PortalDocuments: React.FC = () => {
             multiple
             accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
             style={{ display: 'none' }}
-            onChange={(e) => { sendFiles(e.target.files); e.currentTarget.value = ''; }}
+            onChange={(e) => { if (e.target.files && target) queue.enqueue(e.target.files, { kind: 'engagement', id: target.id }); e.currentTarget.value = ''; }}
           />
           <button
             className="df-btn df-primary"
             onClick={() => fileRef.current?.click()}
-            disabled={!target || upload.isPending}
+            disabled={!target}
             title={target ? undefined : 'Your accountant has not opened any work for you yet'}
           >
-            <I.Upload size={13} /> {upload.isPending ? 'Sending…' : 'Send something else'}
+            <I.Upload size={13} /> {queue.busy ? 'Sending…' : 'Send something else'}
           </button>
         </div>
       </div>
+
+      {queue.items.length > 0 && (
+        <div className="df-section">
+          <div className="df-section-body">
+            <UploadQueue
+              items={queue.items}
+              onCancel={queue.cancel}
+              onRetry={queue.retry}
+              onRemove={queue.remove}
+              onClearFinished={queue.clearFinished}
+            />
+          </div>
+        </div>
+      )}
 
       {work.isPending && <div className="df-section"><div className="df-empty">Loading…</div></div>}
       {!work.isPending && groups.length === 0 && (

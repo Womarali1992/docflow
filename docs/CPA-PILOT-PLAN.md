@@ -29,19 +29,57 @@
 | C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | SHIPPED 2026-09-07 |
 | C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | SHIPPED 2026-09-07 |
 | C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | SHIPPED 2026-09-07 |
-| C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | NOT STARTED |
+| C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | SHIPPED 2026-09-07 |
 | C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | NOT STARTED |
 | C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | NOT STARTED |
 | C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | NOT STARTED |
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C4.2** — the upload queue: `UploadQueue` + `useUploadQueue` (multi-file per request,
-per-item progress over XHR, cancel, retry, the server's `code` turned into copy), the five states
-**Submitted / Received, checking / Accepted / Needs correction / Waived**, the ≤ 640 px layout and
-camera capture. The reducer is where the vitest + jsdom harness set up in C3.1 finally earns its
-keep. C4.1 left the portal uploading one file at a time through `useUploadToRequest`, which is the
-seam C4.2 replaces.
+**NEXT = C4.3** — notifications and reminders: the `notifications` table (empty since C2.1) wired
+for request created / correction requested / deliverable shared / accepted on the client side and
+upload received / not-applicable / new message on the advisor side; unread badges from
+`GET /notifications`; `jobs/handlers/reminders.ts` on the C1.4 queue (daily 08:00 firm tz, 3 days
+before → on the day → weekly while overdue, one consolidated email per client per day, stop on
+submit or waive, `dedupeKey = reminder:<clientId>:<date>`); `FIRM_TIMEZONE`. It is the first commit
+since C2.3 with real server work and a migration-free but job-heavy surface — tests use fixed clocks.
+
+C4.2 notes: uploading is now a queue, and the portal survives a phone.
+
+- **`components/upload/useUploadQueue.ts`** — the reducer holds the whole of it and nothing else: no
+  network, no React Query, no DOM. That is why it is the piece with tests (**12 cases**, the reason
+  the vitest + jsdom harness went in at C3.1). The cases are the ones a client actually hits: two
+  files where the second fails, a cancel while bytes are moving, a retry after a refusal, and the
+  202 that means *stored, still being checked* rather than *broken*.
+- **Files upload one at a time, deliberately.** Six parallel uploads on a phone connection make all
+  six slow and the progress bars meaningless, and the per-session upload limiter is happier with a
+  queue than a burst.
+- **The reducer refuses to be surprised:** a late `progress` event cannot resurrect a cancelled
+  item, a response already on the wire cannot mark a cancelled item sent, `cancel` does nothing to
+  something already sent, and `retry` keeps the `File` — no second trip through the picker.
+- **`api/client.ts` uploads over XMLHttpRequest now** (`UploadOpts { onProgress, signal }`), because
+  `fetch` still cannot report upload progress and a 20 MB scan without a progress bar is
+  indistinguishable from a hung app. The 401 / `mfa_required` side effects moved into
+  `notifyAuthFailure()` so both paths keep them.
+- **Server codes become sentences** (`UPLOAD_MESSAGE`): `encrypted`, `too_large`, `unsupported_type`,
+  `type_mismatch`, `infected`, `empty_file`, `request_closed`, `engagement_closed`… An unrecognised
+  code falls back to the server's own sentence — **a bare code never reaches the screen**, and a
+  test asserts it.
+- **Five client-facing states** (`portal/requestState.ts`): Waiting on you · **Submitted** ·
+  **Received, being checked** · Accepted · Needs another look · Not needed. The first two are the
+  same row on the server (a version exists) but completely different messages to the person who
+  just sent a 20 MB scan; collapsing them produces the support call this app exists to avoid. To
+  tell them apart the portal reads the answer from the **engagement tree** (which carries
+  `currentVersion`) rather than the flat documents list.
+- **Phone pass (≤ 640 px):** cards stack, queue rows stack, page-head actions become a **bottom bar**
+  (the top of a long page is the one place a thumb cannot reach) with 44 px targets and
+  `env(safe-area-inset-bottom)`, and **"Take a photo"** appears — `capture="environment"`, hidden on
+  desktop where a camera picker is just a confusing second file dialog. **Bug fixed on the way:** the
+  767 px rule hid plain topbar buttons, which left a client on a phone with **no way to sign out**.
+
+Frontend-only: no server file changed. Gate: root `npm run typecheck` clean, `npm run lint` 0 errors
+/ 9 warnings, `npm run build` OK, `npm test` **30 passed (4 files)** — 18 + 12 reducer cases. Server
+unchanged (654).
 
 C4.1 notes: the client portal is a portal now — real routes, and one question answered on the front
 page.

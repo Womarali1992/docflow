@@ -81,6 +81,27 @@ export const UNAUTHORIZED_EVENT = 'docflow:unauthorized';
 /** Fired on a 403 `mfa_required` so the auth layer can send the user back to the second step; detail.stage says which. */
 export const MFA_REQUIRED_EVENT = 'docflow:mfa-required';
 
+/**
+ * Tells the auth layer when the server has ended or downgraded the session.
+ *
+ * `/auth/me` is excluded: asking "is there a session?" and being told "no" is
+ * that call's ordinary answer, and announcing it as a lost session would have
+ * the listener clear the cache underneath the very fetch establishing it.
+ */
+function notifyAuthFailure(
+  status: number,
+  body: { code?: string; reason?: UnauthorizedReason; stage?: SessionStage },
+  path: string
+): void {
+  if (typeof window === 'undefined') return;
+  if (status === 401 && path !== '/auth/login' && path !== '/auth/me' && !path.startsWith('/auth/mfa/')) {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { reason: body.reason ?? 'missing' } }));
+  }
+  if (status === 403 && body.code === 'mfa_required') {
+    window.dispatchEvent(new CustomEvent(MFA_REQUIRED_EVENT, { detail: { stage: body.stage ?? 'preauth' } }));
+  }
+}
+
 interface ApiInit extends RequestInit {
   /** Background refresh: sends X-DocFlow-Poll so the request keeps the session alive without extending it. */
   poll?: boolean;
@@ -112,16 +133,7 @@ async function send<T>(path: string, init: ApiInit = {}): Promise<{ status: numb
   if (!res.ok) {
     let body: { error?: string; code?: string; reason?: UnauthorizedReason; stage?: SessionStage; [k: string]: unknown };
     try { body = await res.json(); } catch { body = { error: res.statusText }; }
-    // `/auth/me` is excluded because asking "is there a session?" and being told
-    // "no" is that call's ordinary answer — the query maps it to null. Announcing
-    // it as a lost session would have the listener clear the cache underneath the
-    // very fetch that is establishing it.
-    if (res.status === 401 && path !== '/auth/login' && path !== '/auth/me' && !path.startsWith('/auth/mfa/') && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: { reason: body.reason ?? 'missing' } }));
-    }
-    if (res.status === 403 && body.code === 'mfa_required' && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent(MFA_REQUIRED_EVENT, { detail: { stage: body.stage ?? 'preauth' } }));
-    }
+    notifyAuthFailure(res.status, body, path);
     throw new ApiError(res.status, body);
   }
   if (res.status === 204) return { status: res.status, data: undefined as T };
@@ -134,16 +146,66 @@ async function request<T>(path: string, init: ApiInit = {}): Promise<T> {
   return data;
 }
 
+/** Everything an upload can report back while it is in flight (C4.2). */
+export interface UploadOpts {
+  /** 0…1. Called as the bytes leave, so a slow phone connection shows movement. */
+  onProgress?: (fraction: number) => void;
+  /** Aborting is a real answer: the client changed their mind mid-upload. */
+  signal?: AbortSignal;
+}
+
 /**
- * One file to an upload endpoint. Progress and cancellation need XMLHttpRequest
- * and arrive with the C4.2 upload queue; this is the plain form the advisor
- * screens use, and it keeps the 201/202 distinction the pipeline answers with.
+ * One file to an upload endpoint.
+ *
+ * XMLHttpRequest rather than fetch, because `fetch` still cannot report upload
+ * progress — and a 20 MB scan of a bank statement over a phone connection
+ * without a progress bar is indistinguishable from a hung app. The 201/202
+ * distinction the pipeline answers with is preserved either way: 202 means the
+ * bytes are stored and the virus check has not finished.
  */
-async function upload(path: string, file: File): Promise<UploadResult> {
+function upload(path: string, file: File, opts: UploadOpts = {}): Promise<UploadResult> {
   const fd = new FormData();
   fd.append('file', file);
-  const { status, data } = await send<Omit<UploadResult, 'status'>>(path, { method: 'POST', body: fd });
-  return { ...data, status };
+
+  return new Promise<UploadResult>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}${path}`);
+    // Same-origin: the session cookie rides along on its own.
+    xhr.responseType = 'text';
+
+    const abort = () => xhr.abort();
+    opts.signal?.addEventListener('abort', abort, { once: true });
+    const done = () => opts.signal?.removeEventListener('abort', abort);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && opts.onProgress) opts.onProgress(e.loaded / e.total);
+    };
+
+    xhr.onload = () => {
+      done();
+      let body: Record<string, unknown> = {};
+      try { body = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch { body = {}; }
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        notifyAuthFailure(xhr.status, body as { code?: string; reason?: UnauthorizedReason; stage?: SessionStage }, path);
+        reject(new ApiError(xhr.status, body as { error?: string }));
+        return;
+      }
+      const data = reviveDates<Omit<UploadResult, 'status'>>(body);
+      resolve({ ...data, status: xhr.status });
+    };
+
+    xhr.onerror = () => {
+      done();
+      reject(new ApiError(0, { error: 'The upload could not reach the server.' }));
+    };
+    xhr.onabort = () => {
+      done();
+      reject(new ApiError(0, { error: 'Upload cancelled.', code: 'cancelled' }));
+    };
+
+    xhr.send(fd);
+  });
 }
 
 export const api = {
@@ -363,9 +425,9 @@ export const api = {
    * (stored, still being checked) with the same shape — `status` carries which.
    */
   uploads: {
-    toRequest: (requestId: string, file: File) => upload(`/requests/${requestId}/uploads`, file),
-    toEngagement: (engagementId: string, file: File) => upload(`/engagements/${engagementId}/uploads`, file),
-    newVersion: (documentId: string, file: File) => upload(`/documents/${documentId}/versions`, file),
+    toRequest: (requestId: string, file: File, opts?: UploadOpts) => upload(`/requests/${requestId}/uploads`, file, opts),
+    toEngagement: (engagementId: string, file: File, opts?: UploadOpts) => upload(`/engagements/${engagementId}/uploads`, file, opts),
+    newVersion: (documentId: string, file: File, opts?: UploadOpts) => upload(`/documents/${documentId}/versions`, file, opts),
   },
 
   templates: {

@@ -4,6 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useClientWork } from '@/api/queries/portal';
 import { I } from '@/components/docflow/icons';
 import RequestCard from '@/components/docflow/portal/RequestCard';
+import { clientRequestState } from '@/components/docflow/portal/requestState';
 
 /**
  * Your next steps.
@@ -95,17 +96,20 @@ const PortalHome: React.FC = () => {
             </div>
           </div>
           <div className="df-list">
-            {work.withAdvisor.map(({ request, answer }) => (
-              <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="df-name">{request.title}</div>
-                  <div className="df-meta">
-                    {answer ? `You sent ${answer.displayName ?? answer.name}` : 'Sent'}
+            {work.withAdvisor.map(({ request, answer }) => {
+              const state = clientRequestState(request, answer);
+              return (
+                <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="df-name">{request.title}</div>
+                    <div className="df-meta">
+                      {state.note ?? (answer ? `You sent ${answer.displayName ?? answer.name}` : 'Sent')}
+                    </div>
                   </div>
+                  <span className={'df-pill ' + state.cls}>{state.label}</span>
                 </div>
-                <span className="df-pill df-info">Being reviewed</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

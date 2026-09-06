@@ -1409,3 +1409,87 @@
   .df-root .df-step-actions .df-btn { flex: 1 1 auto; min-height: 44px; justify-content: center; }
   .df-root .df-step-head { flex-direction: column; }
 }
+
+/* Upload queue (C4.2) ===================================== */
+
+.df-root .df-queue {
+  margin-top: 12px;
+  border: 1px solid var(--df-border);
+  border-radius: var(--df-radius);
+  background: var(--df-panel-2);
+  overflow: hidden;
+}
+.df-root .df-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--df-border-soft);
+}
+.df-root .df-queue-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid var(--df-border-soft);
+  background: var(--df-panel);
+}
+.df-root .df-queue-item:last-child { border-bottom: 0; }
+.df-root .df-queue-name {
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-word;
+}
+.df-root .df-queue-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* "Take a photo" is a phone affordance; on a desktop the camera picker is just
+   a confusing second file dialog, so the button is not offered there. */
+.df-root .df-camera-only { display: none; }
+
+/* Phones (C4.2) =========================================== */
+@media (max-width: 640px) {
+  .df-root .df-camera-only { display: inline-flex; }
+
+  /* Cards stack, and every control in one is a thumb-sized target. */
+  .df-root .df-step { padding: 12px; }
+  .df-root .df-step-title { font-size: 15px; }
+  .df-root .df-queue-item { flex-direction: column; }
+  .df-root .df-queue-actions { width: 100%; justify-content: flex-start; }
+  .df-root .df-queue-actions .df-btn { min-height: 40px; }
+
+  /* The page-head actions become a bar pinned to the bottom of the screen:
+     on a phone the top of a long page is the one place a thumb cannot reach. */
+  .df-root .df-page-head .df-head-actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    margin: 0;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    background: var(--df-panel);
+    border-top: 1px solid var(--df-border);
+    box-shadow: 0 -2px 10px oklch(0% 0 0 / 0.06);
+    gap: 8px;
+  }
+  .df-root .df-page-head .df-head-actions .df-btn {
+    flex: 1 1 auto;
+    min-height: 44px;
+    justify-content: center;
+  }
+  /* …so the page needs room to scroll past it. */
+  .df-root .df-page { padding-bottom: 84px; }
+}
+
+/* The 767 px rule hides plain topbar buttons, which would leave a client on a
+   phone with no way to sign out. Same breakpoint, stated after it. */
+@media (max-width: 767px) {
+  .df-root .df-topbar .df-btn { display: inline-flex; min-height: 36px; }
+}

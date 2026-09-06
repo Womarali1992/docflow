@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
 import { useClientWork } from '@/api/queries/portal';
-import type { RequestItem, RequestStatus } from '@/api/types';
+import type { RequestItem } from '@/api/types';
 import RequestCard from '@/components/docflow/portal/RequestCard';
+import { clientRequestState } from '@/components/docflow/portal/requestState';
 
 /**
  * Every item on the client's list, including the ones that are finished.
@@ -10,15 +11,6 @@ import RequestCard from '@/components/docflow/portal/RequestCard';
  * "what did they ask me for in March?" is a question a client asks in October,
  * and a waived line has to keep saying why it was waived.
  */
-
-const STATUS_PILL: Record<RequestStatus, { label: string; cls: string }> = {
-  requested: { label: 'Waiting on you', cls: 'df-warn' },
-  submitted: { label: 'Being reviewed', cls: 'df-info' },
-  in_review: { label: 'Being reviewed', cls: 'df-info' },
-  needs_correction: { label: 'Needs another look', cls: 'df-danger' },
-  accepted: { label: 'Accepted', cls: 'df-ok' },
-  waived: { label: 'Not needed', cls: 'df-plain' },
-};
 
 const PortalRequests: React.FC = () => {
   const work = useClientWork();
@@ -71,19 +63,18 @@ const PortalRequests: React.FC = () => {
               const step = stepFor(request);
               // An open item keeps its full card, with the three ways to answer it.
               if (step) return <RequestCard key={request.id} step={step} />;
-              const pill = STATUS_PILL[request.status];
+              const state = clientRequestState(request, work.answerFor(request.id));
               return (
                 <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
                   <div style={{ minWidth: 0 }}>
                     <div className="df-name">{request.title}</div>
-                    {request.status === 'waived' && request.waivedReason && (
-                      <div className="df-meta">Not needed: {request.waivedReason}</div>
-                    )}
-                    {request.status !== 'waived' && request.instructions && (
-                      <div className="df-meta">{request.instructions}</div>
+                    {state.note ? (
+                      <div className="df-meta">{state.note}</div>
+                    ) : (
+                      request.instructions && <div className="df-meta">{request.instructions}</div>
                     )}
                   </div>
-                  <span className={'df-pill ' + pill.cls}>{pill.label}</span>
+                  <span className={'df-pill ' + state.cls}>{state.label}</span>
                 </div>
               );
             })}
