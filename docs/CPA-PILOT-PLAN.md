@@ -49,6 +49,22 @@
    index on `clients.emailNormalized` (**fails if duplicates remain — resolve first**); and delete
    `server/uploads/` only after `npm run integrity` passes. Mark the program COMPLETE in memory.
 
+**Post-C5.3 defect, found and fixed 2026-09-07 (`d59fe14`).** Populating the dev database with
+realistic demo data (`npm run db:demo`, `279abcf`) produced a document called
+`2026 Form 1040 — draft.pdf`. Previewing it returned 500 **and killed the API process**: Node
+throws `ERR_INVALID_CHAR` on a header value above Latin-1, so composing `Content-Disposition`
+from the client's own filename threw on the em dash, and because both delivery routes were
+`async` handlers — which Express 4 does not catch — the throw became an unhandled rejection.
+A client uploading `Résumé.pdf` could have stopped the portal for everyone else. Fixed with
+`server/src/files/filename.ts`: `filename=` reduced to ASCII, the true name preserved in
+`filename*=UTF-8''…` (RFC 6266 §4.3), the duplicated `safeFilename` in `versions.ts` and
+`documents.ts` deleted, and `.catch(next)` on both routes so a future error is a 500 rather than
+an outage. `server/test/filename.test.ts` covers the em dash, accents, Cyrillic, CJK, emoji,
+curly quotes, a CRLF injection attempt and the empty fallback, plus an end-to-end download.
+Two lessons for C5.4's release checks: **the manual client journey should include a file whose
+name is not plain ASCII**, and any remaining `async` route handler is an availability bug waiting
+for the right input.
+
 C5.3 notes: the deployment surface. Authored here, executed on the firm PC — this box is Windows 11
 **Home**, so BitLocker, WinSW, ClamAV and Caddy could not be exercised locally; everything that
 *could* be run here was.
