@@ -3,7 +3,8 @@
  * under provider 2), and for every client one uploaded file, one open request
  * and one advisor deliverable. Recreated before every test by the caller.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import bcrypt from 'bcryptjs';
 import supertest from 'supertest';
 import type { Express } from 'express';
@@ -14,6 +15,7 @@ import { db, schema } from '../src/db/client.js';
 import { encryptSecret } from '../src/auth/crypto.js';
 import { generateCode } from '../src/auth/mfa.js';
 import { humanSize, storedFileName, writeStoredFileSync } from '../src/storage.js';
+import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
 
 export { app };
 
@@ -72,12 +74,18 @@ export interface ClientFixture {
   id: string;
   email: string;
   providerId: string;
-  /** A file the client uploaded (folder "Uploads", has bytes on disk). */
+  /** A file the client uploaded (folder "Uploads", has bytes on disk + version 1). */
   upload: string;
-  /** An open request from the advisor (no file yet). */
+  /** An open request from the advisor (no file yet). The request row shares this id. */
   request: string;
-  /** An advisor deliverable (folder "Reports", has bytes on disk). */
+  /** An advisor deliverable (folder "Reports", bytes + version 1), SHARED with the client. */
   deliverable: string;
+  /** The engagement all three sit in. */
+  engagement: string;
+  /** Version 1 of `upload`. */
+  uploadVersion: string;
+  /** Version 1 of `deliverable`. */
+  deliverableVersion: string;
 }
 
 export interface Fixture {
@@ -116,6 +124,37 @@ async function insertProvider(name: string, email: string): Promise<ProviderFixt
   return { id: p.id, email, preset: preset.id };
 }
 
+/**
+ * Writes the fixture bytes under DATA_ROOT and returns a version row for them —
+ * the fixture represents a database that has been through the C2.1 import, so
+ * every document with a file has a version behind it.
+ */
+async function insertVersion(documentId: string, uploadedBy: { kind: 'provider' | 'client'; id: string }, filename: string) {
+  const storageKey = newStorageKey(new Date(), 'pdf');
+  fs.writeFileSync(ensureKeyDir(storageKey), PDF_BYTES);
+  const now = new Date();
+  const [v] = await db
+    .insert(schema.documentVersions)
+    .values({
+      documentId,
+      versionNo: 1,
+      originalFilename: filename,
+      mimeType: 'application/pdf',
+      sizeBytes: PDF_BYTES.length,
+      sha256: createHash('sha256').update(PDF_BYTES).digest('hex'),
+      storageKey,
+      scanStatus: 'clean',
+      scannedAt: now,
+      uploadedByKind: uploadedBy.kind,
+      uploadedById: uploadedBy.id,
+      publishedAt: now,
+      createdAt: now,
+    })
+    .returning({ id: schema.documentVersions.id });
+  await db.update(schema.documents).set({ currentVersionId: v.id }).where(eq(schema.documents.id, documentId));
+  return v.id;
+}
+
 function storedFile(id: string) {
   const fileName = storedFileName(id, 'application/pdf');
   writeStoredFileSync(fileName, PDF_BYTES);
@@ -132,24 +171,70 @@ async function insertClient(
   provider: ProviderFixture,
   name: string,
   email: string,
-  tag: string
+  tag: string,
+  legacy = false
 ): Promise<ClientFixture> {
   const [c] = await db
     .insert(schema.clients)
     .values({ providerId: provider.id, name, email, passwordHash: PASSWORD_HASH, accountId: `CL-${tag}` })
     .returning({ id: schema.clients.id });
 
+  /*
+   * By default this is a database AFTER the C2.1 import: every document has a
+   * kind, an engagement and (where it has bytes) a version, with the legacy
+   * columns still populated so the compatibility routes stay exercised.
+   *
+   * With `legacy` it is what the firm's database looked like BEFORE the import —
+   * legacy columns only. That is what `seedLegacyFixture()` gives the import
+   * tests, so they run against the shape the script will really meet.
+   */
+  const engagement = legacy
+    ? { id: null as unknown as string }
+    : (
+        await db
+          .insert(schema.engagements)
+          .values({
+            providerId: provider.id,
+            clientId: c.id,
+            title: `${tag} 2026 Individual Tax Return`,
+            kind: 'individual_tax',
+            taxYear: 2026,
+            status: 'open',
+          })
+          .returning({ id: schema.engagements.id })
+      )[0];
+
   const upload = randomUUID();
   const req = randomUUID();
   const deliverable = randomUUID();
+  const now = new Date();
+  // The checklist line behind the requested document; same id, as the import does.
+  if (!legacy) {
+    await db.insert(schema.requests).values({
+      id: req,
+      providerId: provider.id,
+      clientId: c.id,
+      engagementId: engagement.id,
+      title: `${tag} Insurance Policy`,
+      instructions: 'seeded request',
+      category: 'Documents',
+      required: true,
+      status: 'requested',
+      sortOrder: 0,
+      importedFromDocumentId: req,
+    });
+  }
+
   await db.insert(schema.documents).values([
     {
       id: upload,
       clientId: c.id,
       providerId: provider.id,
       name: `${tag} Bank Statement.pdf`,
+      ...(legacy ? {} : { displayName: `${tag} Bank Statement.pdf` }),
       type: 'pdf',
       folder: 'Uploads',
+      ...(legacy ? {} : { category: 'Uploads', engagementId: engagement.id, kind: 'client_upload' as const }),
       uploadedByKind: 'client',
       uploadedById: c.id,
       status: 'pending',
@@ -160,11 +245,13 @@ async function insertClient(
       clientId: c.id,
       providerId: provider.id,
       name: `${tag} Insurance Policy`,
+      ...(legacy ? {} : { displayName: `${tag} Insurance Policy` }),
       type: 'pdf',
       folder: 'Documents',
+      ...(legacy ? {} : { category: 'Documents', engagementId: engagement.id, requestId: req, kind: 'client_upload' as const }),
       isRequested: true,
       requestedById: provider.id,
-      requestedAt: new Date(),
+      requestedAt: now,
       description: 'seeded request',
     },
     {
@@ -172,13 +259,30 @@ async function insertClient(
       clientId: c.id,
       providerId: provider.id,
       name: `${tag} Tax Return Draft.pdf`,
+      ...(legacy ? {} : { displayName: `${tag} Tax Return Draft.pdf` }),
       type: 'pdf',
       folder: 'Reports',
+      ...(legacy
+        ? {}
+        : {
+            category: 'Reports',
+            engagementId: engagement.id,
+            kind: 'deliverable' as const,
+            // Shared, as the import leaves deliverables that were already visible.
+            sharedAt: now,
+            sharedById: provider.id,
+          }),
       uploadedByKind: 'provider',
       uploadedById: provider.id,
       ...storedFile(deliverable),
     },
   ]);
+
+  const uploadVersion = legacy ? '' : await insertVersion(upload, { kind: 'client', id: c.id }, `${tag} Bank Statement.pdf`);
+  const deliverableVersion = legacy
+    ? ''
+    : await insertVersion(deliverable, { kind: 'provider', id: provider.id }, `${tag} Tax Return Draft.pdf`);
+
   await db.insert(schema.activities).values({
     providerId: provider.id,
     clientId: c.id,
@@ -189,15 +293,42 @@ async function insertClient(
     actorName: name,
   });
   await enrollMfa('client', c.id);
-  return { id: c.id, email, providerId: provider.id, upload, request: req, deliverable };
+  return {
+    id: c.id,
+    email,
+    providerId: provider.id,
+    upload,
+    request: req,
+    deliverable,
+    engagement: engagement.id,
+    uploadVersion,
+    deliverableVersion,
+  };
 }
 
+/**
+ * The database as it is today: post-import, with engagements, requests and
+ * versions. Almost every test wants this one.
+ */
 export async function seedFixture(): Promise<Fixture> {
+  return seed(false);
+}
+
+/**
+ * The database as it was BEFORE the C2.1 import — legacy columns only, no
+ * engagements, requests or versions. The import tests use this, because running
+ * the import against an already-converted database would prove nothing.
+ */
+export async function seedLegacyFixture(): Promise<Fixture> {
+  return seed(true);
+}
+
+async function seed(legacy: boolean): Promise<Fixture> {
   const provider1 = await insertProvider('Provider One', 'p1@example.test');
   const provider2 = await insertProvider('Provider Two', 'p2@example.test');
-  const client1a = await insertClient(provider1, 'Client 1A', 'c1a@example.test', '1A');
-  const client1b = await insertClient(provider1, 'Client 1B', 'c1b@example.test', '1B');
-  const client2a = await insertClient(provider2, 'Client 2A', 'c2a@example.test', '2A');
+  const client1a = await insertClient(provider1, 'Client 1A', 'c1a@example.test', '1A', legacy);
+  const client1b = await insertClient(provider1, 'Client 1B', 'c1b@example.test', '1B', legacy);
+  const client2a = await insertClient(provider2, 'Client 2A', 'c2a@example.test', '2A', legacy);
 
   const [m1] = await db
     .insert(schema.messages)

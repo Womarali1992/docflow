@@ -21,7 +21,7 @@
 | C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | SHIPPED 2026-09-05 |
 | C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | SHIPPED 2026-09-06 |
 | C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | SHIPPED 2026-09-06 |
-| C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | NOT STARTED |
+| C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | SHIPPED 2026-09-06 |
 | C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | NOT STARTED |
 | C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | NOT STARTED |
 | C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | NOT STARTED |
@@ -36,8 +36,50 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C2.2** (engagement / request / document / version / review resources with explicit actions;
-legacy routes kept). Phase 0 and Phase 1 complete; C2.1 shipped.
+**NEXT = C2.3** (authorize → stage → validate → scan → publish upload pipeline; quarantine;
+sweeper; every upload is a version). Phase 0, Phase 1, C2.1 and C2.2 shipped.
+
+C2.2 notes: new route files `engagements.ts`, `requests.ts`, `versions.ts`, `templates.ts`,
+`dashboard.ts`, `search.ts`, `notifications.ts`; `documents.ts` rewritten; `presets.ts` is now a
+**read-only** shim (GET answers from `request_templates` in the old bins shape; POST/DELETE → 410).
+Shared helpers: `routes/serialize.ts` (every public shape; `storageKey` / `sha256` / `storagePath`
+never leave the server) and `routes/scope.ts` (tenant loaders — the single place that decides 404).
+`workflow/versions.ts` `recordNewVersion()` holds the rule the review loop rests on — **a new version
+supersedes the old one, repoints `currentVersionId`, sends the request back to `submitted` and leaves
+the previous review row untouched** — and C2.3's publish step must call it rather than reimplement it.
+`workflow/starter-templates.ts` seeds the two starter checklists on the first `GET /templates`, once
+per provider and never again once they have any template.
+
+**Ordering rule made explicit in C2.2:** for a resource the caller *can* see, a wrong role is 403; for
+one they cannot, it stays 404. So `requireProvider` is only mounted on routes with no id to hide
+(`POST /engagements`, `/templates`, `/dashboard`); every `/:id` verb loads first via a local
+`loadForAdvisor` and only then checks the role. Getting this backwards would have told every client
+that any id exists.
+
+Request state machine (`requests.ts`): `requested → submitted → accepted | needs_correction →
+submitted → accepted`, `waive` (reason REQUIRED, 400 `reason_required`) from any state, `reopen` back
+to `submitted` when an answer is on file else `requested`. `accept` / `request-correction` refuse with
+400 `nothing_submitted` when nothing has been submitted, and 400 `version_mismatch` for a version that
+belongs elsewhere. A client's `respond {kind:'not_applicable'}` records the answer and **deliberately
+does not move the status** — it surfaces under the dashboard's `needsDecision` instead, because only
+the advisor takes something off a checklist.
+
+`DELETE /documents/:id` now **archives** (`{ok:true, archived:true}`); nothing a client sent is
+destroyed by a click. `GET /documents?includeArchived=true` brings archived rows back.
+Deliverables: `share` / `unshare` are explicit verbs; an unshared deliverable is **404 for the client
+everywhere** — detail, versions, download, list and the engagement tree.
+
+**Test fixture rewritten:** `seedFixture()` now represents a database AFTER the C2.1 import
+(engagements, requests, versions, deliverables shared), and `seedLegacyFixture()` is the pre-import
+shape that `import.test.ts` uses — running the import against an already-converted database would
+prove nothing.
+
+Frontend: only `src/api/client.ts` — `api.presets.create/remove` now write to `/templates` with a
+bins↔items adapter, so the existing Settings screen keeps working against the new source of truth.
+Reads still use the server shim. The whole adapter goes away with the C3.2 templates editor.
+
+Gate: **569 tests / 12 files** (was 383 / 11); the authz matrix alone is 424 cases (was 262) — every
+new route carries all six actor rows.
 
 C2.1 notes: migration `0007_workflow_model` (additive; verified by the DROP/TRUNCATE/ALTER-TYPE grep).
 Enums `engagement_kind|engagement_status|request_status|document_kind|scan_status|review_decision|
@@ -737,7 +779,11 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 | Shim | Added | Removed |
 |---|---|---|
 | Legacy `documents` columns frozen at import | C2.1 | C5.4 |
+| `documents` workflow columns nullable (`kind IS NULL` = not imported) | C2.1 | C5.4 |
 | `GET /documents` legacy list shape | C2.2 | C3.4 |
+| `PATCH /documents/:id` still accepts the legacy review fields | C2.2 | C3.4 |
+| `GET /presets` read-only shim over `request_templates` (POST/DELETE → 410) | C2.2 | C3.2 |
+| `api.presets.create/remove` → `/templates` bins↔items adapter (frontend) | C2.2 | C3.2 |
 | `POST /documents/:id/file` → creates a version | C2.3 | C5.4 |
 | `GET /documents/:id/download` → current version | C2.4 | kept (public contract) |
 | `presets` read-only shim over templates | C2.2 | C5.4 |

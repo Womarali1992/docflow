@@ -391,28 +391,252 @@ const cases: Case[] = [
     check: (res) => expect(res.body).toHaveLength(0),
   },
 
-  /* ------------------------------------------------------------- presets */
+  /* ------------------------- presets (read-only shim over templates, C2.2) */
   {
-    name: 'GET /api/presets (provider only, tenant-scoped)',
+    // Still answers, still in the old bins shape, but the rows now come from
+    // request_templates — one place the data lives (Compatibility ledger).
+    name: 'GET /api/presets (read-only shim over templates)',
     req: () => request(app).get('/api/presets'),
     expect: S(200, 200, 403, 403, 403, 401),
     check: (res, fx, actor) => {
-      const ids = (res.body as { id: string }[]).map((p) => p.id);
-      expect(ids).toEqual([selfProvider(fx, actor)!.preset]);
+      const rows = res.body as Array<{ id: string; providerId: string; name: string; bins: Array<{ label: string; items: unknown[] }> }>;
+      // The starter templates, seeded on first read and scoped to this advisor.
+      expect(rows.map((r) => r.name).sort()).toEqual(['Business tax return', 'Individual tax return']);
+      expect(rows.every((r) => r.providerId === selfProvider(fx, actor)!.id)).toBe(true);
+      expect(rows.every((r) => r.bins.length > 0)).toBe(true);
     },
   },
   {
-    name: 'POST /api/presets',
+    name: 'POST /api/presets (gone — use /templates)',
     req: () =>
       request(app)
         .post('/api/presets')
         .send({ name: 'Quarterly pack', bins: [{ id: 'b1', label: 'Quarterly', items: [{ name: 'P&L' }] }] }),
-    expect: S(201, 201, 403, 403, 403, 401),
+    expect: S(410, 410, 403, 403, 403, 401),
   },
   {
-    name: 'DELETE /api/presets/:id',
+    name: 'DELETE /api/presets/:id (gone — use /templates)',
     req: (fx) => request(app).delete(`/api/presets/${fx.provider1.preset}`),
-    expect: S(200, 404, 403, 403, 403, 401),
+    expect: S(410, 410, 403, 403, 403, 401),
+  },
+
+  /* --------------------------------------------------------- engagements */
+  {
+    name: 'GET /api/engagements (advisor sees the firm, client sees their own)',
+    req: () => request(app).get('/api/engagements'),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res, fx, actor) => {
+      const rows = res.body as Array<{ id: string; clientId: string; providerId: string }>;
+      const self = selfClient(fx, actor);
+      if (self) expect(rows.every((r) => r.clientId === self.id)).toBe(true);
+      else expect(rows.every((r) => r.providerId === selfProvider(fx, actor)!.id)).toBe(true);
+    },
+  },
+  {
+    name: 'GET /api/engagements/:id (tree)',
+    req: (fx) => request(app).get(`/api/engagements/${fx.client1a.engagement}`),
+    expect: S(200, 404, 200, 404, 404, 401),
+    check: (res, fx) => {
+      expect(res.body.engagement.id).toBe(fx.client1a.engagement);
+      expect(res.body.requests).toHaveLength(1);
+      // Storage details never travel, on any nested shape.
+      expect(JSON.stringify(res.body)).not.toMatch(/storagePath|storageKey|sha256/);
+    },
+  },
+  {
+    name: 'POST /api/engagements',
+    req: (fx) => request(app).post('/api/engagements').send({ clientId: fx.client1a.id, title: '2027 return', kind: 'individual_tax' }),
+    expect: S(201, 404, 403, 403, 403, 401),
+  },
+  {
+    name: 'PATCH /api/engagements/:id',
+    req: (fx) => request(app).patch(`/api/engagements/${fx.client1a.engagement}`).send({ title: 'Renamed' }),
+    expect: S(200, 404, 403, 404, 404, 401),
+  },
+  {
+    name: 'POST /api/engagements/:id/close',
+    req: (fx) => request(app).post(`/api/engagements/${fx.client1a.engagement}/close`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.status).toBe('closed'),
+  },
+  {
+    name: 'POST /api/engagements/:id/reopen',
+    req: (fx) => request(app).post(`/api/engagements/${fx.client1a.engagement}/reopen`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.status).toBe('open'),
+  },
+  {
+    name: 'POST /api/engagements/:id/requests (explicit items)',
+    req: (fx) =>
+      request(app)
+        .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+        .send({ items: [{ title: 'Prior-year return', category: 'Reference' }] }),
+    expect: S(201, 404, 403, 404, 404, 401),
+    check: (res) => {
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0]).toMatchObject({ status: 'requested', title: 'Prior-year return' });
+      // Appended after the seeded line rather than renumbering it.
+      expect(res.body[0].sortOrder).toBe(1);
+    },
+  },
+
+  /* ------------------------------------------------------------ requests */
+  {
+    name: 'GET /api/requests/:id',
+    req: (fx) => request(app).get(`/api/requests/${fx.client1a.request}`),
+    expect: S(200, 404, 200, 404, 404, 401),
+    check: (res) => expect(res.body).toMatchObject({ status: 'requested', overdue: false }),
+  },
+  {
+    name: 'PATCH /api/requests/:id (wording only)',
+    req: (fx) => request(app).patch(`/api/requests/${fx.client1a.request}`).send({ instructions: 'Any month will do' }),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.instructions).toBe('Any month will do'),
+  },
+  {
+    // Nothing has been submitted against the seeded request, so there is nothing to accept.
+    name: 'POST /api/requests/:id/accept (nothing submitted yet)',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/accept`),
+    expect: S(400, 404, 403, 404, 404, 401),
+  },
+  {
+    name: 'POST /api/requests/:id/waive (reason required)',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/waive`).send({ reason: 'Client has no mortgage' }),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body).toMatchObject({ status: 'waived', waivedReason: 'Client has no mortgage' }),
+  },
+  {
+    name: 'POST /api/requests/:id/reopen',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/reopen`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.status).toBe('requested'),
+  },
+  {
+    // The mirror image of the advisor verbs: the client answers, the advisor cannot answer for them.
+    name: 'POST /api/requests/:id/respond (the client answers)',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/respond`).send({ kind: 'not_applicable', note: 'I rent' }),
+    expect: S(403, 404, 200, 404, 404, 401),
+    check: (res) => {
+      expect(res.body.clientResponseKind).toBe('not_applicable');
+      // A response is not a decision: the line stays on the advisor's list.
+      expect(res.body.status).toBe('requested');
+    },
+  },
+
+  /* ------------------------------------------------- documents (workflow) */
+  {
+    name: 'GET /api/documents/:id/versions',
+    req: (fx) => request(app).get(`/api/documents/${fx.client1a.upload}/versions`),
+    expect: S(200, 404, 200, 404, 404, 401),
+    check: (res, fx) => {
+      expect(res.body).toHaveLength(1);
+      expect(res.body[0]).toMatchObject({ versionNo: 1, isCurrent: true, available: true });
+      expect(res.body[0].id).toBe(fx.client1a.uploadVersion);
+      expect(res.body[0]).not.toHaveProperty('storageKey');
+      expect(res.body[0]).not.toHaveProperty('sha256');
+    },
+  },
+  {
+    name: 'GET /api/documents/:id/reviews',
+    req: (fx) => request(app).get(`/api/documents/${fx.client1a.upload}/reviews`),
+    expect: S(200, 404, 200, 404, 404, 401),
+    check: (res) => expect(res.body).toEqual([]),
+  },
+  {
+    name: 'POST /api/documents/:id/accept (ad-hoc upload)',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/accept`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.status).toBe('reviewed'),
+  },
+  {
+    name: 'POST /api/documents/:id/request-correction (note required)',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/request-correction`).send({ note: 'Page 2 is missing' }),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.status).toBe('needs_update'),
+  },
+  {
+    name: 'POST /api/documents/:id/unshare (deliverable)',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.deliverable}/unshare`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.shared).toBe(false),
+  },
+  {
+    name: 'POST /api/documents/:id/share (deliverable)',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.deliverable}/share`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.shared).toBe(true),
+  },
+  {
+    name: 'POST /api/documents/:id/archive',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/archive`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).not.toBeNull(),
+  },
+  {
+    name: 'POST /api/documents/:id/unarchive',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/unarchive`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).toBeNull(),
+  },
+
+  /* ----------------------------------------------------------- templates */
+  {
+    name: 'GET /api/templates (starters seeded on first read)',
+    req: () => request(app).get('/api/templates'),
+    expect: S(200, 200, 403, 403, 403, 401),
+    check: (res, fx, actor) => {
+      const rows = res.body as Array<{ providerId: string; kind: string; items: unknown[] }>;
+      expect(rows).toHaveLength(2);
+      expect(rows.map((r) => r.kind).sort()).toEqual(['business_tax', 'individual_tax']);
+      expect(rows.every((r) => r.providerId === selfProvider(fx, actor)!.id)).toBe(true);
+      expect(rows.every((r) => r.items.length >= 10)).toBe(true);
+    },
+  },
+  {
+    name: 'POST /api/templates',
+    req: () =>
+      request(app)
+        .post('/api/templates')
+        .send({ name: 'Quarterly pack', items: [{ key: 'pnl', title: 'Profit and loss' }] }),
+    expect: S(201, 201, 403, 403, 403, 401),
+  },
+
+  /* ---------------------------------------------------- dashboard, search */
+  {
+    name: 'GET /api/dashboard',
+    req: () => request(app).get('/api/dashboard'),
+    expect: S(200, 200, 403, 403, 403, 401),
+    check: (res, fx, actor) => {
+      // provider1 has two clients, provider2 one — each with one open request.
+      const expected = actor === 'provider1' ? 2 : 1;
+      expect(res.body.waitingOnClients.count).toBe(expected);
+      expect(res.body.readyToReview.count).toBe(0);
+      expect(res.body.overdue.count).toBe(0);
+      expect(res.body.needsDecision.count).toBe(0);
+    },
+  },
+  {
+    name: 'GET /api/search?q=',
+    req: () => request(app).get('/api/search?q=Insurance'),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res, fx, actor) => {
+      const self = selfClient(fx, actor);
+      const docs = res.body.documents as Array<{ clientId: string }>;
+      if (self) expect(docs.every((d) => d.clientId === self.id)).toBe(true);
+      expect(JSON.stringify(res.body)).not.toMatch(/storagePath|storageKey|sha256/);
+    },
+  },
+  {
+    name: 'GET /api/notifications',
+    req: () => request(app).get('/api/notifications'),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res) => expect(res.body).toEqual({ unread: 0, notifications: [] }),
+  },
+  {
+    name: 'POST /api/notifications/read',
+    req: () => request(app).post('/api/notifications/read').send({}),
+    expect: S(200, 200, 200, 200, 200, 401),
+    check: (res) => expect(res.body).toEqual({ ok: true, marked: 0 }),
   },
 
   /* ----------------------------------------------------------------- ops */

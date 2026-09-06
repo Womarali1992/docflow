@@ -1,50 +1,63 @@
+/**
+ * Presets — a read-only shim over request templates.
+ *
+ * Compatibility ledger: `presets` was the old name for a checklist, and the
+ * current advisor UI still reads this endpoint. It now answers from
+ * `request_templates` in the old bins shape, so the screen keeps working while
+ * there is only one place the data actually lives. Writes are refused with a
+ * pointer at the replacement rather than silently going to a dead table.
+ *
+ * Removed in C3.2, when the templates editor lands. Until then, nothing new
+ * should be written against this route.
+ */
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
-import { z } from 'zod';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
+import { ensureStarterTemplates, type TemplateItem } from '../workflow/starter-templates.js';
 
 const router = Router();
 router.use(authenticate, requireProvider);
 
-router.get('/', async (req, res) => {
-  const list = await db
-    .select()
-    .from(schema.presets)
-    .where(eq(schema.presets.providerId, req.auth!.providerId));
-  res.json(list);
-});
+const GONE = {
+  error: 'Presets have been replaced by request templates. Use /api/templates.',
+  code: 'use_templates',
+};
 
-const presetSchema = z.object({
-  name: z.string().min(1),
-  bins: z.array(z.object({
-    id: z.string(),
-    label: z.string(),
-    items: z.array(z.object({ name: z.string() })),
-  })),
-});
-
-router.post('/', async (req, res) => {
-  const parsed = presetSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
-  const [created] = await db
-    .insert(schema.presets)
-    .values({
-      providerId: req.auth!.providerId,
-      name: parsed.data.name,
-      bins: parsed.data.bins,
-    })
-    .returning();
-  res.status(201).json(created);
-});
-
-router.delete('/:id', async (req, res) => {
-  const [preset] = await db.select().from(schema.presets).where(eq(schema.presets.id, req.params.id));
-  if (!preset || preset.providerId !== req.auth!.providerId) {
-    return res.status(404).json({ error: 'Not found' });
+/** Template items → the legacy `bins` shape, grouped by category. */
+function itemsToBins(items: TemplateItem[]) {
+  const byCategory = new Map<string, { id: string; label: string; items: Array<{ name: string }> }>();
+  for (const item of items) {
+    const label = item.category ?? 'Documents';
+    const existing = byCategory.get(label) ?? { id: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'), label, items: [] };
+    existing.items.push({ name: item.title });
+    byCategory.set(label, existing);
   }
-  await db.delete(schema.presets).where(eq(schema.presets.id, req.params.id));
-  res.json({ ok: true });
+  return [...byCategory.values()];
+}
+
+router.get('/', async (req, res) => {
+  const providerId = req.auth!.providerId;
+  await ensureStarterTemplates(providerId);
+
+  const templates = await db
+    .select()
+    .from(schema.requestTemplates)
+    .where(and(eq(schema.requestTemplates.providerId, providerId), isNull(schema.requestTemplates.archivedAt)))
+    .orderBy(asc(schema.requestTemplates.name));
+
+  res.json(
+    templates.map((t) => ({
+      id: t.id,
+      providerId: t.providerId,
+      name: t.name,
+      bins: itemsToBins((t.items as TemplateItem[]) ?? []),
+      createdAt: t.createdAt,
+    }))
+  );
 });
+
+router.post('/', (_req, res) => res.status(410).json(GONE));
+router.delete('/:id', (_req, res) => res.status(410).json(GONE));
 
 export default router;

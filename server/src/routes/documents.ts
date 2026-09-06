@@ -1,58 +1,61 @@
+/**
+ * Documents — rebuilt around kinds and versions.
+ *
+ * A document is a named slot in a client's file; its bytes are versions. What
+ * the advisor can do to it is explicit: accept, request a correction, share,
+ * unshare, archive. PATCH is organization only (title, category, which
+ * engagement it belongs to) — never review state, never sharing (invariant 5).
+ *
+ * Compatibility ledger, kept until C5.4:
+ *   - `GET /documents` keeps the legacy list shape (C3.4 replaces the callers);
+ *   - `GET /documents/:id/download` still serves the legacy `storagePath` bytes
+ *     (C2.4 replaces it with per-version delivery);
+ *   - `POST /documents/:id/file` still writes in place (C2.3 makes it a version);
+ *   - `DELETE /documents/:id` now ARCHIVES instead of deleting — nothing a
+ *     client sent is ever destroyed by a click.
+ */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'node:fs';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
 import { uploadSingle } from '../middleware/upload.js';
 import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
-import {
-  absPathFor,
-  deleteStoredFile,
-  humanSize,
-  storedFileName,
-  writeStoredFile,
-} from '../storage.js';
+import { absPathFor, deleteStoredFile, humanSize, storedFileName, writeStoredFile } from '../storage.js';
 import { recordActivity } from '../db/activity-log.js';
+import { auditRequest } from '../db/audit.js';
+import { serializeDocument, serializeReview } from './serialize.js';
+import { advisorOnly, badRequest, findDocument, findEngagement, isId, notFound } from './scope.js';
+import type { Document } from '../db/schema.js';
 
 const router = Router();
 router.use(authenticate);
 
-type DocumentRow = typeof schema.documents.$inferSelect;
+export { serializeDocument };
 
 /**
- * Public shape of a document. Storage details never leave the server; the
- * frontend only needs to know whether bytes exist.
+ * Loads a document for an advisor-only verb, in the order the invariants
+ * require: a row the caller cannot see is 404 (they must not learn it exists),
+ * and only a row they *can* see turns a wrong role into 403.
  */
-export function serializeDocument(doc: DocumentRow) {
-  const { storagePath, ...rest } = doc;
-  return { ...rest, hasFile: !!storagePath };
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Load a document the caller is allowed to see. Returns null when it does not
- * exist OR belongs to another tenant; callers answer 404 either way, so an id
- * never confirms existence across tenants.
- */
-async function findScopedDocument(auth: AuthPayload, id: string): Promise<DocumentRow | null> {
-  if (!UUID_RE.test(id)) return null;
-  const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, id));
-  if (!doc) return null;
-  if (auth.kind === 'provider' && doc.providerId !== auth.providerId) return null;
-  if (auth.kind === 'client' && doc.clientId !== auth.sub) return null;
+async function loadForAdvisor(req: Request, res: Response): Promise<Document | null> {
+  const doc = await findDocument(req.auth!, req.params.id);
+  if (!doc) {
+    notFound(res);
+    return null;
+  }
+  if (req.auth!.kind !== 'provider') {
+    advisorOnly(res);
+    return null;
+  }
   return doc;
 }
 
-const notFound = (res: Response) => res.status(404).json({ error: 'Not found' });
-const advisorOnly = (res: Response) =>
-  res.status(403).json({ error: 'Only your advisor can do that.' });
-
-/** A client may attach bytes to their own open requests and re-upload their own files — never to advisor material. */
-function clientMayReplaceFile(doc: DocumentRow): boolean {
-  if (doc.folder === 'Reports') return false;
-  return !!doc.isRequested || doc.uploadedByKind === 'client';
+/** A client may attach bytes to their own open requests and re-upload their own files — never advisor material. */
+function clientMayReplaceFile(doc: Document): boolean {
+  if (doc.kind === 'deliverable' || doc.folder === 'Reports') return false;
+  return Boolean(doc.isRequested) || doc.requestId !== null || doc.uploadedByKind === 'client';
 }
 
 /** Strip characters that would break a Content-Disposition header. */
@@ -61,39 +64,200 @@ function safeFilename(name: string): string {
   return name.replace(/[\r\n"\\]/g, '_').replace(/[\x00-\x1f]/g, '').trim() || 'download';
 }
 
-/* List documents — scoped by auth */
+/**
+ * The legacy list, still the shape the current frontend reads. Filters now come
+ * from the workflow columns; a client never sees an unshared deliverable or an
+ * archived row.
+ */
 router.get('/', async (req, res) => {
   const auth = req.auth!;
-  const clientId = req.query.clientId as string | undefined;
+  const q = req.query as Record<string, string | undefined>;
 
-  if (auth.kind === 'provider') {
-    const conditions = [eq(schema.documents.providerId, auth.providerId)];
-    if (clientId) conditions.push(eq(schema.documents.clientId, clientId));
-    const list = await db
-      .select()
-      .from(schema.documents)
-      .where(and(...conditions));
-    return res.json(list.map(serializeDocument));
+  const conditions =
+    auth.kind === 'provider'
+      ? [eq(schema.documents.providerId, auth.providerId)]
+      : [
+          eq(schema.documents.clientId, auth.sub),
+          // Deliverables appear only once shared; everything else is theirs already.
+          or(eq(schema.documents.kind, 'client_upload'), isNull(schema.documents.kind), isNotNull(schema.documents.sharedAt))!,
+        ];
+
+  if (auth.kind === 'provider' && q.clientId && isId(q.clientId)) conditions.push(eq(schema.documents.clientId, q.clientId));
+  if (q.engagementId && isId(q.engagementId)) conditions.push(eq(schema.documents.engagementId, q.engagementId));
+  if (q.kind === 'client_upload' || q.kind === 'deliverable' || q.kind === 'imported') {
+    conditions.push(eq(schema.documents.kind, q.kind));
   }
+  if (q.includeArchived !== 'true') conditions.push(isNull(schema.documents.archivedAt));
 
-  // client
   const list = await db
     .select()
     .from(schema.documents)
-    .where(eq(schema.documents.clientId, auth.sub));
-  return res.json(list.map(serializeDocument));
+    .where(and(...conditions))
+    .orderBy(desc(schema.documents.uploadedAt));
+  res.json(list.map(serializeDocument));
 });
 
-/* Get single doc */
 router.get('/:id', async (req, res) => {
-  const doc = await findScopedDocument(req.auth!, req.params.id);
+  const doc = await findDocument(req.auth!, req.params.id);
   if (!doc) return notFound(res);
   res.json(serializeDocument(doc));
 });
 
-/* Download the stored file — authenticated; works from a same-origin <a href>. */
+/** The decision history for a document — who decided what, about which version. */
+router.get('/:id/reviews', async (req, res) => {
+  const doc = await findDocument(req.auth!, req.params.id);
+  if (!doc) return notFound(res);
+  const rows = await db
+    .select()
+    .from(schema.reviews)
+    .where(eq(schema.reviews.documentId, doc.id))
+    .orderBy(desc(schema.reviews.createdAt));
+  res.json(rows.map(serializeReview));
+});
+
+/* ------------------------------------------------------------ advisor verbs */
+
+const decisionSchema = z.object({ versionId: z.string().uuid().optional(), note: z.string().max(INSTRUCTIONS_MAX).optional() });
+
+/** Accept / request a correction on an ad-hoc upload — one with no request behind it. */
+async function decide(req: Request, res: Response, decision: 'accepted' | 'needs_correction') {
+  const auth = req.auth!;
+  const doc = await loadForAdvisor(req, res);
+  if (!doc) return;
+  if (doc.kind === 'deliverable') {
+    return badRequest(res, 'A deliverable is your own material — there is nothing to review.', 'not_reviewable');
+  }
+
+  const parsed = decisionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
+  if (decision === 'needs_correction' && !parsed.data.note) {
+    return res.status(400).json({ error: 'Say what needs correcting — the client sees this note.', code: 'note_required' });
+  }
+
+  let versionId = parsed.data.versionId ?? doc.currentVersionId;
+  if (versionId) {
+    if (!isId(versionId)) return badRequest(res, 'That version does not belong to this document.', 'version_mismatch');
+    const [v] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.id, versionId));
+    if (!v || v.documentId !== doc.id) return badRequest(res, 'That version does not belong to this document.', 'version_mismatch');
+  } else {
+    versionId = null;
+  }
+
+  const now = new Date();
+  await db.insert(schema.reviews).values({
+    documentId: doc.id,
+    versionId,
+    requestId: doc.requestId,
+    reviewerId: auth.sub,
+    decision,
+    note: parsed.data.note ?? null,
+    createdAt: now,
+  });
+  // Keep the legacy status column in step so the current UI still reads right.
+  await db
+    .update(schema.documents)
+    .set({ status: decision === 'accepted' ? 'reviewed' : 'needs_update', updatedAt: now })
+    .where(eq(schema.documents.id, doc.id));
+
+  await auditRequest(req, {
+    action: decision === 'accepted' ? 'request.accepted' : 'request.correction_requested',
+    targetType: 'document',
+    targetId: doc.id,
+    clientId: doc.clientId,
+    meta: { versionId },
+  });
+
+  const [updated] = await db.select().from(schema.documents).where(eq(schema.documents.id, doc.id));
+  res.json(serializeDocument(updated));
+}
+
+router.post('/:id/accept', (req, res, next) => {
+  decide(req, res, 'accepted').catch(next);
+});
+
+router.post('/:id/request-correction', (req, res, next) => {
+  decide(req, res, 'needs_correction').catch(next);
+});
+
+/**
+ * Sharing a deliverable is the moment it becomes visible to the client, so it
+ * is a deliberate act with its own audit line — never a side effect of an edit.
+ */
+router.post('/:id/share', async (req, res) => {
+  const auth = req.auth!;
+  const doc = await loadForAdvisor(req, res);
+  if (!doc) return;
+  if (doc.kind !== 'deliverable') return badRequest(res, 'Only a deliverable can be shared.', 'not_a_deliverable');
+  if (!doc.currentVersionId) return badRequest(res, 'There is nothing to share yet — this deliverable has no file.', 'no_file');
+
+  const now = new Date();
+  const [updated] = await db
+    .update(schema.documents)
+    .set({ sharedAt: doc.sharedAt ?? now, sharedById: doc.sharedById ?? auth.sub, updatedAt: now })
+    .where(eq(schema.documents.id, doc.id))
+    .returning();
+
+  await auditRequest(req, { action: 'document.shared', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
+  await recordActivity({
+    providerId: doc.providerId,
+    clientId: doc.clientId,
+    type: 'document',
+    description: `shared ${updated.displayName ?? updated.name}`,
+    actorKind: 'provider',
+    actorId: auth.sub,
+    actorName: auth.name,
+    targetId: doc.id,
+  });
+
+  res.json(serializeDocument(updated));
+});
+
+router.post('/:id/unshare', async (req, res) => {
+  const doc = await loadForAdvisor(req, res);
+  if (!doc) return;
+  if (doc.kind !== 'deliverable') return badRequest(res, 'Only a deliverable can be unshared.', 'not_a_deliverable');
+
+  const [updated] = await db
+    .update(schema.documents)
+    .set({ sharedAt: null, sharedById: null, updatedAt: new Date() })
+    .where(eq(schema.documents.id, doc.id))
+    .returning();
+
+  await auditRequest(req, { action: 'document.unshared', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
+  res.json(serializeDocument(updated));
+});
+
+router.post('/:id/archive', async (req, res) => {
+  const doc = await loadForAdvisor(req, res);
+  if (!doc) return;
+
+  const now = new Date();
+  const [updated] = await db
+    .update(schema.documents)
+    .set({ archivedAt: doc.archivedAt ?? now, updatedAt: now })
+    .where(eq(schema.documents.id, doc.id))
+    .returning();
+
+  await auditRequest(req, { action: 'document.archived', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
+  res.json(serializeDocument(updated));
+});
+
+router.post('/:id/unarchive', async (req, res) => {
+  const doc = await loadForAdvisor(req, res);
+  if (!doc) return;
+  const [updated] = await db
+    .update(schema.documents)
+    .set({ archivedAt: null, updatedAt: new Date() })
+    .where(eq(schema.documents.id, doc.id))
+    .returning();
+  res.json(serializeDocument(updated));
+});
+
+/* --------------------------------------------------------------- legacy API */
+
+/* Legacy download of the in-place file. C2.4 replaces this with per-version delivery. */
 router.get('/:id/download', async (req, res) => {
-  const doc = await findScopedDocument(req.auth!, req.params.id);
+  const doc = await findDocument(req.auth!, req.params.id);
   if (!doc) return notFound(res);
   if (!doc.storagePath) return res.status(404).json({ error: 'No file attached' });
 
@@ -108,10 +272,7 @@ router.get('/:id/download', async (req, res) => {
   const filename = safeFilename(doc.name);
   res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
   if (doc.sizeBytes) res.setHeader('Content-Length', String(doc.sizeBytes));
-  res.setHeader(
-    'Content-Disposition',
-    `${dispType}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(doc.name)}`
-  );
+  res.setHeader('Content-Disposition', `${dispType}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(doc.name)}`);
 
   const stream = fs.createReadStream(abs);
   stream.on('error', () => {
@@ -121,11 +282,11 @@ router.get('/:id/download', async (req, res) => {
   stream.pipe(res);
 });
 
-/* Upload / replace the file for a document (multipart field: file).
-   The target is resolved and authorized BEFORE the multipart body is parsed. */
+/* Legacy in-place upload. C2.3 turns this into a version through the scan pipeline.
+   The target is resolved and authorized BEFORE the multipart body is parsed (invariant 1). */
 router.post('/:id/file', async (req: Request, res: Response, next: NextFunction) => {
   const auth = req.auth!;
-  const doc = await findScopedDocument(auth, req.params.id);
+  const doc = await findDocument(auth, req.params.id);
   if (!doc) return notFound(res);
   if (auth.kind === 'client' && !clientMayReplaceFile(doc)) return advisorOnly(res);
 
@@ -135,20 +296,18 @@ router.post('/:id/file', async (req: Request, res: Response, next: NextFunction)
   });
 });
 
-async function attachFile(req: Request, res: Response, doc: DocumentRow) {
+async function attachFile(req: Request, res: Response, doc: Document) {
   const auth = req.auth!;
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'No file provided' });
 
   const fileName = storedFileName(doc.id, file.mimetype);
-  // Clean up a previous file if the extension changed (otherwise it's overwritten in place).
-  if (doc.storagePath && doc.storagePath !== fileName) {
-    await deleteStoredFile(doc.storagePath);
-  }
+  if (doc.storagePath && doc.storagePath !== fileName) await deleteStoredFile(doc.storagePath);
   await writeStoredFile(fileName, file.buffer);
 
   const wasRequested = doc.isRequested;
-  const hadFile = !!doc.storagePath;
+  const hadFile = Boolean(doc.storagePath);
+  const now = new Date();
 
   const [updated] = await db
     .update(schema.documents)
@@ -160,7 +319,7 @@ async function attachFile(req: Request, res: Response, doc: DocumentRow) {
       url: `/api/documents/${doc.id}/download`,
       uploadedByKind: auth.kind,
       uploadedById: auth.sub,
-      uploadedAt: new Date(),
+      uploadedAt: now,
       isRequested: false,
       hasUpdateRequest: false,
       updateRequestedById: null,
@@ -168,10 +327,21 @@ async function attachFile(req: Request, res: Response, doc: DocumentRow) {
       updateRequestDescription: null,
       requestedVersion: null,
       status: 'pending',
-      updatedAt: new Date(),
+      updatedAt: now,
     })
     .where(eq(schema.documents.id, doc.id))
     .returning();
+
+  // A legacy upload against a real request still moves the checklist forward.
+  if (doc.requestId) {
+    const [request] = await db.select().from(schema.requests).where(eq(schema.requests.id, doc.requestId));
+    if (request && request.status !== 'waived') {
+      await db
+        .update(schema.requests)
+        .set({ status: 'submitted', clientResponseKind: null, clientResponseNote: null, clientResponseAt: null, updatedAt: now })
+        .where(eq(schema.requests.id, request.id));
+    }
+  }
 
   const description = wasRequested
     ? `fulfilled request: ${updated.name}`
@@ -193,12 +363,13 @@ async function attachFile(req: Request, res: Response, doc: DocumentRow) {
   res.json(serializeDocument(updated));
 }
 
-/* Create / request document (provider creates a request, or a metadata record) */
+/* Create a document record (legacy shape; C2.3 replaces the upload paths). */
 const createSchema = z.object({
   clientId: z.string().uuid(),
   name: z.string().min(1).max(NAME_MAX),
-  type: z.string().optional(),
-  folder: z.string().optional(),
+  type: z.string().max(NAME_MAX).optional(),
+  folder: z.string().max(NAME_MAX).optional(),
+  engagementId: z.string().uuid().optional(),
   isRequested: z.boolean().optional(),
   description: z.string().max(INSTRUCTIONS_MAX).optional(),
   requestFrequency: z.enum(['daily', 'monthly', 'quarterly', 'yearly', 'one-time']).optional(),
@@ -211,26 +382,33 @@ router.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   const data = parsed.data;
 
-  // Resolve providerId based on caller. A client id outside the caller's scope
-  // is indistinguishable from a missing one.
-  let providerId: string;
   if (auth.kind === 'provider') {
-    providerId = auth.providerId;
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, data.clientId));
-    if (!c || c.providerId !== providerId) return notFound(res);
-  } else {
-    if (data.clientId !== auth.sub) return notFound(res);
-    providerId = auth.providerId;
+    if (!c || c.providerId !== auth.providerId) return notFound(res);
+  } else if (data.clientId !== auth.sub) {
+    return notFound(res);
   }
 
+  let engagementId: string | null = null;
+  if (data.engagementId) {
+    const engagement = await findEngagement(auth, data.engagementId);
+    if (!engagement || engagement.clientId !== data.clientId) return notFound(res);
+    engagementId = engagement.id;
+  }
+
+  const folder = data.folder || 'Documents';
   const [doc] = await db
     .insert(schema.documents)
     .values({
       clientId: data.clientId,
-      providerId,
+      providerId: auth.providerId,
       name: data.name,
+      displayName: data.name,
       type: data.type,
-      folder: data.folder || 'Documents',
+      folder,
+      category: folder,
+      engagementId,
+      kind: folder === 'Reports' ? 'deliverable' : 'client_upload',
       isRequested: data.isRequested ?? false,
       requestedById: data.isRequested ? auth.sub : null,
       requestedAt: data.isRequested ? new Date() : null,
@@ -243,7 +421,7 @@ router.post('/', async (req, res) => {
     .returning();
 
   await recordActivity({
-    providerId,
+    providerId: auth.providerId,
     clientId: doc.clientId,
     type: data.isRequested ? 'update' : 'document',
     description: data.isRequested ? `requested ${doc.name}` : `uploaded ${doc.name}`,
@@ -256,35 +434,48 @@ router.post('/', async (req, res) => {
   res.status(201).json(serializeDocument(doc));
 });
 
-/* Update document metadata / status / update-requests — advisor only */
-const updateSchema = z.object({
+/**
+ * Organization only: what it is called, which drawer it is in, which engagement
+ * it belongs to. Review state, sharing and archiving are the verbs above.
+ *
+ * The legacy review fields are still accepted so the current UI keeps working
+ * (Compatibility ledger, removed in C3.4) — but only for an advisor, as C0.2
+ * established.
+ */
+const patchSchema = z.object({
+  displayName: z.string().min(1).max(NAME_MAX).optional(),
+  category: z.string().max(NAME_MAX).nullable().optional(),
+  engagementId: z.string().uuid().nullable().optional(),
+  /* Legacy fields, kept until C3.4 rewrites the callers. */
   name: z.string().min(1).max(NAME_MAX).optional(),
-  folder: z.string().optional(),
-  isRequested: z.boolean().optional(),
+  folder: z.string().max(NAME_MAX).optional(),
   status: z.enum(['pending', 'reviewed', 'needs_update', 'in_review']).optional(),
   hasUpdateRequest: z.boolean().optional(),
   updateRequestDescription: z.string().max(INSTRUCTIONS_MAX).optional(),
-  requestedVersion: z.string().optional(),
+  requestedVersion: z.string().max(NAME_MAX).optional(),
   requestFrequency: z.enum(['daily', 'monthly', 'quarterly', 'yearly', 'one-time']).optional(),
   dueDate: z.string().datetime().nullable().optional(),
+  isRequested: z.boolean().optional(),
 });
 
 router.patch('/:id', async (req, res) => {
   const auth = req.auth!;
-  const doc = await findScopedDocument(auth, req.params.id);
+  const doc = await findDocument(auth, req.params.id);
   if (!doc) return notFound(res);
   if (auth.kind !== 'provider') return advisorOnly(res);
 
-  const parsed = updateSchema.safeParse(req.body);
+  const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
 
-  const updates: Record<string, unknown> = { ...parsed.data, updatedAt: new Date() };
+  if (parsed.data.engagementId) {
+    const engagement = await findEngagement(auth, parsed.data.engagementId);
+    if (!engagement || engagement.clientId !== doc.clientId) return notFound(res);
+  }
 
-  // dueDate: explicit null clears it; a string becomes a Date.
-  if (parsed.data.dueDate === null) updates.dueDate = null;
-  else if (parsed.data.dueDate) updates.dueDate = new Date(parsed.data.dueDate);
+  const { dueDate, ...rest } = parsed.data;
+  const updates: Record<string, unknown> = { ...rest, updatedAt: new Date() };
+  if (dueDate !== undefined) updates.dueDate = dueDate === null ? null : new Date(dueDate);
 
-  // Update-request lifecycle: stamp on open, clear on resolve.
   if (parsed.data.hasUpdateRequest === true) {
     updates.updateRequestedById = auth.sub;
     updates.updateRequestedAt = new Date();
@@ -296,29 +487,18 @@ router.patch('/:id', async (req, res) => {
     updates.requestedVersion = null;
   }
 
-  const [updated] = await db
-    .update(schema.documents)
-    .set(updates)
-    .where(eq(schema.documents.id, doc.id))
-    .returning();
+  const [updated] = await db.update(schema.documents).set(updates).where(eq(schema.documents.id, doc.id)).returning();
 
-  // Record activity for meaningful changes
   let description: string | null = null;
-  let activityType: 'document' | 'update' = 'document';
-  if (parsed.data.status === 'reviewed' && doc.status !== 'reviewed') {
-    description = `marked reviewed: ${updated.name}`;
-    activityType = 'update';
-  } else if (parsed.data.hasUpdateRequest && !doc.hasUpdateRequest) {
-    description = `requested update on: ${updated.name}`;
-    activityType = 'update';
-  }
+  if (parsed.data.status === 'reviewed' && doc.status !== 'reviewed') description = `marked reviewed: ${updated.name}`;
+  else if (parsed.data.hasUpdateRequest && !doc.hasUpdateRequest) description = `requested update on: ${updated.name}`;
   if (description) {
     await recordActivity({
       providerId: updated.providerId,
       clientId: updated.clientId,
-      type: activityType,
+      type: 'update',
       description,
-      actorKind: auth.kind,
+      actorKind: 'provider',
       actorId: auth.sub,
       actorName: auth.name,
       targetId: updated.id,
@@ -328,15 +508,22 @@ router.patch('/:id', async (req, res) => {
   res.json(serializeDocument(updated));
 });
 
-/* Delete — advisor only */
+/**
+ * DELETE archives. Bytes a client sent are never destroyed by a click — C5.x
+ * adds a deliberate, audited purge if the firm ever needs one.
+ */
 router.delete('/:id', async (req, res) => {
-  const auth = req.auth!;
-  const doc = await findScopedDocument(auth, req.params.id);
-  if (!doc) return notFound(res);
-  if (auth.kind !== 'provider') return advisorOnly(res);
-  await deleteStoredFile(doc.storagePath);
-  await db.delete(schema.documents).where(eq(schema.documents.id, doc.id));
-  res.json({ ok: true });
+  const doc = await loadForAdvisor(req, res);
+  if (!doc) return;
+
+  const now = new Date();
+  await db
+    .update(schema.documents)
+    .set({ archivedAt: doc.archivedAt ?? now, updatedAt: now })
+    .where(eq(schema.documents.id, doc.id));
+
+  await auditRequest(req, { action: 'document.archived', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
+  res.json({ ok: true, archived: true });
 });
 
 export default router;

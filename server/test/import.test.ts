@@ -15,7 +15,7 @@ import { and, eq } from 'drizzle-orm';
 import { db, schema } from '../src/db/client.js';
 import { ImportError, importLegacy, itemsFromBins, readManifest } from '../src/db/migrate-legacy.js';
 import { absPathForKey } from '../src/files/store.js';
-import { PDF_BYTES, seedFixture, type Fixture } from './helpers.js';
+import { PDF_BYTES, seedLegacyFixture, type Fixture } from './helpers.js';
 
 const scratch = path.join(process.env.DATA_ROOT ?? '.', '..', '.import-tmp');
 
@@ -95,7 +95,7 @@ describe('legacy import', () => {
   let fx: Fixture;
 
   beforeEach(async () => {
-    fx = await seedFixture();
+    fx = await seedLegacyFixture();
   });
 
   it('converts the seeded legacy database and reports what it did', async () => {
@@ -340,7 +340,7 @@ describe('document/version relationship', () => {
   let fx: Fixture;
 
   beforeEach(async () => {
-    fx = await seedFixture();
+    fx = await seedLegacyFixture();
   });
 
   it('will not accept two versions with the same number for one document', async () => {
