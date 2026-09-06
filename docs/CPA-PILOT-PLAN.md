@@ -42,7 +42,7 @@ token remap every later screen needs are in place. C3.2 is the first screen comm
 `src/api/queries/*` and **removes both presets shims** (the read-only `GET /presets` route and the
 frontend bins↔items adapter in `api.presets`).
 
-C3.1 notes: the commit is the foundation the C3.x/C4.x screens stand on, so most of it is
+C3.1 notes (`a062c34`): the commit is the foundation the C3.x/C4.x screens stand on, so most of it is
 infrastructure rather than pixels.
 
 - **Data layer** — `src/api/queries/` with one module per resource (`auth, clients, engagements,
