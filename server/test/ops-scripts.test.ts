@@ -37,6 +37,14 @@ describe('ops scripts', () => {
       invitations: 0,
       password_resets: 0,
       jobs: 0,
+      engagements: 0,
+      requests: 0,
+      document_versions: 0,
+      reviews: 0,
+      request_templates: 0,
+      notifications: 0,
+      audit_log: 0,
+      backup_runs: 0,
     });
     expect(c.documentsWithFile).toBe(6);
     expect(c.migrations).toBeGreaterThanOrEqual(3);

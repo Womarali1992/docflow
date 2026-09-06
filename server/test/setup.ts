@@ -32,6 +32,8 @@ process.env.RATE_LIMIT_LOOKUP_IP = '100000';
 // Fixtures hash passwords at cost 4; the same cost here keeps logins fast and stops the re-hash-on-login from firing.
 process.env.PASSWORD_BCRYPT_COST = '4';
 process.env.UPLOADS_DIR = path.join(here, '.uploads-tmp');
+// Document bytes (C2.1 onwards) live under DATA_ROOT, never in the legacy uploads tree.
+process.env.DATA_ROOT = path.join(here, '.data-tmp');
 delete process.env.ALLOW_PROVIDER_SIGNUP;
 // No mail server in tests: the mailer must degrade to copy-link, and the email
 // handler is exercised with an injected transport instead of a socket.
@@ -46,6 +48,8 @@ let tableList: string | null = null;
 beforeAll(async () => {
   fs.rmSync(process.env.UPLOADS_DIR!, { recursive: true, force: true });
   fs.mkdirSync(process.env.UPLOADS_DIR!, { recursive: true });
+  fs.rmSync(process.env.DATA_ROOT!, { recursive: true, force: true });
+  fs.mkdirSync(process.env.DATA_ROOT!, { recursive: true });
   try {
     await migrate(db, { migrationsFolder: path.join(here, '..', 'migrations') });
   } catch (err) {

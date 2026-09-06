@@ -16,6 +16,10 @@ dist-ssr
 server/.env
 server/uploads/
 server/test/.uploads-tmp/
+# DATA_ROOT default outside production (document bytes: see server/src/files/store.ts)
+server/.data/
+server/test/.data-tmp/
+server/test/.import-tmp/
 
 # Unrelated standalone prototype (own git repo)
 drilldown/

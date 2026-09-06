@@ -22,14 +22,36 @@ export const TABLES = [
   'invitations',
   'password_resets',
   'jobs',
+  'engagements',
+  'requests',
+  'document_versions',
+  'reviews',
+  'request_templates',
+  'notifications',
+  'audit_log',
+  'backup_runs',
 ];
 
 export async function countAll(url) {
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   try {
+    // Count only what this database actually has. A backup set taken before a
+    // migration is restored on the older schema, and the restore drill must still
+    // be able to verify it — a newer table missing there is expected, not a fault.
+    const present = await client.query(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name = ANY($1)`,
+      [TABLES]
+    );
+    const have = new Set(present.rows.map((r) => r.table_name));
     const tables = {};
+    const missingTables = [];
     for (const t of TABLES) {
+      if (!have.has(t)) {
+        missingTables.push(t);
+        continue;
+      }
       const r = await client.query(`SELECT COUNT(*)::int AS n FROM "${t}"`);
       tables[t] = r.rows[0].n;
     }
@@ -50,6 +72,7 @@ export async function countAll(url) {
     return {
       database: dbNameOf(url),
       tables,
+      missingTables,
       documentsWithFile: withFile.rows[0].n,
       migrations,
       lastMigrationAt,

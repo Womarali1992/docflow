@@ -20,7 +20,7 @@
 | C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | SHIPPED 2026-09-05 |
 | C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | SHIPPED 2026-09-05 |
 | C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | SHIPPED 2026-09-06 |
-| C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | NOT STARTED |
+| C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | SHIPPED 2026-09-06 |
 | C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | NOT STARTED |
 | C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | NOT STARTED |
 | C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | NOT STARTED |
@@ -36,35 +36,53 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C2.1** (workflow schema, expand, + legacy import with report). **Phase 1 complete**;
-Phase 0 and C1.1–C1.4 shipped. C2.1 needs a backup manifest younger than 24 h (`ops/windows/backup.ps1`)
-and must be rehearsed on a C0.3 restore before it touches the dev database.
+**NEXT = C2.2** (engagement / request / document / version / review resources with explicit actions;
+legacy routes kept). Phase 0 and Phase 1 complete; C2.1 shipped.
 
-C1.4 notes: migration `0006_jobs` (additive; `jobs` joins `scripts/count.mjs` TABLES). `jobs/queue.ts`
-= `enqueue` (returns null when `dedupeKey` exists — callers treat that as success), `claim` (one UPDATE
-with `FOR UPDATE SKIP LOCKED`, increments `attempts` up front so a dead worker costs one attempt, and
-re-claims a lock older than `STUCK_LOCK_MS` = 5 min), `complete`, `fail` (backoff ladder 1 min / 5 min /
-15 min / hourly), `queueStats`. **Pending = `doneAt IS NULL AND attempts < maxAttempts`; failed = the
-same with the attempts spent** — failed rows are never deleted and never retried, which is what
-`GET /api/ops/status` counts. `jobs/worker.ts` = `runOnce` (exported; the tests drive it directly instead
-of a timer) + `startWorker` (poll `WORKER_POLL_MS`=5000, batch `WORKER_BATCH`=5, interruptible idle so
-`stop()` does not wait a full poll); an unknown job type fails the job rather than the loop.
-`src/worker.ts` = the entry (`npm run worker`, `npm run worker:start` → `dist/worker.js`, the
-`docflow-worker` service in C5.3), SIGINT/SIGTERM finish the job in flight then close the pool.
-Handlers: `email.ts` (nodemailer; `transportFromEnv` caches per `SMTP_URL`; `sendEmailJob(job, transport)`
-takes an injectable transport so tests never open a socket; **no transport → `'skipped'`, not a failure**),
-`scan_retry.ts` and `sweeper.ts` are logging stubs for C2.3. Split on purpose: `jobs/mail.ts`
-(`isMailConfigured`, `mailFrom`, `enqueueEmail`, template names) is what routes import, so nodemailer
-stays in the worker. Four generic templates — invitation, password_reset, new_item, needs_attention —
-asserted by test to contain no filename / amount / message text, to link to the portal and to say
-"do not reply". `POST /clients/:id/invitations` and `/password-reset` now answer a real `emailQueued`;
-`POST /auth/password-reset/request` enqueues but still always answers a bare 202 (never `emailQueued`,
-which would leak account existence). New `routes/ops.ts` → `GET /api/ops/status` (advisor only, 403 for
-clients) with queue counts + `mail.configured` + an operator note; in the authz matrix. Frontend: only
-`components/docflow/linkHints.ts` (+ its two call sites) so the invitation / reset dialog stops saying
-"Send this link to the client" when the app already emailed it. `SMTP_URL` is deleted in `test/setup.ts`,
-so the suite always exercises the copy-link path unless a test sets it. **User decision 2026-09-06: ship
-with SMTP unconfigured** — no live send has been made; prerequisite 3 (firm SMTP credentials) is still open.
+C2.1 notes: migration `0007_workflow_model` (additive; verified by the DROP/TRUNCATE/ALTER-TYPE grep).
+Enums `engagement_kind|engagement_status|request_status|document_kind|scan_status|review_decision|
+template_kind`. New tables `engagements`, `requests`, `document_versions`, `reviews`,
+`request_templates`, `notifications`, `audit_log`, `backup_runs` (the last two land now rather than in
+C5.2 — the C2.1 spec says "the Data model tables", and both are additive and unreferenced until their
+own commits). `documents` gains `engagementId, requestId, kind, displayName, category, currentVersionId,
+sharedAt, sharedById, archivedAt`; **all nullable on purpose — `kind IS NULL` means "not yet imported",
+which is exactly what makes the import idempotent**. `clients.emailNormalized` added; its unique index
+is still C5.4's job. `documents.currentVersionId` ↔ `document_versions.documentId` is circular, resolved
+with drizzle's `AnyPgColumn` annotation.
+
+**The audit trigger is hand-written at the end of the migration** (drizzle cannot generate it):
+`audit_log_append_only()` raises on UPDATE and DELETE. TRUNCATE is statement-level and deliberately
+still allowed — the test harness truncates between tests and a restore replaces the database.
+
+`db/audit.ts` = `audit()` (never throws unless given a `tx`, so an audit failure cannot break the action
+it records), `auditRequest()`, `hashedEmail()` (truncated sha256 — an address is never stored in the
+clear), and the `AuditAction` vocabulary. `files/store.ts` brings forward the minimum of C2.3:
+`dataRoot()` (required in production, dev default `server/.data`, gitignored), `newStorageKey()` →
+`files/yyyy/mm/<uuid>.<ext>`, `absPathForKey()` (traversal-safe), `ensureKeyDir()`, `extOf()`.
+`.env.example` documents `DATA_ROOT`.
+
+`db/migrate-legacy.ts` (`npm run db:import-legacy -- --backup-manifest <path> [--trust-legacy-files]
+[--dry-run] [--report <path>]`): refuses without a manifest younger than 24 h **with no override flag**
+(also refuses a future-dated one — a wrong clock would defeat the check); copies files, never moves;
+keeps legacy ids (a request has its document's id); a missing file is reported, not fatal; idempotent.
+**Deviation from the plan's step 3, deliberate:** the plan gives every imported request status
+`requested`; a legacy row that already carries a file is instead `submitted` (or `accepted` when its
+legacy status was `reviewed`), because telling the advisor to chase a client who already delivered
+would be worse than a strict reading. Without `--trust-legacy-files` versions are `pending` with a
+`scan_retry` job each and `publishedAt` null — nothing is ever claimed `clean` unscanned (invariant 3).
+Deliverables import as **shared** (they were visible before). Presets → `request_templates` (kind
+`custom`, `key = <binId>:<slug(title)>`, category = bin label).
+
+**`scripts/count.mjs` fix found by the rehearsal:** extending TABLES made it crash on a backup set
+restored from *before* this migration. `countAll` now counts only the tables a database actually has
+and returns `missingTables`, so older backup sets stay verifiable. Without the rehearsal this would
+have broken the restore drill for every existing backup.
+
+Gate: 383 tests / 11 files, server build + `typecheck:test` clean, root typecheck / lint (11 inherited
+warnings) / build clean. Rehearsed for real on 2026-09-06: restore drill PASS → migrate → dry-run →
+import → second run created nothing → all 5 versions' bytes matched their recorded sha256 and size →
+legacy uploads untouched. Then run against the dev DB with `--trust-legacy-files`; `db:seed` still
+succeeds. Recorded in `docs/PILOT-RUNBOOK.md`.
 
 C1.3 notes: migration `0005_invites_resets` (additive: `invitations`, `password_resets`, `providers`/`clients` +
 `deactivatedAt`, `passwordChangedAt`; both tables join `scripts/count.mjs` TABLES). `server/src/auth/passwords.ts`

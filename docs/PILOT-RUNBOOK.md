@@ -159,3 +159,68 @@ carries the SMTP error and the count shows on the ops status.
 Every notice is deliberately **generic** — subject and body never contain a filename, an amount,
 a category, message text or another client's name. They say something is waiting and link to the
 portal, because an inbox is not a confidential channel.
+
+## Legacy import (C2.1) — run once, on purpose
+
+The workflow model (engagements → requests → documents → versions → reviews) arrives as an
+**additive** migration: every legacy column and route keeps working until C5.4. One script then
+converts the existing rows into the new shape.
+
+```
+cd server
+npm run db:import-legacy -- --backup-manifest <path-to-manifest.json> [--trust-legacy-files] [--dry-run]
+```
+
+It **refuses to run** unless the manifest is younger than 24 hours. There is no override — take a
+backup instead (`ops\windows\backup.ps1`). Everything else about it is designed to be repeatable:
+
+- **Idempotent.** A second run converts nothing. A document counts as "already imported" once its
+  `kind` is set, so an interrupted run can simply be run again.
+- **Copies, never moves.** `server\uploads\` is left byte-for-byte alone and stays the fallback
+  until C5.4 deletes it. New bytes go to `<DATA_ROOT>\files\yyyy\mm\<uuid>.<ext>`.
+- **Keeps ids.** A request carries the id of the document it came from, so existing links resolve.
+- **A missing file is reported, not fatal.** The document survives with no current version and is
+  listed in `migration-report.json` (written next to the manifest).
+- `--dry-run` prints the same report and writes nothing at all.
+
+### Scanning: what `--trust-legacy-files` means
+
+Without it, imported versions are `pending` and a scan job is queued for each — nothing is served
+until C2.3's scanner has actually looked at the file. With it, they are marked `clean` and the
+version records that they were **not** scanned. Use it only for files that were already under the
+firm's control. When in doubt leave it off: the import is still correct, the files simply wait.
+
+### Rehearse first — this is not optional
+
+Run it against a restored copy before the real database, and compare the report:
+
+```
+$env:PG_ADMIN_URL = 'postgres://postgres@localhost:5432/postgres'
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\restore.ps1 -From <backup set>
+$env:DATABASE_URL = 'postgres://docflow:...@localhost:5432/docflow_restore'
+$env:UPLOADS_DIR  = 'C:\Users\<you>\docflow-restore\uploads'
+$env:DATA_ROOT    = 'C:\Users\<you>\docflow-restore\data'
+npx tsx src/db/migrate.ts
+npx tsx src/db/migrate-legacy.ts --backup-manifest <manifest> --dry-run
+```
+
+### Rehearsal record
+
+| When | Set | Result |
+|---|---|---|
+| 2026-09-06 | `docflow-backups\2026-09-06` | Restore drill **PASS** (5 files verified, counts match). Migrated to `0007_workflow_model`, then imported: 3 engagements, 3 requests, 5 versions, 2 reviews, 8 documents converted, 5 scan jobs queued. All 5 versions' bytes matched their recorded sha256 and size; the 5 legacy uploads were untouched. A second run created nothing. Then run against the dev database with `--trust-legacy-files`; `npm run db:seed` still succeeds afterwards. |
+
+The rehearsal earned its keep: it caught `scripts\count.mjs` failing on a backup set restored from
+*before* this migration (it counted tables the older schema does not have). `countAll` now counts
+only the tables a database actually has and reports the rest as `missingTables`, so an older
+backup set stays verifiable.
+
+## Audit log (C2.1)
+
+`audit_log` is **append-only, enforced by the database**: a trigger raises on UPDATE and DELETE, so
+no route, script or console session can quietly rewrite history. It records that something happened
+— never what was in it. No passwords, tokens, document bytes or message text; an email address is
+stored as a truncated sha256, so repeated failures stay countable without the address being there.
+
+TRUNCATE is deliberately still allowed (it is statement-level): the test harness truncates between
+tests, and a restore replaces the whole database. Nothing in the application ever issues one.
