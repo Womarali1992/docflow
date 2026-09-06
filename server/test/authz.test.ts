@@ -311,10 +311,22 @@ const cases: Case[] = [
     },
   },
   {
-    name: 'PATCH /api/documents/:id (review state is advisor-only)',
-    req: (fx) => request(app).patch(`/api/documents/${fx.client1a.upload}`).send({ status: 'reviewed' }),
+    name: 'PATCH /api/documents/:id (filing is advisor-only)',
+    req: (fx) => request(app).patch(`/api/documents/${fx.client1a.upload}`).send({ displayName: 'Renamed by the advisor' }),
     expect: S(200, 404, 403, 404, 404, 401),
-    check: (res) => expect(res.body.status).toBe('reviewed'),
+    check: (res) => expect(res.body.displayName).toBe('Renamed by the advisor'),
+  },
+  {
+    // C3.4 closed the legacy door: the advisor who owns the row is refused too,
+    // and told where the decision actually lives. Role checks still come first,
+    // so everyone else gets the same answer they got before.
+    name: 'PATCH /api/documents/:id with a legacy review field (removed in C3.4)',
+    req: (fx) => request(app).patch(`/api/documents/${fx.client1a.upload}`).send({ status: 'reviewed' }),
+    // Every actor runs: the point is that the role checks still come first, so a
+    // closed door does not become a way to find out which ids exist. The body's
+    // `use_review_actions` code is asserted in documents.test.ts (check() here
+    // only runs on a 2xx).
+    expect: S(400, 404, 403, 404, 404, 401),
   },
   {
     name: 'DELETE /api/documents/:id (advisor deliverable)',

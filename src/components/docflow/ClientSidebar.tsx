@@ -1,15 +1,13 @@
 import React from 'react';
 import { I } from './icons';
-import { useClients } from '@/context/ClientsContext';
-import { useDocumentsStore } from '@/context/DocumentsContext';
+import { useClient, useDocuments } from '@/api/queries';
 import { useAuth } from '@/context/AuthContext';
 
 const ClientSidebar: React.FC = () => {
-  const { clients } = useClients();
-  const { documents } = useDocumentsStore();
   const { me } = useAuth();
-
-  const client = clients[0]; // for client login, ClientsContext returns just themselves
+  /* A client may read their own row; the server decides that, not the caller. */
+  const { data: client } = useClient(me?.kind === 'client' ? me.id : undefined);
+  const { data: documents = [] } = useDocuments();
   const initials = client?.name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase() || '';
 
   const myDocs = documents.filter(d => !d.isRequested && d.folder !== 'Reports');

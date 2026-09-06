@@ -1,11 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams, Navigate, useSearchParams } from 'react-router-dom';
-import { useDocumentsStore } from '@/context/DocumentsContext';
-import { useClients } from '@/context/ClientsContext';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
-import { groupDocumentsByBaseNameMap } from '@/utils/documentGrouping';
+import { api } from '@/api/client';
+import { useClient, useDocuments } from '@/api/queries';
 import { getErrorMessage } from '@/utils/errors';
-import type { Document } from '@/api/types';
 import { I } from '@/components/docflow/icons';
 import MessagesPanel from '@/components/docflow/MessagesPanel';
 import SecurityCard from '@/components/docflow/SecurityCard';
@@ -27,9 +26,10 @@ const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', c
 const ClientPortal = () => {
   const { clientId } = useParams<{ clientId: string }>();
   const { toast } = useToast();
-  const { documents, fulfillRequest, uploadDocument } = useDocumentsStore();
-  const { clients } = useClients();
   const { me } = useAuth();
+  const queryClient = useQueryClient();
+  const { data: client } = useClient(clientId);
+  const { data: documents = [] } = useDocuments();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const requestUploadRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const messagesRef = useRef<HTMLDivElement | null>(null);
@@ -43,8 +43,6 @@ const ClientPortal = () => {
     window.addEventListener(CLIENT_UPLOAD_EVENT, onUpload);
     return () => window.removeEventListener(CLIENT_UPLOAD_EVENT, onUpload);
   }, []);
-
-  const client = clients.find(c => c.id === clientId);
 
   // All hooks must run before any early return (rules of hooks).
   const myDocs = useMemo(
@@ -63,17 +61,17 @@ const ClientPortal = () => {
     if (myDocs.length === 0) return null;
     return [...myDocs].sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime())[0];
   }, [myDocs]);
-  const myDocGroups = useMemo(
-    () => groupDocumentsByBaseNameMap(q ? myDocs.filter(d => d.name.toLowerCase().includes(q)) : myDocs),
-    [myDocs, q]
-  );
+  /* Flat and newest-first. The old base-name grouping went with C3.4 — the
+     portal's real answer to "where is my stuff" is the next-steps list C4.1
+     builds, not a pile of cards the client has to decode. */
+  const visibleDocs = useMemo(() => {
+    const list = q ? myDocs.filter((d) => (d.displayName ?? d.name).toLowerCase().includes(q)) : myDocs;
+    return [...list].sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime());
+  }, [myDocs, q]);
 
   // Client can only see themselves
   if (me?.kind === 'client' && clientId !== me.id) {
     return <Navigate to={`/client/${me.id}`} replace />;
-  }
-  if (!client && clients.length > 0) {
-    return <Navigate to={`/client/${clients[0].id}`} replace />;
   }
   if (!client) {
     return <div className="df-page"><div className="df-empty">Loading…</div></div>;
@@ -86,13 +84,17 @@ const ClientPortal = () => {
     if (!files || files.length === 0 || uploading) return;
     setUploading(true);
     try {
+      /* The portal still uses the legacy upload path (Compatibility ledger:
+         `POST /documents/:id/file`, out at C5.4). C4.1 rebuilds this screen on
+         the request/engagement upload routes with a real queue. */
       if (fulfillsRequestId && files[0]) {
-        await fulfillRequest(fulfillsRequestId, files[0]);
+        await api.documents.uploadFile(fulfillsRequestId, files[0]);
         toast({ title: 'Request fulfilled', description: `${files[0].name} uploaded.` });
         return;
       }
       for (const file of Array.from(files)) {
-        await uploadDocument({ clientId: client.id, file });
+        const created = await api.documents.create({ clientId: client.id, name: file.name, folder: 'Uploads' });
+        await api.documents.uploadFile(created.id, file);
       }
       toast({
         title: files.length > 1 ? 'Files uploaded' : 'File uploaded',
@@ -102,6 +104,7 @@ const ClientPortal = () => {
       toast({ title: 'Upload failed', description: getErrorMessage(err), variant: 'destructive' });
     } finally {
       setUploading(false);
+      await queryClient.invalidateQueries();
     }
   };
 
@@ -261,12 +264,22 @@ const ClientPortal = () => {
             </div>
           </div>
 
-          {myDocGroups.size === 0 ? (
-            <div className="df-doc-empty">You haven't uploaded any documents yet.</div>
+          {visibleDocs.length === 0 ? (
+            <div className="df-doc-empty">
+              {q ? 'Nothing matches that.' : "You haven't uploaded any documents yet."}
+            </div>
           ) : (
-            <div className="df-grid-3">
-              {Array.from(myDocGroups.entries()).map(([groupName, items]) => (
-                <ClientDocCard key={groupName} groupName={groupName} items={items} />
+            <div className="df-list">
+              {visibleDocs.map((d) => (
+                <div key={d.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="df-name">{d.displayName ?? d.name}</div>
+                    <div className="df-meta">{d.size || '—'} · {formatDate(d.uploadedAt)}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                    {d.hasUpdateRequest && <span className="df-pill df-danger">Correction asked for</span>}
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -286,53 +299,6 @@ const ClientPortal = () => {
       </div>
 
       <SecurityCard id="security" />
-    </div>
-  );
-};
-
-const ClientDocCard: React.FC<{ groupName: string; items: Document[] }> = ({ groupName, items }) => {
-  const years = useMemo(
-    () => Array.from(new Set(items.map(i => i.uploadedAt.getFullYear()))).sort((a, b) => b - a),
-    [items]
-  );
-  const [year, setYear] = useState<number>(years[0]);
-  useEffect(() => { if (!years.includes(year)) setYear(years[0]); }, [years, year]);
-
-  const filtered = items
-    .filter(i => i.uploadedAt.getFullYear() === year)
-    .sort((a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime());
-
-  const idx = years.indexOf(year);
-
-  return (
-    <div className="df-doc-card">
-      <div className="df-doc-card-head">
-        <div className="df-title">{groupName}</div>
-        <div className="df-year-nav">
-          <button disabled={idx >= years.length - 1} onClick={() => setYear(years[idx + 1])} aria-label="Older">
-            <I.ChevronL size={12} />
-          </button>
-          <div className="df-label df-mono">{year}</div>
-          <button disabled={idx <= 0} onClick={() => setYear(years[idx - 1])} aria-label="Newer">
-            <I.ChevronR size={12} />
-          </button>
-        </div>
-      </div>
-      <div className="df-doc-card-body">
-        {filtered.length === 0 && <div className="df-doc-empty">No items for {year}</div>}
-        {filtered.map((it, i) => (
-          <div key={it.id} className="df-doc-item">
-            <div style={{ minWidth: 0 }}>
-              <div className="df-doc-name">{it.name}</div>
-              <div className="df-doc-sub">{it.size || '—'} · {formatDate(it.uploadedAt)}</div>
-            </div>
-            <div className="df-doc-item-pills">
-              {i === 0 && <span className="df-pill df-plain">Latest</span>}
-              {it.hasUpdateRequest && <span className="df-pill df-danger">Update requested</span>}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 };

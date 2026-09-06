@@ -70,24 +70,37 @@ describe('documents', () => {
     const advisor = await loginAs(fx, 'provider1');
     const url = `/api/documents/${fx.client1a.upload}`;
 
-    const reviewed = await request(app).patch(url).set('Cookie', advisor).send({ status: 'reviewed' });
-    expect(reviewed.status).toBe(200);
-    expect(reviewed.body.status).toBe('reviewed');
+    // C3.4: the legacy door into the review columns is closed. A decision is an
+    // action with a note and an audit line, never a quiet PATCH of a column.
+    const legacy = await request(app).patch(url).set('Cookie', advisor).send({ status: 'reviewed' });
+    expect(legacy.status).toBe(400);
+    expect(legacy.body.code).toBe('use_review_actions');
+
+    const accepted = await request(app).post(`${url}/accept`).set('Cookie', advisor).send({});
+    expect(accepted.status).toBe(200);
+    // The legacy column is still kept in step underneath, until C5.4 drops it.
+    expect(accepted.body.status).toBe('reviewed');
 
     const correction = await request(app)
-      .patch(url)
+      .post(`${url}/request-correction`)
       .set('Cookie', advisor)
-      .send({ hasUpdateRequest: true, updateRequestDescription: 'Need the full statement' });
+      .send({ note: 'Need the full statement' });
     expect(correction.status).toBe(200);
     expect(correction.body.status).toBe('needs_update');
-    expect(correction.body.hasUpdateRequest).toBe(true);
 
-    // The client cannot clear the correction request...
+    // Filing still patches, and only filing.
+    const filed = await request(app).patch(url).set('Cookie', advisor).send({ displayName: 'Bank statement (full year)' });
+    expect(filed.status).toBe(200);
+    expect(filed.body.displayName).toBe('Bank statement (full year)');
+
+    // The client decides nothing...
     const client = await loginAs(fx, 'client1a');
-    const clear = await request(app).patch(url).set('Cookie', client).send({ hasUpdateRequest: false });
-    expect(clear.status).toBe(403);
+    const clientDecision = await request(app).post(`${url}/accept`).set('Cookie', client).send({});
+    expect(clientDecision.status).toBe(403);
+    const clientFiling = await request(app).patch(url).set('Cookie', client).send({ displayName: 'mine now' });
+    expect(clientFiling.status).toBe(403);
 
-    // ...but re-uploading resolves it and puts the document back in the queue.
+    // ...but re-uploading resolves the correction and puts the document back in the queue.
     const again = await attachPdf(request(app).post(`${url}/file`).set('Cookie', client));
     expect(again.status).toBe(202);
     expect(again.body.hasUpdateRequest).toBe(false);

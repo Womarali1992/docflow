@@ -467,6 +467,19 @@ describe('the advisor dashboard counts live rows', () => {
     fx = await seedFixture();
   });
 
+  it('hands every queue row the engagement it belongs to', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const res = await request(app).get('/api/dashboard').set('Cookie', advisor);
+    expect(res.status).toBe(200);
+
+    // Without this the home queue can only offer "here is a client", which is
+    // one click short of the checklist line that actually needs doing.
+    const waiting = res.body.waitingOnClients.items as Array<{ id: string; engagementId: string }>;
+    expect(waiting.length).toBeGreaterThan(0);
+    expect(waiting.every((r) => typeof r.engagementId === 'string' && r.engagementId.length > 0)).toBe(true);
+    expect(waiting.find((r) => r.id === fx.client1a.request)?.engagementId).toBe(fx.client1a.engagement);
+  });
+
   it('moves a request between buckets as it is worked', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const id = fx.client1a.request;

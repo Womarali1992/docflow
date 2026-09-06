@@ -506,21 +506,22 @@ router.post('/', async (req, res) => {
  * (Compatibility ledger, removed in C3.4) — but only for an advisor, as C0.2
  * established.
  */
-const patchSchema = z.object({
-  displayName: z.string().min(1).max(NAME_MAX).optional(),
-  category: z.string().max(NAME_MAX).nullable().optional(),
-  engagementId: z.string().uuid().nullable().optional(),
-  /* Legacy fields, kept until C3.4 rewrites the callers. */
-  name: z.string().min(1).max(NAME_MAX).optional(),
-  folder: z.string().max(NAME_MAX).optional(),
-  status: z.enum(['pending', 'reviewed', 'needs_update', 'in_review']).optional(),
-  hasUpdateRequest: z.boolean().optional(),
-  updateRequestDescription: z.string().max(INSTRUCTIONS_MAX).optional(),
-  requestedVersion: z.string().max(NAME_MAX).optional(),
-  requestFrequency: z.enum(['daily', 'monthly', 'quarterly', 'yearly', 'one-time']).optional(),
-  dueDate: z.string().datetime().nullable().optional(),
-  isRequested: z.boolean().optional(),
-});
+/**
+ * Filing only (C3.4). The legacy review fields — `status`, `hasUpdateRequest`,
+ * `updateRequestDescription`, `requestedVersion`, `isRequested`,
+ * `requestFrequency`, `dueDate`, `name`, `folder` — were removed with the last
+ * screen that sent them: a review is a decision with a note and an audit line
+ * (`POST /:id/accept`, `/request-correction`, or the request's own verbs), never
+ * a PATCH that quietly sets a column. The columns themselves stay until C5.4;
+ * only the door into them is closed.
+ */
+const patchSchema = z
+  .object({
+    displayName: z.string().min(1).max(NAME_MAX).optional(),
+    category: z.string().max(NAME_MAX).nullable().optional(),
+    engagementId: z.string().uuid().nullable().optional(),
+  })
+  .strict();
 
 router.patch('/:id', async (req, res) => {
   const auth = req.auth!;
@@ -529,45 +530,28 @@ router.patch('/:id', async (req, res) => {
   if (auth.kind !== 'provider') return advisorOnly(res);
 
   const parsed = patchSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
+  if (!parsed.success) {
+    // A caller still sending a review field gets told where the decision lives.
+    const unknown = parsed.error.issues.some((i) => i.code === 'unrecognized_keys');
+    return res.status(400).json({
+      error: unknown
+        ? 'Only the filing can be patched. Accept, request a correction or waive through their own actions.'
+        : 'Invalid input',
+      code: unknown ? 'use_review_actions' : undefined,
+      issues: parsed.error.issues,
+    });
+  }
 
   if (parsed.data.engagementId) {
     const engagement = await findEngagement(auth, parsed.data.engagementId);
     if (!engagement || engagement.clientId !== doc.clientId) return notFound(res);
   }
 
-  const { dueDate, ...rest } = parsed.data;
-  const updates: Record<string, unknown> = { ...rest, updatedAt: new Date() };
-  if (dueDate !== undefined) updates.dueDate = dueDate === null ? null : new Date(dueDate);
-
-  if (parsed.data.hasUpdateRequest === true) {
-    updates.updateRequestedById = auth.sub;
-    updates.updateRequestedAt = new Date();
-    if (parsed.data.status === undefined) updates.status = 'needs_update';
-  } else if (parsed.data.hasUpdateRequest === false) {
-    updates.updateRequestedById = null;
-    updates.updateRequestedAt = null;
-    updates.updateRequestDescription = null;
-    updates.requestedVersion = null;
-  }
-
-  const [updated] = await db.update(schema.documents).set(updates).where(eq(schema.documents.id, doc.id)).returning();
-
-  let description: string | null = null;
-  if (parsed.data.status === 'reviewed' && doc.status !== 'reviewed') description = `marked reviewed: ${updated.name}`;
-  else if (parsed.data.hasUpdateRequest && !doc.hasUpdateRequest) description = `requested update on: ${updated.name}`;
-  if (description) {
-    await recordActivity({
-      providerId: updated.providerId,
-      clientId: updated.clientId,
-      type: 'update',
-      description,
-      actorKind: 'provider',
-      actorId: auth.sub,
-      actorName: auth.name,
-      targetId: updated.id,
-    });
-  }
+  const [updated] = await db
+    .update(schema.documents)
+    .set({ ...parsed.data, updatedAt: new Date() })
+    .where(eq(schema.documents.id, doc.id))
+    .returning();
 
   res.json(serializeDocument(updated));
 });

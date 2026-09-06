@@ -333,6 +333,8 @@ export interface DashboardBucket<T> {
 export interface DashboardRequestRef {
   id: string;
   clientId: string;
+  /** Where the line lives, so a queue row can open the checklist it came from. */
+  engagementId: string;
   title: string;
   dueDate?: Date | null;
   note?: string | null;

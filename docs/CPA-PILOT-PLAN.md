@@ -27,7 +27,7 @@
 | C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | SHIPPED 2026-09-06 |
 | C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | SHIPPED 2026-09-07 |
 | C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | SHIPPED 2026-09-07 |
-| C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | NOT STARTED |
+| C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | SHIPPED 2026-09-07 |
 | C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | NOT STARTED |
 | C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | NOT STARTED |
 | C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | NOT STARTED |
@@ -36,14 +36,53 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C3.4** — the advisor home queue (four tiles + "Needs decision", each opening
-`/work?filter=…`), `/documents` search backed by `GET /search`, and the **deletion of
-`ClientsContext`, `DocumentsContext` and `documentGrouping.ts`**. Gate for that commit:
-`grep -r "context/DocumentsContext\|context/ClientsContext" src` comes back empty. It also removes
-the last two API shims due in Phase 3: the legacy `GET /documents` list shape and the legacy review
-fields on `PATCH /documents/:id`. **`ClientPortal.tsx` still uses `documentGrouping` — C4.1 rewrites
-the portal, so C3.4 must either keep that one file or move its grouping helper; decide before
-deleting.**
+**NEXT = C4.1** — the client portal's "Your next steps": request cards (upload / ask / I don't have
+this) and separate views instead of one long page. **Phase 3 is complete.** The portal currently
+runs on the *legacy* upload path (`POST /documents/:id/file`, and create-then-attach for an ad-hoc
+file); C4.1 moves it onto `POST /requests/:id/uploads` and `POST /engagements/:id/uploads`, which is
+what makes an upload land against a checklist line instead of beside it.
+
+C3.4 notes: the advisor's day now starts on a queue, and the two contexts are gone.
+
+- **`/` is the queue** (`pages/Index.tsx`, rewritten): four tiles — ready to review, waiting on
+  clients, overdue, unread — plus "Needs your decision" listed in full, because that bucket is the
+  one only a person can clear. Each tile opens **`/work?filter=…`** (`pages/Work.tsx`), which reads
+  the *same* `GET /dashboard` answer the tile was counted from, so a tile can never open a list of a
+  different size. The queue vocabulary lives in `components/docflow/queue.ts` so the tiles and the
+  list cannot drift (and so no component file exports a constant).
+- **`/documents` is search** (rewritten on `GET /search`): filename or name, client, tax year,
+  status and category, with documents and checklist lines in one result — "where is the 2026 W-2?"
+  and "did we ever ask for it?" are the same question asked twice. The URL carries the query, so a
+  search is a link. **⌘K** now searches the server too (clients from cache, documents and checklist
+  lines from `/search`).
+- **`ClientsContext`, `DocumentsContext` and `documentGrouping.ts` are DELETED**, and `main.tsx`
+  drops both providers. Gate met: `grep -r "context/DocumentsContext\|context/ClientsContext" src`
+  is empty. `ClientPortal`, `ClientSidebar`, `ClientTopbar` and `FinancialOverview` moved to the
+  query layer to make that possible.
+- **`FinancialOverview` is read-only from here** (`/overview`, kept until the C5.4 decision). It
+  used to pin a due date onto a document through the legacy PATCH; that door is closed, and a
+  deadline now belongs to a *checklist line* where the client can see it, so the add/clear controls
+  are gone rather than left to fail.
+- **The client portal keeps the legacy upload path** (`POST /documents/:id/file`, ledger: out at
+  C5.4) until **C4.1** rewrites the screen — the base-name grouping it used went with
+  `documentGrouping.ts`, so its document list is flat and newest-first in the meantime.
+- **Server, two changes.** `PATCH /documents/:id` is now `.strict()` and accepts **only**
+  `displayName`, `category`, `engagementId`; a caller sending `status` or `hasUpdateRequest` gets
+  **400 `use_review_actions`** rather than quietly setting a column — a review is a decision with a
+  note and an audit line. And every request row in `GET /dashboard` now carries its
+  **`engagementId`**, so a queue row opens the checklist rather than "here is a client".
+- **Deviation, recorded:** the `GET /documents` **legacy list shape** row moves from C3.4 to
+  **C5.4**. The shape *is* `serializeDocument`, which mirrors the legacy columns C5.4 drops;
+  splitting it now would mean maintaining two serializers for one table — adding a shim in the name
+  of removing one. Nothing in the frontend reads those fields any more, which is the part C3.4 owed.
+- **Lint baseline moved 11 → 9 warnings** (two deleted context files took two react-refresh warnings
+  with them). New modules keep constants out of component files, so the count should stay at 9.
+
+Gate: root `npm run typecheck` clean, `npm run lint` **0 errors / 9 warnings**, `npm run build` OK,
+`npm test` 18 passed; server `npm run build` + `typecheck:test` clean, `authz.test.ts` +
+`documents.test.ts` **465 passed** together (the matrix gained the "legacy review field" row) and
+`workflow.test.ts` **27 passed** (+1 for the dashboard's `engagementId`). Suite total 654. No
+migration.
 
 C3.3 notes: the review workspace — the screen a tax season is actually spent in.
 
@@ -1024,8 +1063,8 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 |---|---|---|
 | Legacy `documents` columns frozen at import | C2.1 | C5.4 |
 | `documents` workflow columns nullable (`kind IS NULL` = not imported) | C2.1 | C5.4 |
-| `GET /documents` legacy list shape | C2.2 | C3.4 |
-| `PATCH /documents/:id` still accepts the legacy review fields | C2.2 | C3.4 |
+| `GET /documents` legacy list shape | C2.2 | **C5.4** (moved from C3.4 — see the C3.4 notes) |
+| ~~`PATCH /documents/:id` still accepts the legacy review fields~~ | C2.2 | **REMOVED in C3.4** — the schema is `.strict()` and answers `use_review_actions` |
 | ~~`GET /presets` read-only shim over `request_templates` (POST/DELETE → 410)~~ | C2.2 | **REMOVED in C3.2** — the route is gone; an authz row asserts 404 |
 | ~~`api.presets.create/remove` → `/templates` bins↔items adapter (frontend)~~ | C2.2 | **REMOVED in C3.2** — with the `Preset` type and the Settings presets screen |
 | `POST /documents/:id/file` → creates a version | C2.3 | C5.4 |

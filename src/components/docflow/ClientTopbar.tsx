@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { I } from './icons';
-import { useClients } from '@/context/ClientsContext';
+import { useClient } from '@/api/queries';
 import { useAuth } from '@/context/AuthContext';
 
 interface ClientTopbarProps {
@@ -14,9 +14,8 @@ export const CLIENT_UPLOAD_EVENT = 'docflow:client-upload';
 
 const ClientTopbar: React.FC<ClientTopbarProps> = ({ onMenuClick }) => {
   const navigate = useNavigate();
-  const { clients } = useClients();
-  const { logout } = useAuth();
-  const client = clients[0];
+  const { logout, me } = useAuth();
+  const { data: client } = useClient(me?.kind === 'client' ? me.id : undefined);
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(params.get('q') || '');
 

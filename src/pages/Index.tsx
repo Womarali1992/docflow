@@ -1,77 +1,47 @@
-import React, { useMemo, useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useClients } from '@/context/ClientsContext';
-import { useDocumentsStore } from '@/context/DocumentsContext';
 import { useAuth } from '@/context/AuthContext';
-import { downloadCsv } from '@/utils/csv';
+import { useDashboard } from '@/api/queries';
 import { I } from '@/components/docflow/icons';
 import ActivityFeed from '@/components/docflow/ActivityFeed';
-import NewClientDialog from '@/components/docflow/NewClientDialog';
-import { ACCESS_LABEL, accessState } from '@/utils/clientAccess';
+import { QUEUE_TITLE, type QueueFilter } from '@/components/docflow/queue';
 
-const formatRelative = (d: Date | null) => {
-  if (!d) return '—';
-  const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-};
+/**
+ * The advisor's home: what is waiting, and whose move it is.
+ *
+ * Every number here is counted from live rows on the server and refreshed on a
+ * timer, so it is the same number the client's portal is working from. Nothing
+ * on this page adds anything up — a queue an advisor stops believing is a queue
+ * they stop opening.
+ *
+ * The four tiles answer four different questions, and they deliberately
+ * overlap: an overdue item is also waiting on the client. Each opens the list
+ * behind it rather than trying to say everything in one screen.
+ */
 
-const fmtMoney = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-
-type Filter = 'all' | 'attention';
-
-const Index = () => {
+const Index: React.FC = () => {
   const navigate = useNavigate();
-  const { clients, loading: clientsLoading } = useClients();
-  const { documents } = useDocumentsStore();
   const { me } = useAuth();
-  const [newClientOpen, setNewClientOpen] = useState(false);
-  const [filter, setFilter] = useState<Filter>('all');
-
-  const totals = useMemo(() => {
-    const totalClients = clients.length;
-    const totalDocs = documents.length;
-    const totalPending = documents.filter(d => d.isRequested || d.hasUpdateRequest).length;
-    const totalUnread = clients.reduce((s, c) => s + c.unreadMessages, 0);
-    const hasAum = clients.some(c => c.aum != null);
-    const totalAUM = clients.reduce((s, c) => s + (c.aum ?? 0), 0);
-    return { totalClients, totalDocs, totalPending, totalUnread, hasAum, totalAUM };
-  }, [clients, documents]);
+  const { data, isPending, error } = useDashboard();
 
   const headerName = me?.kind === 'provider' ? me.name : '';
   const firmName = me?.kind === 'provider' ? me.firmName : null;
+  const open = (filter: QueueFilter) => navigate(`/work?filter=${filter}`);
 
-  const needsAttention = (c: { pendingUpdates: number; unreadMessages: number }) =>
-    c.pendingUpdates > 0 || c.unreadMessages > 0;
+  const tiles: { filter: QueueFilter; count: number; hint: string; tone?: string }[] = [
+    { filter: 'ready', count: data?.readyToReview.count ?? 0, hint: 'The client has done their part', tone: 'df-info' },
+    { filter: 'waiting', count: data?.waitingOnClients.count ?? 0, hint: 'The ball is with them', tone: 'df-warn' },
+    { filter: 'overdue', count: data?.overdue.count ?? 0, hint: 'Waiting, and past the date', tone: 'df-danger' },
+    { filter: 'unread', count: data?.unreadMessages.count ?? 0, hint: 'From clients', tone: 'df-info' },
+  ];
 
-  const visibleClients = useMemo(() => {
-    const list = filter === 'attention' ? clients.filter(needsAttention) : clients;
-    // Deactivated clients sink to the bottom; the rest by recent activity.
-    return [...list].sort((a, b) => {
-      const off = Number(!!a.deactivatedAt) - Number(!!b.deactivatedAt);
-      if (off !== 0) return off;
-      return (b.lastActivity?.getTime() ?? 0) - (a.lastActivity?.getTime() ?? 0);
-    });
-  }, [clients, filter]);
-
-  const exportCsv = () => {
-    downloadCsv(
-      'clients',
-      ['Name', 'Email', 'Plan', 'AUM', 'Pending', 'Unread', 'Documents', 'Last activity'],
-      clients.map(c => [
-        c.name, c.email, c.plan || '', c.aum ?? '', c.pendingUpdates, c.unreadMessages, c.documentsCount,
-        c.lastActivity ? c.lastActivity.toISOString() : '',
-      ])
-    );
-  };
+  const needsDecision = data?.needsDecision;
 
   return (
     <div className="df-page">
       <div className="df-page-head">
         <div>
-          <h1 className="df-client-name">Practice overview</h1>
+          <h1 className="df-client-name">Today</h1>
           <div className="df-client-meta">
             <span>{headerName}{firmName ? `, ${firmName}` : ''}</span>
             <span className="df-dot-sep" />
@@ -79,90 +49,64 @@ const Index = () => {
           </div>
         </div>
         <div className="df-head-actions">
-          <button className="df-btn df-ghost" onClick={exportCsv}><I.Download size={13} /> Export</button>
-          <button className="df-btn df-primary" onClick={() => setNewClientOpen(true)}><I.Plus size={13} /> New client</button>
+          <button className="df-btn" onClick={() => navigate('/documents')}><I.Search size={13} /> Find a document</button>
+          <button className="df-btn df-primary" onClick={() => navigate('/clients')}><I.Users size={13} /> Clients</button>
         </div>
       </div>
 
+      {error && <div className="df-section"><div className="df-empty">Could not load your queue. Check your connection and try again.</div></div>}
+
       <div className="df-kpi-strip">
-        <div className="df-kpi">
-          <div className="df-kpi-label">AUM · all clients</div>
-          <div className="df-kpi-value df-mono">{totals.hasAum ? fmtMoney(totals.totalAUM) : '—'}</div>
-          <div className="df-kpi-trend"><span className="df-muted">across {totals.totalClients} client{totals.totalClients !== 1 ? 's' : ''}</span></div>
-        </div>
-        <div className="df-kpi">
-          <div className="df-kpi-label">Active clients</div>
-          <div className="df-kpi-value df-mono">{totals.totalClients}</div>
-          <div className="df-kpi-trend"><span className="df-muted">{clientsLoading ? 'loading…' : 'on file'}</span></div>
-        </div>
-        <div className="df-kpi">
-          <div className="df-kpi-label">Pending review</div>
-          <div className="df-kpi-value df-mono">{totals.totalPending}</div>
-          <div className={'df-kpi-trend ' + (totals.totalPending > 0 ? 'df-warn' : '')}>
-            {totals.totalPending > 0 ? 'Across all clients' : 'All clear'}
-          </div>
-        </div>
-        <div className="df-kpi">
-          <div className="df-kpi-label">Documents on file</div>
-          <div className="df-kpi-value df-mono">{totals.totalDocs}</div>
-          <div className="df-kpi-trend"><span className="df-muted">{totals.totalUnread} unread messages</span></div>
-        </div>
+        {tiles.map((t) => (
+          <button
+            key={t.filter}
+            type="button"
+            className={'df-kpi df-kpi-button' + (t.count > 0 ? ' df-kpi-live' : '')}
+            onClick={() => open(t.filter)}
+            aria-label={`${QUEUE_TITLE[t.filter]}: ${t.count}`}
+          >
+            <div className="df-kpi-label">{QUEUE_TITLE[t.filter]}</div>
+            <div className="df-kpi-value df-mono">{isPending ? '—' : t.count}</div>
+            <div className={'df-kpi-trend ' + (t.count > 0 ? (t.tone ?? '') : '')}>
+              <span className={t.count > 0 ? undefined : 'df-muted'}>{t.hint}</span>
+            </div>
+          </button>
+        ))}
       </div>
 
       <div className="df-grid-2-aside">
-       <div className="df-section">
-        <div className="df-section-head">
-          <div>
-            <div className="df-section-title">Clients</div>
-            <div className="df-section-sub">{visibleClients.length} shown · sorted by recent activity</div>
-          </div>
-          <div className="df-right">
-            <div className="df-seg">
-              <button className={filter === 'all' ? 'df-active' : ''} onClick={() => setFilter('all')}>All</button>
-              <button className={filter === 'attention' ? 'df-active' : ''} onClick={() => setFilter('attention')}>Needs attention</button>
-            </div>
-          </div>
-        </div>
-        <div className="df-list">
-          {clientsLoading && clients.length === 0 && (
-            <div className="df-empty">Loading clients…</div>
-          )}
-          {!clientsLoading && clients.length === 0 && (
-            <div className="df-empty">No clients yet. Click “New client” to add one.</div>
-          )}
-          {!clientsLoading && clients.length > 0 && visibleClients.length === 0 && (
-            <div className="df-empty">No clients need attention right now.</div>
-          )}
-          {visibleClients.map(c => {
-            const initials = c.name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase();
-            const access = accessState(c);
-            return (
-              <div
-                key={c.id}
-                className="df-row df-clickable"
-                style={{ gridTemplateColumns: '36px 1fr auto auto auto', opacity: access === 'deactivated' ? 0.6 : 1 }}
-                onClick={() => navigate(`/clients/${c.id}`)}
-              >
-                <div className="df-client-avatar" style={{ width: 32, height: 32, fontSize: 12, borderRadius: 8 }}>{initials}</div>
-                <div style={{ minWidth: 0 }}>
-                  <div className="df-name">{c.name}</div>
-                  <div className="df-meta">{c.email} · Active {formatRelative(c.lastActivity)}</div>
-                </div>
-                <div style={{ minWidth: 110, textAlign: 'right' }}>
-                  <div className="df-mono" style={{ fontSize: 12.5, fontWeight: 500 }}>{c.aum != null ? fmtMoney(c.aum) : '—'}</div>
-                  <div className="df-meta" style={{ marginTop: 0 }}>AUM</div>
-                </div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {access !== 'active' && <span className={'df-pill ' + ACCESS_LABEL[access].cls}>{ACCESS_LABEL[access].label}</span>}
-                  {c.pendingUpdates > 0 && <span className="df-pill df-warn">{c.pendingUpdates} pending</span>}
-                  {c.unreadMessages > 0 && <span className="df-pill df-accent">{c.unreadMessages} unread</span>}
-                </div>
-                <button className="df-btn df-ghost df-sm" onClick={(e) => { e.stopPropagation(); navigate(`/clients/${c.id}`); }}>Open</button>
+        <div className="df-section">
+          <div className="df-section-head">
+            <div>
+              <div className="df-section-title">Needs your decision</div>
+              <div className="df-section-sub">
+                A client has said they do not have something. Only you can take it off the list.
               </div>
-            );
-          })}
+            </div>
+            {needsDecision && needsDecision.count > 0 && (
+              <div className="df-right">
+                <button className="df-btn df-sm" onClick={() => open('needs_decision')}>Open all {needsDecision.count}</button>
+              </div>
+            )}
+          </div>
+          <div className="df-list">
+            {isPending && <div className="df-empty">Loading your queue…</div>}
+            {!isPending && (!needsDecision || needsDecision.count === 0) && (
+              <div className="df-empty">Nothing waiting on a decision from you.</div>
+            )}
+            {needsDecision?.items.slice(0, 6).map((item) => (
+              <div key={item.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="df-name">{item.title}</div>
+                  {item.note && <div className="df-meta">“{item.note}”</div>}
+                </div>
+                <button className="df-btn df-sm df-ghost" onClick={() => navigate(`/clients/${item.clientId}`)}>
+                  Open client
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
-       </div>
 
         <div className="df-section">
           <div className="df-section-head">
@@ -174,12 +118,6 @@ const Index = () => {
           <ActivityFeed limit={20} compact emptyMessage="No activity yet — uploads and messages will appear here." />
         </div>
       </div>
-
-      <NewClientDialog
-        open={newClientOpen}
-        onClose={() => setNewClientOpen(false)}
-        onCreated={(c) => navigate(`/clients/${c.id}`)}
-      />
     </div>
   );
 };

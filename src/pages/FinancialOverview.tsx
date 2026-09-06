@@ -1,8 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { DayContentProps } from 'react-day-picker';
-import { useDocumentsStore } from '@/context/DocumentsContext';
-import { useClients } from '@/context/ClientsContext';
+import { useClients, useDocuments } from '@/api/queries';
 import type { Document, RequestFrequency } from '@/api/types';
 import { Calendar as CalendarUI } from '@/components/ui/calendar';
 import { I } from '@/components/docflow/icons';
@@ -35,17 +34,20 @@ interface DayEvent {
   isOverdue: boolean;
 }
 
+/**
+ * The deadline calendar, kept at /overview until the pilot decides its fate.
+ *
+ * Read-only since C3.4: it shows the `dueDate` still carried by imported
+ * documents, but a deadline is now a property of a *checklist line*, set on the
+ * engagement where the client can actually see it. Pinning a date onto a
+ * document here wrote through a PATCH door that C3.4 closed, so the controls
+ * that did it are gone rather than left to fail.
+ */
 const FinancialOverview = () => {
-  const { documents, updateDocumentDueDate } = useDocumentsStore();
-  const { clients } = useClients();
-  const { toast } = useToast();
+  const { data: documents = [] } = useDocuments();
+  const { data: clients = [] } = useClients();
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [selectedClientIds, setSelectedClientIds] = useState<Set<string>>(new Set());
-
-  // Add-deadline inline form
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [addClientId, setAddClientId] = useState<string>('');
-  const [addDocId, setAddDocId] = useState<string>('');
 
   // Stable "now" for the lifetime of the view so memo deps don't change each render.
   const now = useMemo(() => new Date(), []);
@@ -140,39 +142,6 @@ const FinancialOverview = () => {
   };
 
   // Documents available for the add-form (filter to chosen client; only non-requested)
-  const docsForAddClient = useMemo(() => {
-    if (!addClientId) return [];
-    return documents
-      .filter(d => d.clientId === addClientId && !d.isRequested)
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [addClientId, documents]);
-
-  const handleAddDeadline = async () => {
-    if (!addDocId) {
-      toast({ title: 'Select a document', description: 'Pick which document this deadline applies to.', variant: 'destructive' });
-      return;
-    }
-    try {
-      await updateDocumentDueDate(addDocId, selectedDate);
-      const doc = documents.find(d => d.id === addDocId);
-      toast({ title: 'Deadline added', description: `${doc?.name || 'Document'} due ${formatLongDate(selectedDate)}.` });
-      setShowAddForm(false);
-      setAddClientId('');
-      setAddDocId('');
-    } catch (err) {
-      toast({ title: 'Failed to set deadline', description: getErrorMessage(err), variant: 'destructive' });
-    }
-  };
-
-  const handleClearDueDate = async (docId: string, name: string) => {
-    try {
-      await updateDocumentDueDate(docId, undefined);
-      toast({ title: 'Deadline cleared', description: `${name} no longer has a fixed deadline.` });
-    } catch (err) {
-      toast({ title: 'Failed', description: getErrorMessage(err), variant: 'destructive' });
-    }
-  };
-
   return (
     <div className="df-page">
       <div className="df-page-head">
@@ -187,12 +156,6 @@ const FinancialOverview = () => {
         <div className="df-head-actions">
           <button className="df-btn df-ghost" onClick={() => setSelectedDate(new Date())}>
             <I.Calendar size={13} /> Today
-          </button>
-          <button
-            className="df-btn df-primary"
-            onClick={() => { setShowAddForm(true); }}
-          >
-            <I.Plus size={13} /> Add deadline
           </button>
         </div>
       </div>
@@ -282,21 +245,7 @@ const FinancialOverview = () => {
               />
             </div>
 
-            <DayPanel
-              date={selectedDate}
-              events={eventsForSelected}
-              onAddDeadline={() => setShowAddForm(true)}
-              showAddForm={showAddForm}
-              onCloseAddForm={() => setShowAddForm(false)}
-              clients={clients}
-              addClientId={addClientId}
-              setAddClientId={setAddClientId}
-              addDocId={addDocId}
-              setAddDocId={setAddDocId}
-              docsForAddClient={docsForAddClient}
-              onConfirmAdd={handleAddDeadline}
-              onClearDueDate={handleClearDueDate}
-            />
+            <DayPanel date={selectedDate} events={eventsForSelected} clients={clients} />
           </div>
         </div>
       </div>
@@ -387,24 +336,10 @@ const FinancialOverview = () => {
 interface DayPanelProps {
   date: Date;
   events: DayEvent[];
-  onAddDeadline: () => void;
-  showAddForm: boolean;
-  onCloseAddForm: () => void;
   clients: { id: string; name: string }[];
-  addClientId: string;
-  setAddClientId: (v: string) => void;
-  addDocId: string;
-  setAddDocId: (v: string) => void;
-  docsForAddClient: Document[];
-  onConfirmAdd: () => void;
-  onClearDueDate: (docId: string, name: string) => void;
 }
 
-const DayPanel: React.FC<DayPanelProps> = ({
-  date, events, onAddDeadline, showAddForm, onCloseAddForm,
-  clients, addClientId, setAddClientId, addDocId, setAddDocId,
-  docsForAddClient, onConfirmAdd, onClearDueDate,
-}) => {
+const DayPanel: React.FC<DayPanelProps> = ({ date, events, clients }) => {
   const isPast = date < new Date(new Date().setHours(0, 0, 0, 0));
 
   return (
@@ -421,13 +356,8 @@ const DayPanel: React.FC<DayPanelProps> = ({
       </div>
 
       <div className="df-cal-panel-body">
-        {events.length === 0 && !showAddForm && (
-          <div className="df-empty" style={{ marginTop: 0 }}>
-            <div style={{ marginBottom: 10 }}>Quiet day — no documents are due.</div>
-            <button className="df-btn df-sm df-primary" onClick={onAddDeadline}>
-              <I.Plus size={12} /> Add deadline
-            </button>
-          </div>
+        {events.length === 0 && (
+          <div className="df-empty" style={{ marginTop: 0 }}>Quiet day — nothing is due.</div>
         )}
 
         {events.length > 0 && (
@@ -445,7 +375,7 @@ const DayPanel: React.FC<DayPanelProps> = ({
               >
                 <div style={{ minWidth: 0 }}>
                   <div className="df-name" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Link className="df-link" to={`/documents/${e.doc.id}`}>{e.doc.name}</Link>
+                    <Link className="df-link" to={`/review/${e.doc.id}`}>{e.doc.displayName ?? e.doc.name}</Link>
                     {e.isOverdue && <span className="df-pill df-danger">Overdue</span>}
                     {!e.isOverdue && e.doc.requestFrequency && (
                       <span className="df-pill df-warn">{e.doc.requestFrequency}</span>
@@ -461,18 +391,9 @@ const DayPanel: React.FC<DayPanelProps> = ({
                     {e.doc.folder && <> · {e.doc.folder}</>}
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                    <Link to={`/documents/${e.doc.id}`} className="df-btn df-sm df-ghost">
+                    <Link to={`/review/${e.doc.id}`} className="df-btn df-sm df-ghost">
                       <I.Doc size={11} /> Open
                     </Link>
-                    {e.doc.dueDate && (
-                      <button
-                        className="df-btn df-sm df-ghost"
-                        onClick={() => onClearDueDate(e.doc.id, e.doc.name)}
-                        title="Remove this fixed due date"
-                      >
-                        <I.X size={11} /> Clear
-                      </button>
-                    )}
                   </div>
                 </div>
               </div>
@@ -480,68 +401,6 @@ const DayPanel: React.FC<DayPanelProps> = ({
           </div>
         )}
 
-        {events.length > 0 && !showAddForm && (
-          <div style={{ marginTop: 14 }}>
-            <button className="df-btn df-sm" onClick={onAddDeadline}>
-              <I.Plus size={12} /> Add another
-            </button>
-          </div>
-        )}
-
-        {showAddForm && (
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              border: '1px solid var(--df-border)',
-              borderRadius: 'var(--df-radius)',
-              background: 'var(--df-panel-2)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-            }}
-          >
-            <div className="df-section-title" style={{ fontSize: 12.5 }}>
-              Pin a document to {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-            </div>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span className="df-muted" style={{ fontSize: 11.5 }}>Client</span>
-              <select
-                className="df-input"
-                value={addClientId}
-                onChange={(e) => { setAddClientId(e.target.value); setAddDocId(''); }}
-              >
-                <option value="">— Select client —</option>
-                {clients.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </label>
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span className="df-muted" style={{ fontSize: 11.5 }}>Document</span>
-              <select
-                className="df-input"
-                value={addDocId}
-                onChange={(e) => setAddDocId(e.target.value)}
-                disabled={!addClientId}
-              >
-                <option value="">{addClientId ? '— Select document —' : 'Pick a client first'}</option>
-                {docsForAddClient.map(d => (
-                  <option key={d.id} value={d.id}>{d.name}</option>
-                ))}
-              </select>
-            </label>
-
-            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-              <button className="df-btn df-sm df-ghost" onClick={onCloseAddForm}>Cancel</button>
-              <button className="df-btn df-sm df-primary" onClick={onConfirmAdd}>
-                <I.Check size={12} /> Save
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </aside>
   );

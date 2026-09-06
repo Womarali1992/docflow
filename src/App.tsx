@@ -19,6 +19,7 @@ import Clients from "./pages/Clients";
 import Engagement from "./pages/Engagement";
 import Templates from "./pages/Templates";
 import Review from "./pages/Review";
+import Work from "./pages/Work";
 import ClientPortal from "./pages/ClientPortal";
 import DocumentsPage from "./pages/Documents";
 import DocumentPage from "./pages/Document";
@@ -39,6 +40,7 @@ const App = () => (
 
         <Route element={<RouteGuard kind="provider"><DocFlowLayout /></RouteGuard>}>
           <Route path="/" element={<Index />} />
+          <Route path="/work" element={<Work />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/overview" element={<FinancialOverview />} />
           <Route path="/clients" element={<Clients />} />

@@ -12,6 +12,10 @@
  *   needsDecision   — the client said "I don't have this"; only the advisor
  *                     may take it off the list, so it needs a human.
  *   unreadMessages  — the thread, which is the other way work arrives.
+ *
+ * Each request row carries its `engagementId` so a queue row can open the
+ * checklist it came from — without it the queue could only offer "here is a
+ * client", which is one click short of the thing that needs doing.
  */
 import { Router } from 'express';
 import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
@@ -29,15 +33,32 @@ router.get('/', async (req, res) => {
 
   const [readyToReview, waiting, needsDecision, unread] = await Promise.all([
     db
-      .select({ id: schema.requests.id, clientId: schema.requests.clientId, title: schema.requests.title })
+      .select({
+        id: schema.requests.id,
+        clientId: schema.requests.clientId,
+        engagementId: schema.requests.engagementId,
+        title: schema.requests.title,
+      })
       .from(schema.requests)
       .where(and(open, eq(schema.requests.status, 'submitted'))),
     db
-      .select({ id: schema.requests.id, clientId: schema.requests.clientId, title: schema.requests.title, dueDate: schema.requests.dueDate })
+      .select({
+        id: schema.requests.id,
+        clientId: schema.requests.clientId,
+        engagementId: schema.requests.engagementId,
+        title: schema.requests.title,
+        dueDate: schema.requests.dueDate,
+      })
       .from(schema.requests)
       .where(and(open, inArray(schema.requests.status, ['requested', 'needs_correction']))),
     db
-      .select({ id: schema.requests.id, clientId: schema.requests.clientId, title: schema.requests.title, note: schema.requests.clientResponseNote })
+      .select({
+        id: schema.requests.id,
+        clientId: schema.requests.clientId,
+        engagementId: schema.requests.engagementId,
+        title: schema.requests.title,
+        note: schema.requests.clientResponseNote,
+      })
       .from(schema.requests)
       .where(
         and(

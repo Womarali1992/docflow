@@ -1342,3 +1342,19 @@
 }
 .df-root .df-preview-empty { place-items: center; display: grid; }
 .df-root .df-preview-msg { text-align: center; max-width: 380px; padding: 24px; }
+
+/* Home queue tiles (C3.4) ================================= */
+
+/* A KPI that opens the list behind it. Same face as a plain KPI — a number the
+   advisor can click should not have to look like a button to be one. */
+.df-root .df-kpi-button {
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.08s ease, box-shadow 0.08s ease;
+}
+.df-root .df-kpi-button:hover {
+  border-color: var(--df-border-strong);
+  box-shadow: var(--df-shadow-pop);
+}
+.df-root .df-kpi-button.df-kpi-live .df-kpi-value { color: var(--df-accent-ink); }
