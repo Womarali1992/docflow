@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, ApiError } from '@/api/client';
-import type { MfaStatus, SessionSummary } from '@/api/types';
+import { ApiError } from '@/api/client';
+import { useChangePassword, useMfaStatus, useRegenerateRecoveryCodes, useSessions } from '@/api/queries';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
@@ -41,15 +41,19 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
   const { logoutAll } = useAuth();
   const { toast } = useToast();
 
-  const [status, setStatus] = useState<MfaStatus | null>(null);
-  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  /* Both reads and both writes go through the C3.1 data layer: a successful
+     mutation invalidates the key it changed, so nothing here reloads by hand. */
+  const { data: status, error: statusError } = useMfaStatus();
+  const { data: sessions, error: sessionsError, isPending: sessionsPending } = useSessions();
+  const regenerateMutation = useRegenerateRecoveryCodes();
+  const passwordMutation = useChangePassword();
+  const loadError = statusError || sessionsError ? getErrorMessage(statusError ?? sessionsError) : null;
 
   const [regenerating, setRegenerating] = useState(false);
   const [code, setCode] = useState('');
   const [regenError, setRegenError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [newCodes, setNewCodes] = useState<string[] | null>(null);
+  const busy = regenerateMutation.isPending;
 
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
@@ -58,35 +62,18 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [changeError, setChangeError] = useState<string | null>(null);
-  const [changeBusy, setChangeBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const [s, list] = await Promise.all([api.auth.mfa.status(), api.auth.sessions()]);
-      setStatus(s);
-      setSessions(list);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(getErrorMessage(err));
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const changeBusy = passwordMutation.isPending;
 
   const regenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegenError(null);
-    setBusy(true);
     try {
-      const res = await api.auth.mfa.regenerateRecoveryCodes(code);
+      const res = await regenerateMutation.mutateAsync(code);
       setNewCodes(res.recoveryCodes);
       setRegenerating(false);
       setCode('');
-      await load();
     } catch (err) {
       setRegenError(err instanceof ApiError && err.status === 429 ? 'Too many attempts. Wait 15 minutes and try again.' : getErrorMessage(err));
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -102,19 +89,15 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
     e.preventDefault();
     if (!passwordsReady(newPassword, confirmPassword)) return;
     setChangeError(null);
-    setChangeBusy(true);
     try {
-      const { revoked } = await api.auth.changePassword({ currentPassword, newPassword });
+      const { revoked } = await passwordMutation.mutateAsync({ currentPassword, newPassword });
       toast({
         title: 'Password changed',
         description: revoked > 0 ? `${revoked} other session${revoked === 1 ? '' : 's'} ended. This one stays signed in.` : 'This session stays signed in.',
       });
       resetChangeForm();
-      await load();
     } catch (err) {
       setChangeError(getErrorMessage(err));
-    } finally {
-      setChangeBusy(false);
     }
   };
 
@@ -243,7 +226,7 @@ const SecurityCard: React.FC<{ id?: string }> = ({ id }) => {
         <div>
           <div className="df-name" style={{ marginBottom: 6 }}>Where you're signed in</div>
           <div className="df-list">
-            {sessions === null && !loadError && <div className="df-empty">Loading…</div>}
+            {sessionsPending && !loadError && <div className="df-empty">Loading…</div>}
             {sessions?.map((s) => (
               <div key={s.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
                 <div>

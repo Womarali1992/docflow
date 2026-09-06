@@ -1,6 +1,9 @@
-import React, { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api, MFA_REQUIRED_EVENT, UNAUTHORIZED_EVENT, type UnauthorizedReason } from '@/api/client';
 import type { AuthState, Me, SessionStage } from '@/api/types';
+import { keys } from '@/api/queries/keys';
+import { useMe } from '@/api/queries/auth';
 import { toast } from '@/hooks/use-toast';
 
 /** What to tell the user when the server ends a session; missing/invalid are silent (no session to lose). */
@@ -28,28 +31,55 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/**
+ * Session lifecycle. Since C3.1 the identity itself lives in the query cache
+ * under `keys.me()` — this provider owns the *transitions* (sign in, take over,
+ * second factor cleared, sign out) and nothing else, so there is no second copy
+ * of "who is signed in" to drift.
+ *
+ * Signing in, signing out and being signed out all empty the cache of the
+ * account's data, so no answer fetched for one account can be served to the
+ * next one signed in from the same tab.
+ */
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [me, setMe] = useState<Me | null>(null);
-  const [stage, setStage] = useState<SessionStage | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const { data, isPending, refetch } = useMe();
+
+  const me = data?.me ?? null;
+  const stage = data?.stage ?? null;
+
+  const setAuth = useCallback(
+    (state: AuthState | null) => {
+      queryClient.setQueryData(keys.me(), state);
+    },
+    [queryClient]
+  );
+
+  /**
+   * Empties the cache of everything belonging to the account that was signed in,
+   * and leaves the identity itself as an explicit answer.
+   *
+   * Deliberately not `queryClient.clear()`: removing the `/auth/me` query out
+   * from under its own mounted observer detaches that observer, which then
+   * shows whatever it last saw and never learns the session ended. Every other
+   * key goes, which is what "nothing survives a sign-out" has to mean.
+   */
+  const dropOtherQueries = useCallback(() => {
+    const [ns, name] = keys.me();
+    queryClient.removeQueries({ predicate: (q) => !(q.queryKey[0] === ns && q.queryKey[1] === name) });
+  }, [queryClient]);
+
+  /** Sign-out, from any cause: everything that hung off the session, then the session. */
+  const clearSession = useCallback(() => {
+    dropOtherQueries();
+    // Written back immediately so the guard sees "no session" rather than
+    // "not loaded yet".
+    queryClient.setQueryData(keys.me(), null);
+  }, [dropOtherQueries, queryClient]);
 
   const refresh = useCallback(async () => {
-    try {
-      const state = await api.auth.me();
-      setMe(state.me);
-      setStage(state.stage);
-    } catch {
-      setMe(null);
-      setStage(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      await refresh();
-      setLoading(false);
-    })();
-  }, [refresh]);
+    await refetch();
+  }, [refetch]);
 
   // A 401 from any API call (expired/cleared session) drops the session so the
   // RouteGuard redirects to /login on the next render. A 403 mfa_required means
@@ -58,15 +88,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const onUnauthorized = (event: Event) => {
       const reason = (event as CustomEvent<{ reason?: UnauthorizedReason }>).detail?.reason;
       const message = reason ? SIGNED_OUT_MESSAGE[reason] : undefined;
-      setMe((current) => {
-        if (current && message) toast({ title: 'Signed out', description: message });
-        return null;
-      });
-      setStage(null);
+      const had = queryClient.getQueryData<AuthState | null>(keys.me());
+      if (!had) {
+        // Nothing was signed in, so there is nothing to clear — and clearing a
+        // cache mid-flight would restart the very request that found this out.
+        queryClient.setQueryData(keys.me(), null);
+        return;
+      }
+      if (message) toast({ title: 'Signed out', description: message });
+      clearSession();
     };
     const onMfaRequired = (event: Event) => {
       const next = (event as CustomEvent<{ stage?: SessionStage }>).detail?.stage;
-      if (next === 'preauth' || next === 'mfa_enroll') setStage(next);
+      if (next !== 'preauth' && next !== 'mfa_enroll') return;
+      queryClient.setQueryData<AuthState | null>(keys.me(), (current) => (current ? { ...current, stage: next } : current));
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     window.addEventListener(MFA_REQUIRED_EVENT, onMfaRequired);
@@ -74,37 +109,44 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
       window.removeEventListener(MFA_REQUIRED_EVENT, onMfaRequired);
     };
-  }, []);
+  }, [queryClient, clearSession]);
 
-  const login = async (email: string, password: string, kind: 'provider' | 'client') => {
-    const state = await api.auth.login(email, password, kind);
-    setMe(state.me);
-    setStage(state.stage);
-    return state;
-  };
+  const login = useCallback(
+    async (email: string, password: string, kind: 'provider' | 'client') => {
+      const state = await api.auth.login(email, password, kind);
+      // A different account may have been signed in here a moment ago.
+      dropOtherQueries();
+      setAuth(state);
+      return state;
+    },
+    [dropOtherQueries, setAuth]
+  );
 
-  const adopt = useCallback((state: AuthState) => {
-    setMe(state.me);
-    setStage(state.stage);
-  }, []);
+  const adopt = useCallback(
+    (state: AuthState) => {
+      dropOtherQueries();
+      setAuth(state);
+    },
+    [dropOtherQueries, setAuth]
+  );
 
-  const activate = useCallback(() => setStage('active'), []);
+  const activate = useCallback(() => {
+    queryClient.setQueryData<AuthState | null>(keys.me(), (current) => (current ? { ...current, stage: 'active' } : current));
+  }, [queryClient]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     await api.auth.logout();
-    setMe(null);
-    setStage(null);
-  };
+    clearSession();
+  }, [clearSession]);
 
-  const logoutAll = async () => {
+  const logoutAll = useCallback(async () => {
     const { revoked } = await api.auth.logoutAll();
-    setMe(null);
-    setStage(null);
+    clearSession();
     return revoked;
-  };
+  }, [clearSession]);
 
   return (
-    <AuthContext.Provider value={{ me, stage, loading, login, adopt, activate, logout, logoutAll, refresh }}>
+    <AuthContext.Provider value={{ me, stage, loading: isPending, login, adopt, activate, logout, logoutAll, refresh }}>
       {children}
     </AuthContext.Provider>
   );

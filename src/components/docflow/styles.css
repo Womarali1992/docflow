@@ -56,6 +56,60 @@
   letter-spacing: -0.005em;
 }
 
+/* Radix / shadcn primitives, remapped onto the df palette ==================
+ *
+ * The primitives in src/components/ui read Tailwind colours that resolve to
+ * `hsl(var(--primary))` and friends. Left alone they paint the old blue-and-
+ * white kit, which is a second palette living inside the first one. Rebinding
+ * those variables *inside `.df-root`* means one Radix component dropped into a
+ * DocFlow screen comes out navy-on-warm-neutral with hairline borders, with no
+ * per-component overrides and no change to the primitives themselves.
+ *
+ * They have to be HSL triplets because the Tailwind config wraps each one in
+ * `hsl(…)`, so each value below is the sRGB rendering of the oklch token named
+ * beside it. Change a df token above and the pair here has to follow.
+ */
+.df-root {
+  --background: 43.9 27.6% 97.9%;      /* --df-bg */
+  --foreground: 224.4 16.4% 9.3%;      /* --df-ink */
+
+  --card: 0 0% 100%;                   /* --df-panel */
+  --card-foreground: 224.4 16.4% 9.3%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 224.4 16.4% 9.3%;
+
+  --primary: 217.4 69.5% 29.8%;        /* --df-accent */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 43.9 21.3% 96.4%;       /* --df-panel-2 */
+  --secondary-foreground: 224.1 6.2% 26.7%;  /* --df-ink-2 */
+
+  --muted: 43.9 21.3% 96.4%;
+  --muted-foreground: 224 3.4% 44%;    /* --df-ink-3 */
+
+  --accent: 212.8 100% 95.5%;          /* --df-accent-soft */
+  --accent-foreground: 218.6 100% 21.4%;     /* --df-accent-ink */
+
+  --destructive: 1.1 50.1% 49.4%;      /* --df-danger */
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 43.9 9.3% 87.7%;           /* --df-border */
+  --input: 43.9 9.3% 87.7%;
+  --ring: 217.4 69.5% 29.8%;
+
+  /* Read directly rather than through hsl(), so the df radius is the radius. */
+  --radius: var(--df-radius);
+
+  --sidebar-background: 43.9 21.3% 96.4%;
+  --sidebar-foreground: 224.4 16.4% 9.3%;
+  --sidebar-primary: 217.4 69.5% 29.8%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 43.9 15.2% 93.7%;  /* --df-panel-3 */
+  --sidebar-accent-foreground: 218.6 100% 21.4%;
+  --sidebar-border: 43.9 9.3% 87.7%;
+  --sidebar-ring: 217.4 69.5% 29.8%;
+}
+
 .df-root *,
 .df-root *::before,
 .df-root *::after { box-sizing: border-box; }

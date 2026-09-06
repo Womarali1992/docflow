@@ -24,7 +24,7 @@
 | C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | SHIPPED 2026-09-06 |
 | C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | SHIPPED 2026-09-06 |
 | C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | SHIPPED 2026-09-06 |
-| C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | NOT STARTED |
+| C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | SHIPPED 2026-09-06 |
 | C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | NOT STARTED |
 | C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | NOT STARTED |
 | C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | NOT STARTED |
@@ -36,10 +36,72 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C3.1** (React Query data layer, auth screens, shadcn primitives on df tokens, self-hosted
-Plex). **Phase 2 is complete** — Phase 0, Phase 1 and C2.1–C2.4 shipped. C3.1 is a phase boundary:
-re-read the plan's "Frontend architecture" section before coding, and note that C3.1 gates every later
-C3.x / C4.x screen.
+**NEXT = C3.2** (client directory, client page with engagements, engagement checklist, templates
+editor). Phases 0–2 are complete and **C3.1 has shipped**, so the data layer, the fonts and the
+token remap every later screen needs are in place. C3.2 is the first screen commit: it builds on
+`src/api/queries/*` and **removes both presets shims** (the read-only `GET /presets` route and the
+frontend bins↔items adapter in `api.presets`).
+
+C3.1 notes: the commit is the foundation the C3.x/C4.x screens stand on, so most of it is
+infrastructure rather than pixels.
+
+- **Data layer** — `src/api/queries/` with one module per resource (`auth, clients, engagements,
+  requests, documents, messages, activities, notifications, dashboard, search, templates, ops`),
+  re-exported from `queries/index.ts`. Screens import from `@/api/queries`, never `@/api/client`.
+- **`src/api/client.ts` grew the whole C2.2 surface** it was missing: `engagements`, `requests`,
+  `versions`, `uploads`, `templates`, `dashboard`, `search`, `notifications`, `ops`, plus the
+  document verbs (`reviews / accept / request-correction / share / unshare / archive / unarchive`).
+  `send()` now returns the HTTP status beside the body because an upload answers **201 published**
+  and **202 still being checked** with the same shape, and the user is told different things.
+  `src/api/types.ts` gained the matching shapes (`Engagement`, `RequestItem`, `DocumentVersion`,
+  `Review`, `EngagementTree`, `DashboardSummary`, `SearchResults`, `OpsStatus`, `UploadResult`…).
+- **Query keys are scoped by identity** (`[me.kind, me.id, …]`, `keys.ts`) and every scoped query is
+  **disabled while nobody is signed in**. Invalidation is by prefix — `keys.document(s, id)` covers
+  that document's versions and reviews, `keys.documents(s)` covers every list.
+- **Polling without holding the session open** (`live.ts`): `useLiveQuery` sends
+  `X-DocFlow-Poll: 1` on **every fetch after the first one for a key** — the first is a person
+  opening a screen, the rest are timers, focus and post-mutation invalidations (and a mutation is a
+  POST, which already counted as activity). Cadences: thread 5 s, queue/dashboard/notifications 30 s,
+  ops 60 s; `refetchIntervalInBackground` stays false, so a hidden tab stops asking.
+- **`AuthContext` no longer stores identity** — `useMe()` (the `['auth','me']` query) is the single
+  copy, and the provider owns only the transitions. **Deviation from this spec line, deliberate:**
+  it was written as "keeps only `me` / `login` / `logout`", but `stage`, `adopt`, `activate`,
+  `logoutAll` and `refresh` are what the C1.2/C1.3 MFA, invitation and reset screens are already
+  built on. The intent — one copy of the identity, not two — is met by moving the *state* into the
+  query cache while the provider keeps the transitions. **Gotcha, found by its test:**
+  `queryClient.clear()` detaches the mounted `/auth/me` observer, which then shows a stale user
+  forever; sign-in / sign-out therefore remove *every key except* `['auth','me']` and write the
+  identity explicitly. `/auth/me` was also excluded from the 401 → `UNAUTHORIZED_EVENT` dispatch:
+  "is there a session?" answered with "no" is that call's ordinary answer, not a lost session.
+- **IBM Plex is self-hosted** from `public/fonts/` (14 woff2 files, 292 KB, from
+  `@fontsource/ibm-plex-*` 5.3.0, OFL in `public/fonts/LICENSE.txt`); `@font-face` blocks at the top
+  of `src/index.css` with `unicode-range` so latin-ext is only fetched when an accented name needs
+  it. `index.html` lost the Lovable title/description/og/twitter tags and both Google Fonts links,
+  gained `<title>DocFlow</title>`, `noindex, nofollow` and a preload of Sans 400/500.
+  **Verified in the built bundle: no `googleapis`, `gstatic` or `lovable` string anywhere in `dist/`.**
+- **Radix/shadcn primitives remapped onto df tokens** inside `.df-root` (`styles.css`): `--primary`
+  ← `--df-accent`, `--border` ← `--df-border`, `--radius: var(--df-radius)`, backgrounds, muted and
+  sidebar variables. They have to be **HSL triplets** because the Tailwind config wraps each in
+  `hsl(…)`, so each value is the sRGB rendering of the oklch token named beside it — change one and
+  the pair has to follow. **Portalled** primitives render outside `.df-root` and still read the old
+  palette: a portal's content must carry `df-root` (as `Modal.tsx` already does). `Modal.tsx` was
+  already on Radix Dialog from an earlier commit, so that item needed no work.
+- **Vitest + jsdom at the root** (`vitest.config.ts`, `npm test`, separate from `vite.config.ts` so a
+  test run never loads the Lovable tagger). **18 tests / 3 files**: the key factory (identities never
+  share a cache entry, prefixes nest), the poll rule and the retry policy, and `AuthProvider`'s
+  session lifecycle against a stubbed `fetch`. Testing-library's automatic cleanup does **not**
+  register without vitest globals — `cleanup()` in `afterEach` is required.
+- **`SecurityCard`** is the first screen on the data layer (`useMfaStatus`, `useSessions`,
+  `useChangePassword`, `useRegenerateRecoveryCodes`); its manual `load()` is gone. The other screens
+  keep their contexts until C3.2–C3.4 replace them.
+
+Gate: root `npm run typecheck` clean, `npm run lint` 0 errors / 11 inherited warnings, `npm run
+build` OK, `npm test` **18 passed (3 files)**; server `npm run build` + `typecheck:test` clean. **The
+server suite was NOT re-run to completion:** the background run was killed by Windows for low memory
+(another project's vitest held ~1 GB at the time). **No file under `server/` is touched by this
+commit**, so the last full result stands — 660 tests at C2.4 on exactly this server code — and the
+test database was checked afterwards for orphaned connections (none). Re-run `cd server && npm test`
+at the start of C3.2. No migration.
 
 C2.4 notes: `GET /documents/:id/versions/:vid/{download,preview}` added to `routes/versions.ts` (which
 already owned the version routes). Shared `deliver()` enforces the rules in one place:

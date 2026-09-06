@@ -81,6 +81,20 @@ export interface Document {
   status?: DocumentStatus | null;
   createdAt: Date;
   updatedAt: Date;
+
+  /* ---- Workflow model (C2.1). Null on a row the legacy import has not touched. ---- */
+  engagementId?: string | null;
+  requestId?: string | null;
+  kind?: DocumentKind | null;
+  displayName?: string | null;
+  category?: string | null;
+  currentVersionId?: string | null;
+  /** When the advisor shared a deliverable; null means private (the client 404s on it). */
+  sharedAt?: Date | null;
+  sharedById?: string | null;
+  archivedAt?: Date | null;
+  /** Server-computed convenience: `sharedAt !== null`. */
+  shared?: boolean;
 }
 
 export interface Message {
@@ -162,4 +176,232 @@ export interface MfaEnrollment {
   qrDataUrl: string;
   issuer: string;
   account: string;
+}
+
+/* ==========================================================================
+   Workflow model (C2.1 schema, C2.2 API). Every shape here mirrors a
+   serializer in server/src/routes/serialize.ts — where the bytes live
+   (`storageKey`) and what they hash to (`sha256`) never reach the browser.
+   ========================================================================== */
+
+export type EngagementKind = 'individual_tax' | 'business_tax' | 'other' | 'imported';
+export type EngagementStatus = 'open' | 'closed';
+export type RequestStatus = 'requested' | 'submitted' | 'in_review' | 'needs_correction' | 'accepted' | 'waived';
+export type DocumentKind = 'client_upload' | 'deliverable' | 'imported';
+/** Only `clean` is ever served; `error` means the scanner failed, not the file. */
+export type ScanStatus = 'pending' | 'clean' | 'infected' | 'encrypted' | 'error';
+export type ReviewDecision = 'accepted' | 'needs_correction';
+export type TemplateKind = 'individual_tax' | 'business_tax' | 'custom';
+
+/** The unit of work a checklist hangs off ("2026 Individual Tax Return"). */
+export interface Engagement {
+  id: string;
+  clientId: string;
+  providerId: string;
+  title: string;
+  kind: EngagementKind;
+  taxYear: number | null;
+  status: EngagementStatus;
+  closedAt: Date | null;
+  archivedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * One line of a checklist. `overdue` is computed by the server on every read
+ * (invariant 15) — never derive it in the browser, the two clocks disagree.
+ */
+export interface RequestItem {
+  id: string;
+  engagementId: string;
+  clientId: string;
+  providerId: string;
+  title: string;
+  instructions: string | null;
+  category: string | null;
+  required: boolean;
+  dueDate: Date | null;
+  status: RequestStatus;
+  sortOrder: number;
+  overdue: boolean;
+  waivedReason: string | null;
+  waivedAt: Date | null;
+  /** The only value today is 'not_applicable' — "I don't have this". */
+  clientResponseKind: string | null;
+  clientResponseNote: string | null;
+  clientResponseAt: Date | null;
+  archivedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface DocumentVersion {
+  id: string;
+  documentId: string;
+  versionNo: number;
+  originalFilename: string;
+  mimeType: string | null;
+  sizeBytes: number;
+  scanStatus: ScanStatus;
+  scannedAt: Date | null;
+  uploadedByKind: ActorKind;
+  uploadedById: string;
+  publishedAt: Date | null;
+  supersededAt: Date | null;
+  createdAt: Date;
+  /** Scanned clean *and* published: the only state that can actually be fetched. */
+  available: boolean;
+}
+
+export interface Review {
+  id: string;
+  documentId: string;
+  versionId: string | null;
+  requestId: string | null;
+  reviewerId: string;
+  decision: ReviewDecision;
+  note: string | null;
+  createdAt: Date;
+}
+
+/** GET /documents/:id/versions — a version with the decision made about it. */
+export interface VersionWithReviews extends DocumentVersion {
+  reviews: Review[];
+  isCurrent: boolean;
+}
+
+/** The slice of a version an engagement list row needs. */
+export interface VersionSummary {
+  id: string;
+  versionNo: number;
+  originalFilename: string;
+  mimeType: string | null;
+  sizeBytes: number;
+  scanStatus: ScanStatus;
+  available: boolean;
+  createdAt: Date;
+}
+
+export interface EngagementDocument extends Document {
+  currentVersion: VersionSummary | null;
+}
+
+/** GET /engagements/:id — the whole screen in one round trip. */
+export interface EngagementTree {
+  engagement: Engagement;
+  requests: RequestItem[];
+  documents: EngagementDocument[];
+}
+
+export interface TemplateItem {
+  key: string;
+  title: string;
+  category?: string | null;
+  instructions?: string | null;
+  required?: boolean;
+  dueOffsetDays?: number;
+}
+
+export interface RequestTemplate {
+  id: string;
+  providerId: string;
+  name: string;
+  kind: TemplateKind;
+  items: TemplateItem[];
+  archivedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** One home-queue tile: the number, and the ids behind it so a list can open. */
+export interface DashboardBucket<T> {
+  count: number;
+  ids: string[];
+  items: T[];
+}
+
+export interface DashboardRequestRef {
+  id: string;
+  clientId: string;
+  title: string;
+  dueDate?: Date | null;
+  note?: string | null;
+}
+
+export interface DashboardSummary {
+  generatedAt: string;
+  readyToReview: DashboardBucket<DashboardRequestRef>;
+  waitingOnClients: DashboardBucket<DashboardRequestRef>;
+  overdue: DashboardBucket<DashboardRequestRef>;
+  needsDecision: DashboardBucket<DashboardRequestRef>;
+  unreadMessages: DashboardBucket<{ id: string; clientId: string }>;
+}
+
+export interface SearchParams {
+  q?: string;
+  clientId?: string;
+  category?: string;
+  status?: RequestStatus;
+  year?: number;
+}
+
+export interface SearchResults {
+  query: string;
+  truncated: boolean;
+  documents: Document[];
+  requests: RequestItem[];
+}
+
+export interface Notification {
+  id: string;
+  userKind: ActorKind;
+  userId: string;
+  type: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+}
+
+export interface NotificationList {
+  unread: number;
+  notifications: Notification[];
+}
+
+/** GET /ops/status — advisor only; grows into the C5.2 system panel. */
+export interface OpsStatus {
+  time: string;
+  jobs: {
+    pending: number;
+    running: number;
+    failed: number;
+    done: number;
+    oldestPendingAt: string | null;
+  };
+  scanner: {
+    required: boolean;
+    reachable: boolean;
+    endpoint: string;
+    note: string | null;
+  };
+  mail: {
+    configured: boolean;
+    note: string | null;
+  };
+}
+
+/**
+ * The answer every upload route gives. 201 = published and readable;
+ * 202 = stored, still being checked (`code` says why, `version.available` is false).
+ */
+export interface UploadResult {
+  document: Document;
+  version: DocumentVersion;
+  scanStatus: ScanStatus;
+  code?: string;
+  message?: string;
+  /** 201 or 202 — the caller needs to tell "ready" from "still checking". */
+  status: number;
 }

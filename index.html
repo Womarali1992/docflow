@@ -3,25 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>wealth-link-portal</title>
-    <meta name="description" content="Lovable Generated Project" />
-    <meta name="author" content="Lovable" />
+    <title>DocFlow</title>
+    <meta name="description" content="Secure document exchange between an accountant and their clients." />
+    <!-- A private portal: nothing here should be indexed or previewed. -->
+    <meta name="robots" content="noindex, nofollow" />
 
-    <meta property="og:title" content="wealth-link-portal" />
-    <meta property="og:description" content="Lovable Generated Project" />
-    <meta property="og:type" content="website" />
-    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
-
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:site" content="@lovable_dev" />
-    <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
-
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap"
-      rel="stylesheet"
-    />
+    <!--
+      IBM Plex is served from /fonts (see src/index.css). Nothing is fetched from
+      a third party: the firm's PC may sit behind a restrictive network, and a
+      client's browser must not have to tell Google which portal it is loading.
+      The two faces below carry almost every pixel of text, so they are preloaded.
+    -->
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin />
   </head>
 
   <body>

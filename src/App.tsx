@@ -1,7 +1,6 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import DocFlowLayout from "@/components/docflow/Layout";
 import ClientLayout from "@/components/docflow/ClientLayout";
@@ -21,42 +20,38 @@ import DocumentsPage from "./pages/Documents";
 import DocumentPage from "./pages/Document";
 import Login from "./pages/Login";
 
-const queryClient = new QueryClient();
-
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/mfa" element={<MfaGate stage="preauth"><Mfa /></MfaGate>} />
-          <Route path="/mfa/enroll" element={<MfaGate stage="mfa_enroll"><MfaEnroll /></MfaGate>} />
-          <Route path="/invite/:token" element={<Invite />} />
-          <Route path="/forgot" element={<Forgot />} />
-          <Route path="/reset/:token" element={<Reset />} />
+  <TooltipProvider>
+    <Toaster />
+    <Sonner />
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/mfa" element={<MfaGate stage="preauth"><Mfa /></MfaGate>} />
+        <Route path="/mfa/enroll" element={<MfaGate stage="mfa_enroll"><MfaEnroll /></MfaGate>} />
+        <Route path="/invite/:token" element={<Invite />} />
+        <Route path="/forgot" element={<Forgot />} />
+        <Route path="/reset/:token" element={<Reset />} />
 
-          <Route element={<RouteGuard kind="provider"><DocFlowLayout /></RouteGuard>}>
-            <Route path="/" element={<Index />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/overview" element={<FinancialOverview />} />
-            <Route path="/clients/:clientId" element={<Client />} />
-            <Route path="/documents" element={<DocumentsPage />} />
-            <Route path="/documents/:documentId" element={<DocumentPage />} />
-          </Route>
+        <Route element={<RouteGuard kind="provider"><DocFlowLayout /></RouteGuard>}>
+          <Route path="/" element={<Index />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/overview" element={<FinancialOverview />} />
+          <Route path="/clients/:clientId" element={<Client />} />
+          <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/documents/:documentId" element={<DocumentPage />} />
+        </Route>
 
-          <Route element={<RouteGuard kind="client"><ClientLayout /></RouteGuard>}>
-            <Route path="/client/:clientId" element={<ClientPortal />} />
-          </Route>
+        <Route element={<RouteGuard kind="client"><ClientLayout /></RouteGuard>}>
+          <Route path="/client/:clientId" element={<ClientPortal />} />
+        </Route>
 
-          <Route element={<DocFlowLayout />}>
-            <Route path="*" element={<NotFound />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+        <Route element={<DocFlowLayout />}>
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  </TooltipProvider>
 );
 
 export default App;
