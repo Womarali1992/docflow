@@ -12,6 +12,7 @@ import templateRoutes from './routes/templates.js';
 import dashboardRoutes from './routes/dashboard.js';
 import searchRoutes from './routes/search.js';
 import notificationRoutes from './routes/notifications.js';
+import uploadRoutes from './routes/uploads.js';
 import documentRoutes from './routes/documents.js';
 import messageRoutes from './routes/messages.js';
 import presetRoutes from './routes/presets.js';
@@ -60,6 +61,9 @@ app.use('/api/auth/mfa', mfaRoutes);
 app.use('/api/auth', authRoutes);
 // Public by design: the invitation link is the credential (single use, 7 days, throttled per IP).
 app.use('/api/invitations', invitationRoutes);
+// Uploads first: they authorize their target before any multipart body is parsed,
+// so they must not sit behind a router that would consume the request.
+app.use('/api', uploadRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/engagements', engagementRoutes);
 app.use('/api/requests', requestRoutes);

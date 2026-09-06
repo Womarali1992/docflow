@@ -20,9 +20,11 @@ import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
-import { uploadSingle } from '../middleware/upload.js';
-import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
-import { absPathFor, deleteStoredFile, humanSize, storedFileName, writeStoredFile } from '../storage.js';
+import { stageUpload, stagedFrom, discardStaged } from '../files/staging.js';
+import { publishStagedUpload } from '../files/publish.js';
+import { INSTRUCTIONS_MAX, NAME_MAX, uploadLimiter } from '../security/limits.js';
+import { absPathFor, humanSize } from '../storage.js';
+import { absPathForKey } from '../files/store.js';
 import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
 import { serializeDocument, serializeReview } from './serialize.js';
@@ -255,24 +257,77 @@ router.post('/:id/unarchive', async (req, res) => {
 
 /* --------------------------------------------------------------- legacy API */
 
-/* Legacy download of the in-place file. C2.4 replaces this with per-version delivery. */
+/*
+ * Legacy download. Since C2.3 new bytes are versions under DATA_ROOT, so this
+ * resolves the current version first and only falls back to the legacy
+ * `storagePath` for rows the import left in place. C2.4 adds the per-version
+ * routes with the full delivery headers; this keeps the existing link working
+ * in the meantime.
+ *
+ * Only a published, clean version is ever served (invariant 3).
+ */
 router.get('/:id/download', async (req, res) => {
   const doc = await findDocument(req.auth!, req.params.id);
   if (!doc) return notFound(res);
-  if (!doc.storagePath) return res.status(404).json({ error: 'No file attached' });
 
-  let abs: string;
-  try {
-    abs = absPathFor(doc.storagePath);
-  } catch {
-    return res.status(404).json({ error: 'File missing' });
+  let abs: string | null = null;
+  let filename = doc.name;
+  let mime = doc.mimeType || 'application/octet-stream';
+  let size = doc.sizeBytes ?? null;
+
+  if (doc.currentVersionId) {
+    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.id, doc.currentVersionId));
+    if (version) {
+      if (version.scanStatus !== 'clean' || version.publishedAt === null) {
+        return res.status(409).json({ error: 'This file is still being checked.', code: 'not_available_yet' });
+      }
+      try {
+        abs = absPathForKey(version.storageKey);
+      } catch {
+        return res.status(404).json({ error: 'File missing' });
+      }
+      filename = version.originalFilename;
+      mime = version.mimeType;
+      size = version.sizeBytes;
+    }
+  }
+
+  if (!abs && !doc.storagePath) {
+    // No current version and no legacy file. If something was uploaded and is
+    // still being checked, say so — "no file attached" would contradict the
+    // "we received it" the client was just given.
+    const [latest] = await db
+      .select()
+      .from(schema.documentVersions)
+      .where(eq(schema.documentVersions.documentId, doc.id))
+      .orderBy(desc(schema.documentVersions.versionNo))
+      .limit(1);
+    if (latest && latest.scanStatus !== 'infected') {
+      return res.status(409).json({ error: 'This file is still being checked.', code: 'not_available_yet' });
+    }
+    if (latest) {
+      return res.status(409).json({ error: 'This file did not pass the virus check.', code: 'infected' });
+    }
+    return res.status(404).json({ error: 'No file attached' });
+  }
+
+  if (!abs) {
+    try {
+      abs = absPathFor(doc.storagePath!);
+    } catch {
+      return res.status(404).json({ error: 'File missing' });
+    }
   }
 
   const dispType = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
-  const filename = safeFilename(doc.name);
-  res.setHeader('Content-Type', doc.mimeType || 'application/octet-stream');
-  if (doc.sizeBytes) res.setHeader('Content-Length', String(doc.sizeBytes));
-  res.setHeader('Content-Disposition', `${dispType}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(doc.name)}`);
+  res.setHeader('Content-Type', mime);
+  if (size) res.setHeader('Content-Length', String(size));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader(
+    'Content-Disposition',
+    `${dispType}; filename="${safeFilename(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`
+  );
 
   const stream = fs.createReadStream(abs);
   stream.on('error', () => {
@@ -282,40 +337,60 @@ router.get('/:id/download', async (req, res) => {
   stream.pipe(res);
 });
 
-/* Legacy in-place upload. C2.3 turns this into a version through the scan pipeline.
-   The target is resolved and authorized BEFORE the multipart body is parsed (invariant 1). */
-router.post('/:id/file', async (req: Request, res: Response, next: NextFunction) => {
+/*
+ * Legacy upload endpoint. Since C2.3 it no longer writes in place: it runs the
+ * same authorize → stage → validate → scan → publish pipeline as the new routes
+ * and creates a version, so a caller that has not been updated yet still cannot
+ * put unscanned bytes into the system or overwrite history.
+ *
+ * The response keeps the old shape (the serialized document) so the current
+ * frontend is unaffected. Compatibility ledger: removed in C5.4.
+ *
+ * The target is resolved and authorized BEFORE the multipart body is parsed
+ * (invariant 1) — `stageUpload` runs inside the callback, never before it.
+ */
+router.post('/:id/file', uploadLimiter, async (req: Request, res: Response, next: NextFunction) => {
   const auth = req.auth!;
   const doc = await findDocument(auth, req.params.id);
   if (!doc) return notFound(res);
   if (auth.kind === 'client' && !clientMayReplaceFile(doc)) return advisorOnly(res);
 
-  uploadSingle(req, res, (err?: unknown) => {
+  stageUpload(req, res, (err?: unknown) => {
     if (err) return next(err);
-    attachFile(req, res, doc).catch(next);
+    legacyAttach(req, res, doc).catch((e) => {
+      discardStaged(req.file?.path);
+      next(e);
+    });
   });
 });
 
-async function attachFile(req: Request, res: Response, doc: Document) {
+async function legacyAttach(req: Request, res: Response, doc: Document) {
   const auth = req.auth!;
-  const file = req.file;
-  if (!file) return res.status(400).json({ error: 'No file provided' });
+  const staged = stagedFrom(req);
+  if (!staged) return res.status(400).json({ error: 'No file provided' });
 
-  const fileName = storedFileName(doc.id, file.mimetype);
-  if (doc.storagePath && doc.storagePath !== fileName) await deleteStoredFile(doc.storagePath);
-  await writeStoredFile(fileName, file.buffer);
+  const outcome = await publishStagedUpload({
+    document: doc,
+    staged,
+    uploadedByKind: auth.kind,
+    uploadedById: auth.sub,
+    ip: req.ip ?? null,
+  });
+  if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error, code: outcome.code });
 
-  const wasRequested = doc.isRequested;
-  const hadFile = Boolean(doc.storagePath);
   const now = new Date();
+  const wasRequested = doc.isRequested;
+  const hadFile = Boolean(doc.storagePath) || doc.currentVersionId !== null;
 
+  // Keep the legacy columns in step so the current UI still reads correctly
+  // (Compatibility ledger). `storagePath` is deliberately NOT set: the bytes
+  // live under DATA_ROOT now, and nothing new goes into server/uploads.
   const [updated] = await db
     .update(schema.documents)
     .set({
-      storagePath: fileName,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-      size: humanSize(file.size),
+      mimeType: outcome.result.version.mimeType,
+      sizeBytes: outcome.result.version.sizeBytes,
+      size: humanSize(outcome.result.version.sizeBytes),
       url: `/api/documents/${doc.id}/download`,
       uploadedByKind: auth.kind,
       uploadedById: auth.sub,
@@ -331,17 +406,6 @@ async function attachFile(req: Request, res: Response, doc: Document) {
     })
     .where(eq(schema.documents.id, doc.id))
     .returning();
-
-  // A legacy upload against a real request still moves the checklist forward.
-  if (doc.requestId) {
-    const [request] = await db.select().from(schema.requests).where(eq(schema.requests.id, doc.requestId));
-    if (request && request.status !== 'waived') {
-      await db
-        .update(schema.requests)
-        .set({ status: 'submitted', clientResponseKind: null, clientResponseNote: null, clientResponseAt: null, updatedAt: now })
-        .where(eq(schema.requests.id, request.id));
-    }
-  }
 
   const description = wasRequested
     ? `fulfilled request: ${updated.name}`
@@ -360,7 +424,7 @@ async function attachFile(req: Request, res: Response, doc: Document) {
     targetId: updated.id,
   });
 
-  res.json(serializeDocument(updated));
+  res.status(outcome.status === 202 ? 202 : 200).json(serializeDocument(updated));
 }
 
 /* Create a document record (legacy shape; C2.3 replaces the upload paths). */

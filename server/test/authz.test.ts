@@ -281,20 +281,24 @@ const cases: Case[] = [
     },
   },
   {
+    // Since C2.3 the legacy route runs the real pipeline, so it answers 202
+    // (stored, being checked) rather than 200 while scanning is switched off.
     name: 'POST /api/documents/:id/file fulfils an open request',
     req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.request}/file`)),
-    expect: S(200, 404, 200, 404, 404, 401),
+    expect: S(202, 404, 202, 404, 404, 401),
     check: (res) => {
       expect(res.body.isRequested).toBe(false);
       expect(res.body.status).toBe('pending');
-      expect(res.body.hasFile).toBe(true);
+      // hasFile means "there is something readable". With scanning switched off
+      // the version is stored but never published, so there is not — yet.
+      expect(res.body.hasFile).toBe(false);
       expect(res.body).not.toHaveProperty('storagePath');
     },
   },
   {
     name: 'POST /api/documents/:id/file cannot overwrite an advisor deliverable as a client',
     req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.deliverable}/file`)),
-    expect: S(200, 404, 403, 404, 404, 401),
+    expect: S(202, 404, 403, 404, 404, 401),
   },
   {
     name: 'POST /api/documents (create for a client)',
@@ -577,6 +581,41 @@ const cases: Case[] = [
     req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/unarchive`),
     expect: S(200, 404, 403, 404, 404, 401),
     check: (res) => expect(res.body.archivedAt).toBeNull(),
+  },
+
+  /* ------------------------------------------------------------- uploads */
+  {
+    // Only the client answers their own checklist line; a foreign id is 404,
+    // and nothing is ever staged before that is decided.
+    name: 'POST /api/requests/:id/uploads',
+    req: (fx) => attachPdf(request(app).post(`/api/requests/${fx.client1a.request}/uploads`)),
+    expect: S(403, 404, 202, 404, 404, 401),
+    check: (res) => {
+      // SCAN_REQUIRED=false in tests: stored, honestly not published.
+      expect(res.body.scanStatus).toBe('pending');
+      expect(res.body.version.available).toBe(false);
+      expect(res.body.version).not.toHaveProperty('storageKey');
+    },
+  },
+  {
+    name: 'POST /api/engagements/:id/uploads (ad-hoc, either side)',
+    req: (fx) => attachPdf(request(app).post(`/api/engagements/${fx.client1a.engagement}/uploads`)),
+    expect: S(202, 404, 202, 404, 404, 401),
+    check: (res, fx, actor) => {
+      // An advisor filing into an engagement is producing a deliverable.
+      expect(res.body.document.kind).toBe(actor === 'provider1' ? 'deliverable' : 'client_upload');
+    },
+  },
+  {
+    name: 'POST /api/documents/:id/versions (own upload)',
+    req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.upload}/versions`)),
+    expect: S(202, 404, 202, 404, 404, 401),
+    check: (res) => expect(res.body.version.versionNo).toBe(2),
+  },
+  {
+    name: 'POST /api/documents/:id/versions (client cannot revise a deliverable)',
+    req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.deliverable}/versions`)),
+    expect: S(202, 404, 403, 404, 404, 401),
   },
 
   /* ----------------------------------------------------------- templates */

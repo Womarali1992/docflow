@@ -34,6 +34,9 @@ process.env.PASSWORD_BCRYPT_COST = '4';
 process.env.UPLOADS_DIR = path.join(here, '.uploads-tmp');
 // Document bytes (C2.1 onwards) live under DATA_ROOT, never in the legacy uploads tree.
 process.env.DATA_ROOT = path.join(here, '.data-tmp');
+// No clamd on a dev box: uploads are stored and left `pending`, never claimed clean.
+// The scanner's own paths are tested against a fake clamd on a real socket.
+process.env.SCAN_REQUIRED = 'false';
 delete process.env.ALLOW_PROVIDER_SIGNUP;
 // No mail server in tests: the mailer must degrade to copy-link, and the email
 // handler is exercised with an injected transport instead of a socket.
@@ -46,10 +49,23 @@ const { sql } = await import('drizzle-orm');
 let tableList: string | null = null;
 
 beforeAll(async () => {
-  fs.rmSync(process.env.UPLOADS_DIR!, { recursive: true, force: true });
-  fs.mkdirSync(process.env.UPLOADS_DIR!, { recursive: true });
-  fs.rmSync(process.env.DATA_ROOT!, { recursive: true, force: true });
-  fs.mkdirSync(process.env.DATA_ROOT!, { recursive: true });
+  // Windows holds directory handles briefly after the last file closes, so a
+  // plain recursive delete intermittently throws ENOTEMPTY. Retrying is what
+  // node exposes for exactly this.
+  const wipe = (dir: string) => {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    } catch (err) {
+      // Best effort. Windows can hold a directory handle open after a crashed
+      // run, and leftover files are harmless anyway: storage keys are UUIDs, so
+      // nothing collides. What this hook must guarantee is a clean database,
+      // which the TRUNCATE in beforeEach does.
+      console.warn(`[setup] could not clear ${dir}: ${(err as Error).message}`);
+    }
+    fs.mkdirSync(dir, { recursive: true });
+  };
+  wipe(process.env.UPLOADS_DIR!);
+  wipe(process.env.DATA_ROOT!);
   try {
     await migrate(db, { migrationsFolder: path.join(here, '..', 'migrations') });
   } catch (err) {

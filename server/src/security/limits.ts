@@ -68,6 +68,16 @@ export function createLookupLimiter(limit: number) {
 
 export const lookupLimiter = createLookupLimiter(limitFromEnv('RATE_LIMIT_LOOKUP_IP', 10));
 
+/** 60 uploads / h per session. Generous for a real filing session, hostile to a script. */
+export const uploadLimiter = rateLimit({
+  windowMs: ONE_HOUR,
+  limit: limitFromEnv('RATE_LIMIT_UPLOADS', 60),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => throttleKey(req),
+  message: { error: 'Too many uploads in a short time. Please wait a few minutes.', code: 'rate_limited' },
+});
+
 /** 5 wrong codes / 15 min per session; a correct code does not count. */
 export const mfaVerifyLimiter = rateLimit({
   windowMs: FIFTEEN_MINUTES,

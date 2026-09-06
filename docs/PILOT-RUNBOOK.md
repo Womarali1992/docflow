@@ -224,3 +224,72 @@ stored as a truncated sha256, so repeated failures stay countable without the ad
 
 TRUNCATE is deliberately still allowed (it is statement-level): the test harness truncates between
 tests, and a restore replaces the whole database. Nothing in the application ever issues one.
+
+## Uploads and virus scanning (C2.3)
+
+Every byte that enters DocFlow goes through one pipeline:
+
+**authorize → stage → validate → scan → publish**
+
+- **Authorize first.** The target request, engagement or document is resolved and
+  authorized *before* the multipart body is parsed. An upload aimed at someone else's
+  file never reaches the disk at all.
+- **Stage.** The file is written to `<DATA_ROOT>\staging\<uuid>.part`, never into memory.
+- **Validate.** The extension is a claim; the bytes are the truth. A `.pdf` whose contents
+  are a PNG is refused. Password-protected files are refused too — not because they are
+  dangerous, but because a scanner cannot see inside them.
+- **Scan.** clamd, over its INSTREAM socket.
+- **Publish.** Only then is the file moved into `<DATA_ROOT>\files\yyyy\mm\`, hashed, and
+  recorded as a version.
+
+Any refusal deletes the staged file and returns a stable code the UI can branch on:
+`unsupported_type`, `type_mismatch`, `encrypted`, `empty_file`, `too_large`, `infected`.
+
+### What happens when the scanner is down
+
+**The client's upload is accepted, not rejected.** The firm's outage is not the client's
+problem. The file is stored, the version is `error`, a retry job is queued every 5 minutes
+for 24 hours, and the client gets **202** with "we are checking this file".
+
+Nobody can read it in the meantime — a download returns 409 `not_available_yet`. When clamd
+comes back the retry job publishes it and moves the checklist on by itself. If the retry
+finds it infected, the version is quarantined: the row stays as the record, the bytes are
+deleted, and the document stops pointing at it.
+
+`GET /api/ops/status` shows `scanner.reachable`, so an advisor can see the cause rather than
+guessing why nothing is appearing.
+
+### The one setting to get right
+
+`SCAN_REQUIRED=false` is for a dev machine with no clamd. **It does not mean "publish
+anyway"** — uploads are stored and left `pending`, which is the honest state for a file
+nothing has looked at. Nothing is ever marked clean without a scanner saying so, and the
+setting is ignored entirely when `NODE_ENV=production`.
+
+On the firm PC (C5.3 installs ClamAV):
+
+```
+CLAMD_HOST=127.0.0.1
+CLAMD_PORT=3310
+SCAN_REQUIRED=true
+```
+
+Check it with `GET /api/ops/status` → `scanner.reachable: true`. `freshclam` needs internet
+to update signatures.
+
+### The hourly sweeper
+
+The worker sweeps two kinds of debris — the backstop, not the mechanism, since every error
+path already cleans up after itself:
+
+1. staged `.part` files older than an hour (an upload that died mid-flight);
+2. versions still unpublished after an hour, which become `error` so the ops panel shows them.
+
+It never touches anything under `files\` that a version points at.
+
+### Testing without ClamAV
+
+The scanner's own paths — clean, infected, unreachable, timeout, garbled reply — are tested
+against a **fake clamd on a real TCP socket**, so the suite runs fully on a machine with no
+antivirus installed. One integration test uses the real EICAR string against a genuine clamd
+and **skips automatically** when none is listening; it runs for real on the firm PC.

@@ -67,3 +67,53 @@ export function extOf(filename: string): string {
   const ext = path.extname(filename).replace(/^\./, '');
   return /^[a-z0-9]{1,8}$/i.test(ext) ? ext.toLowerCase() : '';
 }
+
+/* --------------------------------------------------------------- staging */
+
+/**
+ * Where a multipart body lands before anyone has decided it is safe. Separate
+ * from `files/` on purpose: nothing under `files/` has ever been unvalidated,
+ * so a sweep of the staging directory can never touch a published document.
+ */
+export function stagingDir(): string {
+  return process.env.STAGING_DIR ? path.resolve(process.env.STAGING_DIR) : path.join(dataRoot(), 'staging');
+}
+
+export function ensureStagingDir(): string {
+  const dir = stagingDir();
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** A staged file's path. `.part` so a half-written upload is obvious on disk. */
+export function stagedPath(id: string): string {
+  return path.join(stagingDir(), `${id}.part`);
+}
+
+/** Deletes a staged file, swallowing "already gone". Never throws at the caller. */
+export function discardStaged(absPath: string | null | undefined): void {
+  if (!absPath) return;
+  try {
+    fs.unlinkSync(absPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      console.error('[files] could not remove staged file:', absPath, err);
+    }
+  }
+}
+
+/** Moves a staged file to its final key. Same volume, so this is a rename. */
+export function commitStaged(stagedAbsPath: string, storageKey: string): void {
+  const target = ensureKeyDir(storageKey);
+  try {
+    fs.renameSync(stagedAbsPath, target);
+  } catch (err) {
+    // Different volumes (DATA_ROOT and STAGING_DIR configured apart): copy then unlink.
+    if ((err as NodeJS.ErrnoException)?.code === 'EXDEV') {
+      fs.copyFileSync(stagedAbsPath, target);
+      fs.unlinkSync(stagedAbsPath);
+      return;
+    }
+    throw err;
+  }
+}

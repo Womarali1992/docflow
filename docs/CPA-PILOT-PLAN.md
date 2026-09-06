@@ -22,7 +22,7 @@
 | C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | SHIPPED 2026-09-06 |
 | C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | SHIPPED 2026-09-06 |
 | C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | SHIPPED 2026-09-06 |
-| C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | NOT STARTED |
+| C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | SHIPPED 2026-09-06 |
 | C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | NOT STARTED |
 | C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | NOT STARTED |
 | C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | NOT STARTED |
@@ -36,8 +36,71 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C2.3** (authorize → stage → validate → scan → publish upload pipeline; quarantine;
-sweeper; every upload is a version). Phase 0, Phase 1, C2.1 and C2.2 shipped.
+**NEXT = C2.4** (per-version download/preview with the delivery headers; the legacy URL resolves the
+current version). Phase 0, Phase 1, C2.1, C2.2 and C2.3 shipped.
+
+C2.3 notes: `files/{staging,validate,scan,publish}.ts` added beside the existing `files/store.ts`
+(extended with `stagingDir/ensureStagingDir/stagedPath/discardStaged/commitStaged`). `middleware/upload.ts`
+DELETED — `files/staging.ts` `stageUpload` replaces it with multer **diskStorage** into
+`<DATA_ROOT>/staging/<uuid>.part`, and every error path unlinks the `.part` file (multer 2 leaves it
+behind on a size trip; the sweeper is the backstop, not the mechanism).
+
+New routes in `routes/uploads.ts`, mounted at `/api` **before** the other routers:
+`POST /requests/:id/uploads` (client only — `client_only` 403 for an advisor), `POST
+/engagements/:id/uploads` (advisor → `deliverable`, client → `client_upload`), `POST
+/documents/:id/versions`. **Authorize-before-bytes is structural:** each handler resolves and
+authorizes its target in a middleware that runs BEFORE `stageUpload`; four matrix-independent tests
+assert the staging directory is still empty after an unauthorized attempt. The legacy
+`POST /documents/:id/file` now delegates to the same pipeline (creates a version, never overwrites)
+and therefore answers **202** while scanning is off — three matrix rows moved 200 → 202.
+
+`validate.ts`: closed allowlist keyed on the claimed extension, then `file-type` magic-byte sniff that
+must agree (ZIP/OLE accepted for the Office extensions since that is what a container looks like);
+signature-less text is checked for actually being text; `/Encrypt` PDFs and `EncryptedPackage` OOXML
+are refused as `encrypted` because a scanner cannot see inside them.
+
+**`scan.ts` — DEVIATION from the plan, deliberate.** The plan named the `clamscan` package; this is a
+direct clamd INSTREAM socket client instead (~120 lines, no dependency). It buys exact timeout control
+and, more importantly, lets the clean / infected / unreachable / timeout / garbled-reply paths be
+tested against a **fake clamd on a real TCP socket** — so the whole scanner is covered on a machine
+with no antivirus. `interpret()` is exported and unit-tested: **anything unrecognised is `error`, never
+`clean`.** `SCAN_REQUIRED=false` (dev/test only, ignored in production) means uploads are stored and
+left `pending` — never published, never claimed clean.
+
+`publish.ts`: validate → scan → hash (streamed) → `commitStaged` rename → `recordNewVersion` (the C2.2
+function, not a reimplementation). Infected → 422 + `document.quarantined` audit + staged file deleted,
+nothing stored. Scanner down → **202 `scanner_unavailable`**, version `error`, `scan_retry` job queued
+with `dedupeKey scan_retry:<versionId>` and **30 attempts** — spacing comes from the queue's ladder
+(1 m / 5 m / 15 m / hourly), not a flat 5 min, so that is a little over a day; after it a stuck version
+stops churning and shows as failed on the ops status. The client is never punished
+for the firm's outage, and nothing is readable until a scan succeeds.
+
+`handlers/scan_retry.ts` and `handlers/sweeper.ts` are now real. The retry publishes on clean (and moves
+the request to `submitted`), quarantines on infected (row kept, bytes deleted, `currentVersionId`
+cleared), and **throws** while the scanner is still down so the queue backs off. The sweeper removes
+staged `.part` files older than an hour and flags versions unpublished after an hour as `error`; it
+never touches bytes a version points at.
+
+Brought forward from C2.4 to avoid shipping a broken state: `GET /documents/:id/download` now resolves
+the current version first and falls back to the legacy `storagePath`; a version that is not clean and
+published answers **409 `not_available_yet`** rather than a misleading 404. `GET /ops/status` gained a
+`scanner` block (required / reachable / endpoint / operator note).
+
+New `uploadLimiter` (60/h per session, `RATE_LIMIT_UPLOADS`). `.env.example` gained `STAGING_DIR`,
+`CLAMD_HOST/PORT/TIMEOUT_MS`, `SCAN_REQUIRED`, `RATE_LIMIT_UPLOADS`. `test/fixtures.ts` holds real
+bytes (PDF, PNG, GIF, ZIP, CSV, TXT) plus the bad citizens: `spoofPdf` (PNG under a .pdf name),
+`encryptedPdf`, `fakeText`, `exe`, `empty`, and EICAR (assembled in two pieces so the source file does
+not itself trip a scanner).
+
+**User decision 2026-09-06: ship without installing ClamAV locally** — the tagged integration test
+skips here and runs for real on the firm PC once C5.3 installs it.
+
+Gate: **624 tests / 13 files** (was 569 / 12); the authz matrix alone is 448 cases (was 424). The
+scanner suite runs against a fake clamd on a real socket, so it passes on a box with no antivirus.
+
+**Mounting gotcha, fixed here:** `uploadRoutes` is mounted at `/api` (its three paths span three
+resources), so a `router.use(authenticate)` in that file would authenticate **every** API request a
+second time. Auth is attached per route instead — never add router-level middleware to `uploads.ts`.
 
 C2.2 notes: new route files `engagements.ts`, `requests.ts`, `versions.ts`, `templates.ts`,
 `dashboard.ts`, `search.ts`, `notifications.ts`; `documents.ts` rewritten; `presets.ts` is now a
@@ -785,6 +848,7 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 | `GET /presets` read-only shim over `request_templates` (POST/DELETE → 410) | C2.2 | C3.2 |
 | `api.presets.create/remove` → `/templates` bins↔items adapter (frontend) | C2.2 | C3.2 |
 | `POST /documents/:id/file` → creates a version | C2.3 | C5.4 |
+| `GET /documents/:id/download` resolves the current version (brought forward from C2.4) | C2.3 | kept (public contract) |
 | `GET /documents/:id/download` → current version | C2.4 | kept (public contract) |
 | `presets` read-only shim over templates | C2.2 | C5.4 |
 | `req.auth` shape from the JWT era | C1.1 | kept |

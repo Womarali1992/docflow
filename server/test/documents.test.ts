@@ -44,7 +44,10 @@ describe('documents', () => {
     const own = await attachPdf(
       request(app).post(`/api/documents/${fx.client1a.upload}/file`).set('Cookie', cookie)
     );
-    expect(own.status).toBe(200);
+    // Since C2.3 this runs the real pipeline: 202 = stored and being checked.
+    // The document keeps serving the version that WAS checked, so it still has a
+    // readable file — the new one simply is not current yet.
+    expect(own.status).toBe(202);
     expect(own.body.hasFile).toBe(true);
     expect(own.body.uploadedByKind).toBe('client');
 
@@ -86,7 +89,7 @@ describe('documents', () => {
 
     // ...but re-uploading resolves it and puts the document back in the queue.
     const again = await attachPdf(request(app).post(`${url}/file`).set('Cookie', client));
-    expect(again.status).toBe(200);
+    expect(again.status).toBe(202);
     expect(again.body.hasUpdateRequest).toBe(false);
     expect(again.body.status).toBe('pending');
   });
