@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useClients, useDashboard } from '@/api/queries';
 import { I } from '@/components/docflow/icons';
 import { QUEUE_EXPLAIN, QUEUE_FILTERS, QUEUE_TITLE, isQueueFilter, type QueueFilter } from '@/components/docflow/queue';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
  * One tile of the home queue, opened out into a list.
@@ -83,7 +84,7 @@ const Work: React.FC = () => {
         </div>
 
         <div className="df-list">
-          {isPending && <div className="df-empty">Loading…</div>}
+          {isPending && <SkeletonRows rows={4} label="Loading your queue" />}
           {!isPending && data && shownCount === 0 && <div className="df-empty">Nothing here. That is the good outcome.</div>}
 
           {unreadBucket

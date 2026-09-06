@@ -29,17 +29,29 @@ const NotificationsPopover: React.FC = () => {
   const markRead = useMarkNotificationsRead();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const items = data?.notifications ?? [];
   const unread = data?.unread ?? 0;
 
+  // Closes on a click outside *and* on Escape, and hands focus back to the
+  // bell — a menu you can only leave with the mouse is a keyboard trap.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
     window.addEventListener('mousedown', onDown);
-    return () => window.removeEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   const toggle = () => {
@@ -53,15 +65,18 @@ const NotificationsPopover: React.FC = () => {
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
+        ref={buttonRef}
         className="df-icon-btn"
         aria-label={unread > 0 ? `Notifications: ${unread} unread` : 'Notifications'}
+        aria-expanded={open}
+        aria-haspopup="menu"
         onClick={toggle}
       >
         <I.Bell size={16} />
         {unread > 0 && <span className="df-dot" />}
       </button>
       {open && (
-        <div className="df-popover">
+        <div className="df-popover" role="menu" aria-label="Notifications">
           <div className="df-popover-head">Notifications</div>
           <div className="df-popover-list">
             {items.length === 0 ? (
@@ -71,7 +86,10 @@ const NotificationsPopover: React.FC = () => {
                 <div
                   key={n.id}
                   className={'df-popover-item' + (n.link ? ' df-clickable' : '')}
+                  role={n.link ? 'menuitem' : undefined}
+                  tabIndex={n.link ? 0 : undefined}
                   onClick={() => { if (n.link) { setOpen(false); navigate(n.link); } }}
+                  onKeyDown={(e) => { if (n.link && e.key === 'Enter') { setOpen(false); navigate(n.link); } }}
                 >
                   <div className="df-popover-text">
                     <strong>{n.title}</strong>

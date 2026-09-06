@@ -8,6 +8,7 @@ import MessagesPanel from '@/components/docflow/MessagesPanel';
 import Checklist from '@/components/docflow/engagement/Checklist';
 import Deliverables from '@/components/docflow/engagement/Deliverables';
 import Uploads from '@/components/docflow/engagement/Uploads';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
  * The engagement workspace — one piece of work, start to finish.
@@ -47,7 +48,13 @@ const Engagement: React.FC = () => {
   }, [data]);
 
   if (isPending) {
-    return <div className="df-page"><div className="df-empty">Loading engagement…</div></div>;
+    return (
+      <div className="df-page">
+        <div className="df-section">
+          <SkeletonRows rows={5} label="Loading this engagement" />
+        </div>
+      </div>
+    );
   }
   if (error || !data) {
     return (

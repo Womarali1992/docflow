@@ -16,7 +16,9 @@
   --df-ink:    oklch(20% 0.012 270);
   --df-ink-2:  oklch(38% 0.011 270);
   --df-ink-3:  oklch(54% 0.009 270);
-  --df-ink-4:  oklch(68% 0.008 270);
+  /* 68% failed the C5.1 contrast audit at 2.88:1 on white — it colours empty
+     states and placeholders, which are text. 55% is 4.86:1 on the page background. */
+  --df-ink-4:  oklch(55% 0.008 270);
 
   /* Single primary — deep navy */
   --df-accent:        oklch(38% 0.12 260);
@@ -1492,4 +1494,85 @@
    phone with no way to sign out. Same breakpoint, stated after it. */
 @media (max-width: 767px) {
   .df-root .df-topbar .df-btn { display: inline-flex; min-height: 36px; }
+}
+
+/* Focus, motion, loading, offline (C5.1) ================== */
+
+/*
+ * One visible focus ring for everything, on the accent token.
+ *
+ * `:focus-visible` rather than `:focus`, so a mouse click does not leave a ring
+ * behind but a Tab key always does. The 2 px offset keeps it legible against a
+ * hairline border, and the same rule covers Radix's portalled content because
+ * that content carries `df-root`.
+ */
+.df-root :focus-visible,
+.df-root .df-btn:focus-visible,
+.df-root .df-icon-btn:focus-visible,
+.df-root .df-nav-item:focus-visible,
+.df-root .df-row.df-clickable:focus-visible,
+.df-root .df-input:focus-visible,
+.df-root .df-seg button:focus-visible {
+  outline: 2px solid var(--df-accent);
+  outline-offset: 2px;
+  border-radius: var(--df-radius-sm);
+}
+/* A focused row must not be hidden behind the next one. */
+.df-root .df-row.df-clickable:focus-visible { position: relative; z-index: 1; }
+
+/* Skeletons ---------------------------------------------- */
+.df-root .df-skeleton-list { padding: 4px 0; }
+.df-root .df-skeleton-row {
+  padding: 10px 0;
+  border-top: 1px solid var(--df-border-soft);
+}
+.df-root .df-skeleton-row:first-child { border-top: 0; }
+.df-root .df-skeleton {
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--df-panel-3) 0%, var(--df-panel-2) 50%, var(--df-panel-3) 100%);
+  background-size: 200% 100%;
+  animation: dfShimmer 1.4s ease-in-out infinite;
+}
+.df-root .df-skeleton-meta { height: 9px; margin-top: 6px; opacity: 0.7; }
+@keyframes dfShimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* Offline / reconnected ---------------------------------- */
+.df-root .df-connection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  background: var(--df-warn-soft);
+  border-bottom: 1px solid oklch(85% 0.06 75);
+  color: oklch(40% 0.12 65);
+}
+.df-root .df-connection-back {
+  background: var(--df-ok-soft);
+  border-bottom-color: oklch(85% 0.05 155);
+  color: var(--df-ok);
+}
+
+/*
+ * Someone who has asked for less movement means it. The shimmer becomes a flat
+ * block and every transition stops — nothing here conveys meaning by moving.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .df-root .df-skeleton {
+    animation: none;
+    background: var(--df-panel-3);
+  }
+  .df-root *,
+  .df-root *::before,
+  .df-root *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

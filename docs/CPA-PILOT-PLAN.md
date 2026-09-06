@@ -31,16 +31,51 @@
 | C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | SHIPPED 2026-09-07 |
 | C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | SHIPPED 2026-09-07 |
 | C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | SHIPPED 2026-09-07 |
-| C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | NOT STARTED |
+| C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | SHIPPED 2026-09-07 |
 | C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | NOT STARTED |
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C5.1** — the UX pass that makes the pilot presentable: empty / loading / error / offline
-states everywhere, a `:focus-visible` ring on the df tokens, contrast and touch-target audit, an
-error boundary, and a keyboard-only walk of both portals. It is also where the **production bundle**
-is checked for dev credentials (`DEV_CREDS` in `Login.tsx` is gated on `import.meta.env.DEV`) and
-Google Fonts references — the latter already verified absent since C3.1. **Phase 4 is complete.**
+**NEXT = C5.2** — audit coverage, the `/settings/system` panel on `GET /ops/status` v2, `backup.ps1`
+v2 (files + manifest + `backup:record` into `backup_runs`), `restore.ps1` v2 and `npm run integrity`,
+with the runbook sections written. **It has to be run for real on this box** — a script that has
+never run is not shipped (C0.3's rule), and the restore drill must be re-run because
+`scripts/count.mjs` TABLES will change again.
+
+C5.1 notes: the states a pilot is judged on, and the one real accessibility defect the audit found.
+
+- **The contrast audit was computed, not eyeballed** (WCAG relative luminance over the oklch tokens).
+  Every pill passes on its own soft background — ok 4.70, warn 6.76, danger 4.57, info 5.78, accent
+  12.36 — but **`--df-ink-4` failed at 2.88:1** and it colours *text*: every empty state, the search
+  placeholder, the palette's kind label. Darkened 68% → **55%** (4.86:1 on the page background,
+  5.06 on a panel), which keeps it below `--df-ink-3` in the hierarchy while making it legible.
+- **`ErrorBoundary`** wraps the `Outlet` in both layouts, keyed on the path — a failed screen leaves
+  the navigation usable and re-mounts on retry, which is enough for the render errors that actually
+  happen because the data is still in the query cache. **The error text is never shown**: it can
+  carry a client's name or a filename, and this can be on screen while someone else is looking.
+- **`ConnectionBanner`** on React Query's `onlineManager`. The one state a document portal must never
+  fake: a client on a train who taps Upload and sees nothing happen will assume it worked. It says
+  what will happen — queries resume on their own, an upload in flight has to be started again — and
+  says "back online" briefly rather than leaving a bar behind.
+- **Skeletons instead of the word "Loading…"** on every list screen (`SkeletonRows`, `SkeletonTiles`):
+  the page does not jump when the answer arrives, and a slow connection looks slow rather than
+  broken. **`LoadError`** is the other half — a read that did not come back is not a crash, so the
+  rest of the screen stays and the only thing on offer is to ask again.
+- **One `:focus-visible` ring** on the accent token, 2 px with a 2 px offset, covering buttons, rows,
+  inputs, nav items and Radix's portalled content (it carries `df-root`). `:focus-visible` rather
+  than `:focus`, so a mouse click leaves no ring but Tab always does; a focused row is raised so it
+  cannot hide behind the next one.
+- **`prefers-reduced-motion`** turns the skeleton shimmer into a flat block and stops every
+  transition. Nothing in this app conveys meaning by moving.
+- **The notifications bell is keyboard-operable**: Escape closes it and hands focus back to the
+  button, items are `menuitem`s that answer Enter, and the button carries `aria-expanded` /
+  `aria-haspopup`. Dialogs were already Radix, so focus trapping and Escape came free.
+- **Release check ticked:** the production bundle contains no dev credentials (`password123`,
+  `client123` and both demo addresses are absent from `dist/` — Vite eliminates the
+  `import.meta.env.DEV` branch) and no Google Fonts reference.
+
+Frontend-only: no server file changed. Gate: root `npm run typecheck` clean, `npm run lint` 0 errors
+/ 9 warnings, `npm run build` OK, `npm test` 30 passed. Server unchanged (665).
 
 C4.3 notes: the app now tells people things, and chases a deadline without becoming noise.
 
@@ -1206,7 +1241,9 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 - [ ] Only 80/443 answer from another LAN machine (`Test-NetConnection`); API, DB and clamd
       refuse non-loopback (manual).
 - [ ] Keyboard-only walkthrough of both portals; contrast audit; all gates clean.
-- [ ] The production bundle contains no dev credentials or Google Fonts references.
+- [x] The production bundle contains no dev credentials or Google Fonts references. **Verified C5.1**
+      (2026-09-07): `password123`, `client123` and both demo addresses are absent from `dist/`, and
+      so are `googleapis` / `gstatic` / `lovable`. Re-run at C5.4 on the release build.
 
 ## Prerequisites and user-only actions
 

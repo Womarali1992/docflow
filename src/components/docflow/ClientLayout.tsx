@@ -3,6 +3,8 @@ import { Outlet, useLocation } from 'react-router-dom';
 import ClientSidebar from './ClientSidebar';
 import ClientTopbar from './ClientTopbar';
 import TweaksBar from './TweaksBar';
+import ErrorBoundary from './ErrorBoundary';
+import ConnectionBanner from './ConnectionBanner';
 import './styles.css';
 
 const ClientLayout: React.FC = () => {
@@ -29,7 +31,10 @@ const ClientLayout: React.FC = () => {
         <div className="df-drawer-backdrop" onClick={() => setDrawerOpen(false)} />
         <main className="df-main">
           <ClientTopbar onMenuClick={() => setDrawerOpen(true)} />
-          <Outlet />
+          <ConnectionBanner />
+          <ErrorBoundary key={location.pathname} where="your portal">
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
       <TweaksBar theme={theme} setTheme={setTheme} density={density} setDensity={setDensity} />

@@ -8,6 +8,7 @@ import MessagesPanel from '@/components/docflow/MessagesPanel';
 import ClientAccess from '@/components/docflow/ClientAccess';
 import NewEngagementDialog from '@/components/docflow/NewEngagementDialog';
 import EngagementProgress from '@/components/docflow/EngagementProgress';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
  * One client's page: their engagements, what each is waiting on, the thread,
@@ -118,7 +119,7 @@ const Client: React.FC = () => {
             </div>
 
             <div className="df-list">
-              {engagementsPending && <div className="df-empty">Loading engagements…</div>}
+              {engagementsPending && <SkeletonRows rows={3} label="Loading engagements" />}
               {!engagementsPending && engagements.length === 0 && (
                 <div className="df-empty">
                   No engagements yet. “New engagement” starts one and can fill its checklist from a template.

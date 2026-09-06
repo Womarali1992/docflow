@@ -6,6 +6,8 @@ import { ACCESS_LABEL, accessState, type AccessState } from '@/utils/clientAcces
 import { downloadCsv } from '@/utils/csv';
 import { I } from '@/components/docflow/icons';
 import NewClientDialog from '@/components/docflow/NewClientDialog';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
+import LoadError from '@/components/docflow/LoadError';
 
 /**
  * The client directory — the advisor's way into everything else.
@@ -44,7 +46,7 @@ const lacksAccess = (state: AccessState) => state === 'not_invited' || state ===
 
 const Clients: React.FC = () => {
   const navigate = useNavigate();
-  const { data: clients = [], isPending, error } = useClients();
+  const { data: clients = [], isPending, error, refetch } = useClients();
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort>('activity');
@@ -147,8 +149,8 @@ const Clients: React.FC = () => {
         </div>
 
         <div className="df-list">
-          {isPending && <div className="df-empty">Loading clients…</div>}
-          {error && !isPending && <div className="df-empty">Could not load your clients. Check your connection and try again.</div>}
+          {isPending && <SkeletonRows rows={5} label="Loading clients" />}
+          {error && !isPending && <LoadError what="your clients" onRetry={() => refetch()} />}
           {!isPending && !error && clients.length === 0 && (
             <div className="df-empty">No clients yet. “New client” adds one and hands you an invitation link.</div>
           )}

@@ -5,6 +5,7 @@ import { useClientWork } from '@/api/queries/portal';
 import { I } from '@/components/docflow/icons';
 import RequestCard from '@/components/docflow/portal/RequestCard';
 import { clientRequestState } from '@/components/docflow/portal/requestState';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
  * Your next steps.
@@ -73,7 +74,7 @@ const PortalHome: React.FC = () => {
           </div>
         </div>
         <div className="df-section-body df-steps">
-          {work.isPending && <div className="df-empty">Loading…</div>}
+          {work.isPending && <SkeletonRows rows={3} label="Loading your next steps" />}
           {!work.isPending && work.steps.length === 0 && (
             <div className="df-empty">
               {total === 0

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useClients, useSearch } from '@/api/queries';
 import type { RequestStatus } from '@/api/types';
 import { I } from '@/components/docflow/icons';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
  * Search across the firm's file: documents and checklist lines together,
@@ -164,7 +165,7 @@ const DocumentsPage: React.FC = () => {
 
         {asked && (
           <div className="df-list">
-            {isPending && <div className="df-empty">Searching…</div>}
+            {isPending && <SkeletonRows rows={4} label="Searching" />}
             {!isPending && data && data.documents.length === 0 && data.requests.length === 0 && (
               <div className="df-empty">Nothing matches that.{isFetching ? ' Still looking…' : ''}</div>
             )}

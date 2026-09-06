@@ -3,6 +3,8 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import TweaksBar from './TweaksBar';
+import ErrorBoundary from './ErrorBoundary';
+import ConnectionBanner from './ConnectionBanner';
 import './styles.css';
 
 const DocFlowLayout: React.FC = () => {
@@ -30,7 +32,11 @@ const DocFlowLayout: React.FC = () => {
         <div className="df-drawer-backdrop" onClick={() => setDrawerOpen(false)} />
         <main className="df-main">
           <Topbar onMenuClick={() => setDrawerOpen(true)} />
-          <Outlet />
+          <ConnectionBanner />
+          {/* Scoped to the screen: a failed page leaves the nav usable. */}
+          <ErrorBoundary key={location.pathname} where="this screen">
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
       <TweaksBar theme={theme} setTheme={setTheme} density={density} setDensity={setDensity} />

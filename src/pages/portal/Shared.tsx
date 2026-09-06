@@ -2,6 +2,7 @@ import React from 'react';
 import { api } from '@/api/client';
 import { useClientWork } from '@/api/queries/portal';
 import { I } from '@/components/docflow/icons';
+import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
  * What the accountant has shared back: the return, the letter, the summary.
@@ -29,7 +30,7 @@ const PortalShared: React.FC = () => {
 
       <div className="df-section">
         <div className="df-list">
-          {work.isPending && <div className="df-empty">Loading…</div>}
+          {work.isPending && <SkeletonRows rows={3} label="Loading shared documents" />}
           {!work.isPending && work.shared.length === 0 && (
             <div className="df-empty">Nothing yet. Finished documents appear here as soon as your accountant shares them.</div>
           )}
