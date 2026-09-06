@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -16,6 +16,7 @@ import { hashPassword, isRefusedDemoPassword, passwordSchema, verifyPassword } f
 import { completePasswordReset, createPasswordReset, findPasswordReset, resetLink, setPassword } from '../auth/resets.js';
 import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { clientMe, openSession, providerMe, type AuthState, type Me } from '../auth/signin.js';
+import { audit, hashedEmail, ipOf } from '../db/audit.js';
 import { looksLikeToken, tokenState } from '../auth/tokens.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
 
@@ -36,6 +37,37 @@ const DEMO_REFUSED = { error: 'This demo password is not allowed here. Ask your 
  * state is revealed, so a deactivated or demo-password account only learns its
  * status with the right password in hand.
  */
+/**
+ * One refusal path for every way a sign-in can fail.
+ *
+ * The answer to the caller is unchanged and deliberately identical — a login
+ * form that distinguishes "no such account" from "wrong password" is an account
+ * enumerator. The *audit row* records which it was, because the person reading
+ * the log later is the firm, and "someone tried an address we have never heard
+ * of, forty times" is a different incident from "someone is guessing Sarah's
+ * password". The email is hashed: this log must not become a mailing list.
+ */
+async function refuseLogin(
+  req: Request,
+  res: Response,
+  email: string,
+  kind: 'provider' | 'client',
+  reason: string,
+  targetId: string | null = null,
+  body: unknown = INVALID
+) {
+  await audit({
+    action: 'auth.login_failed',
+    targetType: kind,
+    targetId,
+    actorKind: null,
+    actorId: null,
+    ip: ipOf(req),
+    meta: { reason, emailHash: hashedEmail(email), kind },
+  });
+  return res.status(401).json(body);
+}
+
 router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -45,26 +77,35 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
 
   if (kind === 'provider') {
     const [provider] = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
-    if (!provider) return res.status(401).json(INVALID);
+    if (!provider) return await refuseLogin(req, res, email, kind, 'no_such_account');
     const check = await verifyPassword(password, provider.passwordHash);
-    if (!check.ok) return res.status(401).json(INVALID);
-    if (isRefusedDemoPassword(password)) return res.status(401).json(DEMO_REFUSED);
-    if (provider.deactivatedAt) return res.status(401).json(DEACTIVATED);
+    if (!check.ok) return await refuseLogin(req, res, email, kind, 'wrong_password', provider.id);
+    if (isRefusedDemoPassword(password)) return await refuseLogin(req, res, email, kind, 'demo_password', provider.id, DEMO_REFUSED);
+    if (provider.deactivatedAt) return await refuseLogin(req, res, email, kind, 'deactivated', provider.id, DEACTIVATED);
     if (check.needsRehash) {
       await db.update(schema.providers).set({ passwordHash: await hashPassword(password) }).where(eq(schema.providers.id, provider.id));
     }
 
     const stage = await openSession(req, res, 'provider', provider.id);
+    await audit({
+      action: 'auth.login',
+      targetType: 'provider',
+      targetId: provider.id,
+      actorKind: 'provider',
+      actorId: provider.id,
+      ip: ipOf(req),
+      meta: { stage },
+    });
     const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
     const state: AuthState = { stage, me };
     return res.json(state);
   } else {
     const [client] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
-    if (!client) return res.status(401).json(INVALID);
+    if (!client) return await refuseLogin(req, res, email, kind, 'no_such_account');
     const check = await verifyPassword(password, client.passwordHash);
-    if (!check.ok) return res.status(401).json(INVALID);
-    if (isRefusedDemoPassword(password)) return res.status(401).json(DEMO_REFUSED);
-    if (client.deactivatedAt) return res.status(401).json(DEACTIVATED);
+    if (!check.ok) return await refuseLogin(req, res, email, kind, 'wrong_password', client.id);
+    if (isRefusedDemoPassword(password)) return await refuseLogin(req, res, email, kind, 'demo_password', client.id, DEMO_REFUSED);
+    if (client.deactivatedAt) return await refuseLogin(req, res, email, kind, 'deactivated', client.id, DEACTIVATED);
     if (check.needsRehash) {
       await db.update(schema.clients).set({ passwordHash: await hashPassword(password) }).where(eq(schema.clients.id, client.id));
     }
@@ -126,7 +167,17 @@ router.post('/logout', async (req, res) => {
   const token = readSessionToken(req);
   if (token) {
     const session = await findSessionByToken(token);
-    if (session) await revokeSession(session.id);
+    if (session) {
+      await revokeSession(session.id);
+      await audit({
+        action: 'auth.logout',
+        targetType: session.userKind,
+        targetId: session.userId,
+        actorKind: session.userKind,
+        actorId: session.userId,
+        ip: ipOf(req),
+      });
+    }
   }
   clearSessionCookie(res);
   res.json({ ok: true });
@@ -136,6 +187,15 @@ router.post('/logout', async (req, res) => {
 router.post('/logout-all', authenticate, async (req, res) => {
   const auth = req.auth!;
   const revoked = await revokeAllSessions(auth.kind, auth.sub);
+  await audit({
+    action: 'session.revoked',
+    targetType: auth.kind,
+    targetId: auth.sub,
+    actorKind: auth.kind,
+    actorId: auth.sub,
+    ip: ipOf(req),
+    meta: { revoked, reason: 'signed out everywhere' },
+  });
   clearSessionCookie(res);
   res.json({ ok: true, revoked });
 });
@@ -180,6 +240,15 @@ router.post('/password', authenticate, async (req, res) => {
 
   await setPassword(auth.kind, auth.sub, newPassword);
   const revoked = await revokeAllSessions(auth.kind, auth.sub, { exceptId: req.session!.id });
+  await audit({
+    action: 'auth.password_changed',
+    targetType: auth.kind,
+    targetId: auth.sub,
+    actorKind: auth.kind,
+    actorId: auth.sub,
+    ip: ipOf(req),
+    meta: { otherSessionsRevoked: revoked },
+  });
   res.json({ ok: true, revoked });
 });
 
@@ -243,6 +312,16 @@ router.post('/password-reset/confirm', lookupLimiter, async (req, res) => {
   if (isRefusedDemoPassword(password)) return res.status(400).json(DEMO_REFUSED);
 
   await completePasswordReset(reset, password);
+  // The actor is whoever held the link; the account is what the firm needs to see.
+  await audit({
+    action: 'auth.password_reset',
+    targetType: reset.userKind,
+    targetId: reset.userId,
+    actorKind: reset.userKind,
+    actorId: reset.userId,
+    ip: ipOf(req),
+    meta: { viaLink: true },
+  });
   res.json({ ok: true });
 });
 

@@ -1,18 +1,25 @@
 <#
 .SYNOPSIS
-    DocFlow backup, v1 (legacy schema): pg_dump + copy of server\uploads + manifest + prune.
+    DocFlow backup, v2: pg_dump + DATA_ROOT files + legacy uploads + manifest + backup_runs + prune.
 
 .DESCRIPTION
     Writes one self-contained backup set per run under <Dest>\<yyyy-MM-dd>:
         db.dump          pg_dump custom-format archive of the DATABASE_URL database
-        uploads\         verified copy of server\uploads (v1: files are mutable, so a full copy per set)
+        files\           copy of DATA_ROOT\files - every document version's bytes (immutable, so /XO)
+        uploads\         copy of server\uploads - the legacy tree, until C5.4 removes it
         config\          server.env (contains secrets - Dest must be an encrypted volume) and the migrations journal
-        manifest.json    sha256 of the dump and every file, row counts, versions
-    Then removes sets older than -Keep days. Order is dump -> files -> manifest so the manifest
-    describes exactly what is on disk. Never writes inside the repository.
+        manifest.json    sha256 of the dump and every file, row counts, written by npm run backup:manifest
+    Then records the run in backup_runs (npm run backup:record) and removes sets older than -Keep days.
 
-    Reads DATABASE_URL from server\.env. Needs node on PATH and the PostgreSQL client tools
-    ($env:PG_BIN, or the newest install under Program Files).
+    Order is dump -> files -> manifest, so the manifest only ever describes a complete set, and the
+    manifest is what makes the set checkable: it fails the run if a file the database says is
+    servable is missing from the copy. Never writes inside the repository.
+
+    Since C2.3 the bytes live under DATA_ROOT, not in server\uploads. Both are copied while the
+    legacy tree exists; the manifest verifies both against the database.
+
+    Reads DATABASE_URL and DATA_ROOT from server\.env. Needs node on PATH and the PostgreSQL client
+    tools ($env:PG_BIN, or the newest install under Program Files).
 
 .PARAMETER Dest
     Backup root. Default: $env:DOCFLOW_BACKUP_DEST, else %USERPROFILE%\docflow-backups.
@@ -57,7 +64,15 @@ $dotenv = Get-DotEnv $envFile
 if (-not $dotenv.ContainsKey('DATABASE_URL')) { throw "DATABASE_URL missing from $envFile" }
 $conn = ConvertFrom-DatabaseUrl $dotenv['DATABASE_URL']
 
-Write-Log "DocFlow backup v1 -> $destFull"
+# Where document bytes actually live since C2.3. Dev defaults to server\.data.
+if ($dotenv.ContainsKey('DATA_ROOT') -and $dotenv['DATA_ROOT']) {
+    $dataRoot = [System.IO.Path]::GetFullPath((Join-Path $serverDir $dotenv['DATA_ROOT']))
+} else {
+    $dataRoot = Join-Path $serverDir '.data'
+}
+$filesSrc = Join-Path $dataRoot 'files'
+
+Write-Log "DocFlow backup v2 -> $destFull"
 Write-Log "Database '$($conn.Database)' on $($conn.Host):$($conn.Port) as $($conn.User); $pgDumpVersion"
 
 New-Item -ItemType Directory -Force -Path $destFull | Out-Null
@@ -85,27 +100,30 @@ try {
     $dumpSha = Get-Sha256 $dumpPath
     Write-Log "  dump $(Format-Bytes $dumpBytes), sha256 $($dumpSha.Substring(0, 12))..."
 
-    # 3. Uploaded files, verified after the copy.
-    $uploads = @()
-    $uploadBytes = 0
-    $uploadsDest = Join-Path $set 'uploads'
-    if (Test-Path $uploadsSrc) {
-        Write-Log "Copying uploads from $uploadsSrc"
-        & robocopy $uploadsSrc $uploadsDest /E /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
-        if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE" }
-        if (-not (Test-Path $uploadsDest)) { New-Item -ItemType Directory -Path $uploadsDest | Out-Null }
-        foreach ($f in @(Get-ChildItem $uploadsDest -File -Recurse)) {
-            $rel = $f.FullName.Substring($uploadsDest.Length).TrimStart('\').Replace('\', '/')
-            $sha = Get-Sha256 $f.FullName
-            $srcSha = Get-Sha256 (Join-Path $uploadsSrc $rel)
-            if ($srcSha -ne $sha) { throw "Copy verification failed for $rel (source changed during the backup?)" }
-            $uploads += [pscustomobject]@{ path = $rel; bytes = $f.Length; sha256 = $sha }
-            $uploadBytes += $f.Length
-        }
-        Write-Log "  $($uploads.Count) file(s), $(Format-Bytes $uploadBytes), all hashes match the source"
+    # 3. Document bytes. Two trees while the legacy one still exists.
+    #    Versions are immutable, so /XO copies only what is new - a season's
+    #    worth of scans is not re-copied every night.
+    $filesDest = Join-Path $set 'files'
+    New-Item -ItemType Directory -Path $filesDest -Force | Out-Null
+    if (Test-Path $filesSrc) {
+        Write-Log "Copying document versions from $filesSrc"
+        & robocopy $filesSrc $filesDest /E /XO /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (files)" }
+        $fileCount = @(Get-ChildItem $filesDest -File -Recurse).Count
+        Write-Log "  $fileCount version file(s) copied"
     } else {
-        Write-Log "No uploads directory at $uploadsSrc (nothing to copy)"
-        New-Item -ItemType Directory -Path $uploadsDest | Out-Null
+        Write-Log "No files directory at $filesSrc yet (nothing uploaded since C2.3)"
+    }
+
+    $uploadsDest = Join-Path $set 'uploads'
+    New-Item -ItemType Directory -Path $uploadsDest -Force | Out-Null
+    if (Test-Path $uploadsSrc) {
+        Write-Log "Copying legacy uploads from $uploadsSrc"
+        & robocopy $uploadsSrc $uploadsDest /E /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (uploads)" }
+        Write-Log "  $(@(Get-ChildItem $uploadsDest -File -Recurse).Count) legacy file(s) copied"
+    } else {
+        Write-Log "No legacy uploads directory at $uploadsSrc"
     }
 
     # 4. Configuration.
@@ -119,24 +137,18 @@ try {
         $config += 'config/migrations-journal.json'
     }
 
-    # 5. Manifest (written last, so it only ever describes a complete set).
-    $manifest = [ordered]@{
-        version       = 1
-        createdAt     = $startedAt.ToUniversalTime().ToString('o')
-        host          = $env:COMPUTERNAME
-        database      = $conn.Database
-        pgDumpVersion = $pgDumpVersion
-        dump          = [ordered]@{ file = 'db.dump'; bytes = $dumpBytes; sha256 = $dumpSha }
-        counts        = $counts
-        uploadCount   = $uploads.Count
-        uploadBytes   = $uploadBytes
-        uploads       = @($uploads)
-        config        = @($config)
+    # 5. Manifest, written last so it only ever describes a complete set. Node
+    #    builds it because it has to ask the database which files should exist
+    #    and hash each one - and it FAILS the backup if a servable file is not
+    #    in the copy, which is the whole point of having a manifest.
+    Write-Log 'Building the manifest (npm run backup:manifest)'
+    $manifestResult = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\manifest.mjs') `
+        -Arguments @('--set', $set, '--started', $startedAt.ToUniversalTime().ToString('o'), '--pg-dump-version', $pgDumpVersion) -IgnoreExitCode
+    $manifestPath = Join-Path $set 'manifest.json'
+    if (-not $manifestResult.ok) {
+        throw "Manifest verification failed: $($manifestResult.fatal.Count) servable file(s) missing or altered - this set could NOT restore the system"
     }
-    # UTF-8 without BOM: Set-Content -Encoding UTF8 adds a BOM on PowerShell 5.1, which JSON parsers reject.
-    $json = $manifest | ConvertTo-Json -Depth 8
-    [System.IO.File]::WriteAllText((Join-Path $set 'manifest.json'), $json, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Log "Manifest written"
+    Write-Log "  $($manifestResult.fileCount) version file(s), $(Format-Bytes $manifestResult.fileBytes), all hashes recorded"
 
     # 6. Prune old sets (by the date in the folder name).
     $cutoff = (Get-Date).Date.AddDays(-$Keep)
@@ -151,14 +163,33 @@ try {
         }
     }
 
+    # 7. Record the run, so /settings/system can answer "did the backup work?"
+    #    without anyone opening a drive. Bookkeeping never fails the backup.
+    try {
+        Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\record-backup.mjs') `
+            -Arguments @('--started', $startedAt.ToUniversalTime().ToString('o'), '--ok', '--manifest', $manifestPath) | Out-Null
+        Write-Log 'Recorded in backup_runs'
+    } catch {
+        Write-Log "WARNING: could not record the run in backup_runs: $($_.Exception.Message)"
+    }
+
     $elapsed = (Get-Date) - $startedAt
-    Write-Log ("BACKUP OK  set={0}  dump={1}  uploads={2} ({3})  rows: {4}  elapsed={5:N1}s" -f `
-        $set, (Format-Bytes $dumpBytes), $uploads.Count, (Format-Bytes $uploadBytes),
+    Write-Log ("BACKUP OK  set={0}  dump={1}  files={2} ({3})  rows: {4}  elapsed={5:N1}s" -f `
+        $set, (Format-Bytes $dumpBytes), $manifestResult.fileCount, (Format-Bytes $manifestResult.fileBytes),
         (($counts.tables.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' '),
         $elapsed.TotalSeconds)
     exit 0
 } catch {
-    Write-Log "BACKUP FAILED: $($_.Exception.Message)"
+    $message = $_.Exception.Message
+    Write-Log "BACKUP FAILED: $message"
+    # A failure is recorded too: a backup that silently stopped happening is the
+    # failure this table exists to make visible.
+    try {
+        Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\record-backup.mjs') `
+            -Arguments @('--started', $startedAt.ToUniversalTime().ToString('o'), '--error', $message) | Out-Null
+    } catch {
+        Write-Log 'WARNING: the failure could not be recorded in backup_runs either'
+    }
     if (Test-Path $set) {
         Rename-Item -Path $set -NewName ($stamp + '_FAILED') -ErrorAction SilentlyContinue
     }

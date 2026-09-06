@@ -1,15 +1,19 @@
 <#
 .SYNOPSIS
-    DocFlow restore drill, v1: rebuild a backup set into a scratch database and verify it.
+    DocFlow restore drill, v2: rebuild a backup set into a scratch database and verify it.
 
 .DESCRIPTION
     1. Verifies the backup set against its manifest (sha256 of the dump and every file).
     2. Drops and recreates the target database (name must start with docflow_restore - this
        script never restores over the live database; see docs\PILOT-RUNBOOK.md for promotion).
-    3. pg_restore of db.dump, then mirrors uploads\ into -UploadsTo.
-    4. Compares row counts with the manifest and runs scripts\integrity.mjs (every document's
-       file exists with the manifest's sha256 and the database's size).
+    3. pg_restore of db.dump, then mirrors the set's files\ into -RestoreTo (the restored
+       DATA_ROOT) and uploads\ into -RestoreTo\uploads (the legacy tree).
+    4. Compares row counts with the manifest and runs scripts\integrity.mjs, which checks every
+       document version's bytes against the database's sha256 and the manifest's.
     Prints PASS or FAIL and exits 0 / 1.
+
+    A drill is the only thing that turns a backup into a restore. Run it monthly, and after any
+    change to what is backed up.
 
     Needs node on PATH, the PostgreSQL client tools, and - because the app role usually lacks
     CREATEDB - PG_ADMIN_URL (or -AdminUrl) pointing at a superuser connection.
@@ -18,8 +22,9 @@
     A backup set folder (…\docflow-backups\2026-09-05).
 .PARAMETER Target
     Scratch database name (default docflow_restore).
-.PARAMETER UploadsTo
-    Folder that receives the restored files (default %USERPROFILE%\docflow-restore\uploads). Mirrored.
+.PARAMETER RestoreTo
+    Folder that receives the restored document tree (default %USERPROFILE%\docflow-restore). Mirrored:
+    <RestoreTo>\files for versions, <RestoreTo>\uploads for the legacy tree.
 .PARAMETER PgBin
     Folder containing pg_restore.exe (default: $env:PG_BIN or auto-detected).
 .PARAMETER AdminUrl
@@ -27,13 +32,13 @@
 
 .EXAMPLE
     $env:PG_ADMIN_URL = 'postgres://postgres@localhost:5432/postgres'
-    powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\restore.ps1 -From C:\Users\me\docflow-backups\2026-09-05
+    powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\restore.ps1 -From C:\Users\me\docflow-backups\2026-09-07
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$From,
     [string]$Target = 'docflow_restore',
-    [string]$UploadsTo = '',
+    [string]$RestoreTo = '',
     [string]$PgBin = '',
     [string]$AdminUrl = ''
 )
@@ -42,7 +47,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-if (-not $UploadsTo) { $UploadsTo = Join-Path $env:USERPROFILE 'docflow-restore\uploads' }
+if (-not $RestoreTo) { $RestoreTo = Join-Path $env:USERPROFILE 'docflow-restore' }
 if (-not $PgBin) { $PgBin = $env:PG_BIN }
 if (-not $AdminUrl) { $AdminUrl = $env:PG_ADMIN_URL }
 if ($Target -notmatch '^docflow_restore[a-z0-9_]*$') {
@@ -51,9 +56,13 @@ if ($Target -notmatch '^docflow_restore[a-z0-9_]*$') {
 
 $repo = Get-RepoRoot
 $serverDir = Join-Path $repo 'server'
-$uploadsFull = [System.IO.Path]::GetFullPath($UploadsTo)
-if ($uploadsFull.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "UploadsTo must be outside the repository (it is mirrored, and server\uploads is the live store)"
+# The restored DATA_ROOT. Storage keys start with "files/", so this is the root
+# they hang off - exactly as DATA_ROOT is on the live system.
+$restoreRoot = [System.IO.Path]::GetFullPath($RestoreTo)
+$filesFull = Join-Path $restoreRoot 'files'
+$uploadsFull = Join-Path $restoreRoot 'uploads'
+if ($restoreRoot.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "RestoreTo must be outside the repository (it is mirrored, and the live document store lives there)"
 }
 
 $startedAt = Get-Date
@@ -67,7 +76,9 @@ $failures = @()
 
 # 1. Verify the backup set.
 Write-Log "Verifying backup set $set"
-Write-Log "  created $($manifest.createdAt) on $($manifest.host), database '$($manifest.database)', $($manifest.pgDumpVersion)"
+$writtenBy = 'pg_dump version not recorded'
+if ($manifest.PSObject.Properties.Name -contains 'pgDumpVersion' -and $manifest.pgDumpVersion) { $writtenBy = $manifest.pgDumpVersion }
+Write-Log "  created $($manifest.createdAt) on $($manifest.host), database '$($manifest.database)', $writtenBy"
 $dumpPath = Join-Path $set $manifest.dump.file
 if (-not (Test-Path $dumpPath)) { throw "Dump file missing: $dumpPath" }
 if ((Get-Sha256 $dumpPath) -ne $manifest.dump.sha256) { throw 'db.dump sha256 does not match the manifest - the backup set is damaged' }
@@ -77,8 +88,17 @@ foreach ($u in $manifestUploads) {
     if (-not (Test-Path $p)) { Write-Log "  MISSING upload $($u.path)"; $bad++; continue }
     if ((Get-Sha256 $p) -ne $u.sha256) { Write-Log "  DAMAGED upload $($u.path)"; $bad++ }
 }
-if ($bad -gt 0) { throw "$bad upload file(s) in the backup set are missing or damaged" }
-Write-Log "  dump OK ($(Format-Bytes $manifest.dump.bytes)); $($manifestUploads.Count) upload file(s) OK"
+# Manifest v2 also lists every document version. A v1 set has no files block;
+# it restores as before, which is what makes an old backup still usable.
+$manifestFiles = @()
+if ($manifest.PSObject.Properties.Name -contains 'files' -and $manifest.files) { $manifestFiles = @($manifest.files.entries) }
+foreach ($f in $manifestFiles) {
+    $p = Join-Path $set ($f.path -replace '/', '\')
+    if (-not (Test-Path $p)) { Write-Log "  MISSING version file $($f.path)"; $bad++; continue }
+    if ((Get-Sha256 $p) -ne $f.sha256) { Write-Log "  DAMAGED version file $($f.path)"; $bad++ }
+}
+if ($bad -gt 0) { throw "$bad file(s) in the backup set are missing or damaged" }
+Write-Log "  dump OK ($(Format-Bytes $manifest.dump.bytes)); $($manifestFiles.Count) version file(s) and $($manifestUploads.Count) legacy file(s) OK"
 
 # 2. Recreate the target database.
 $dotenv = Get-DotEnv (Join-Path $serverDir '.env')
@@ -102,11 +122,18 @@ try {
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
 }
 
-# 4. Files.
-Write-Log "Mirroring uploads to $uploadsFull"
+# 4. Files. Two trees: versions under <RestoreTo>\files (storage keys already
+#    start with "files/", so RestoreTo is the DATA_ROOT of the restored system)
+#    and the legacy uploads beside it.
+Write-Log "Mirroring document versions to $filesFull"
+New-Item -ItemType Directory -Force -Path $filesFull | Out-Null
+& robocopy (Join-Path $set 'files') $filesFull /MIR /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (files)" }
+
+Write-Log "Mirroring legacy uploads to $uploadsFull"
 New-Item -ItemType Directory -Force -Path $uploadsFull | Out-Null
 & robocopy (Join-Path $set 'uploads') $uploadsFull /MIR /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE" }
+if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (uploads)" }
 
 # 5. Row counts vs manifest.
 Write-Log 'Comparing row counts with the manifest'
@@ -125,17 +152,19 @@ if ($restored.migrations -ne $manifest.counts.migrations) { $failures += 'migrat
 
 # 6. File integrity against the restored database and the manifest.
 Write-Log 'Checking every stored file against the restored database and the manifest'
-$integrity = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\integrity.mjs') -Arguments @('--url', $restoreUrl, '--uploads', $uploadsFull, '--manifest', $manifestPath) -IgnoreExitCode
-$rows += [pscustomobject]@{ item = 'files verified'; manifest = $manifestUploads.Count; restored = $integrity.checked; ok = [bool]$integrity.ok }
+$integrity = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\integrity.mjs') `
+    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--uploads', $uploadsFull, '--manifest', $manifestPath) -IgnoreExitCode
+$rows += [pscustomobject]@{ item = 'versions verified'; manifest = $manifestFiles.Count; restored = $integrity.checkedVersions; ok = [bool]$integrity.ok }
+$rows += [pscustomobject]@{ item = 'legacy files verified'; manifest = $manifestUploads.Count; restored = $integrity.checkedUploads; ok = [bool]$integrity.ok }
 if (-not $integrity.ok) {
-    foreach ($m in @($integrity.missing)) { $failures += "missing file $($m.path) (document $($m.id))" }
+    foreach ($m in @($integrity.missing)) { $failures += "missing $($m.kind) file $($m.path) ($($m.id))" }
     foreach ($m in @($integrity.mismatched)) { $failures += "$($m.path): $($m.reason)" }
 }
 
 $rows | Format-Table -AutoSize | Out-String -Width 120 | Write-Host
 $elapsed = (Get-Date) - $startedAt
 if ($failures.Count -eq 0) {
-    Write-Log ("RESTORE DRILL PASS  database={0}  files={1}  elapsed={2:N1}s" -f $Target, $uploadsFull, $elapsed.TotalSeconds)
+    Write-Log ("RESTORE DRILL PASS  database={0}  documents={1}  elapsed={2:N1}s" -f $Target, $restoreRoot, $elapsed.TotalSeconds)
     exit 0
 }
 foreach ($f in $failures) { Write-Log "  FAIL: $f" }

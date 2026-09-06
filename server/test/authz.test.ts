@@ -727,6 +727,12 @@ const cases: Case[] = [
       // Counts and configuration only: never the connection string behind them.
       expect(Object.keys(res.body.mail).sort()).toEqual(['configured', 'note']);
       expect(JSON.stringify(res.body)).not.toMatch(/smtps?:\/\//i);
+      // v2 (C5.2): the panel's five questions, and no client or document in sight.
+      expect(res.body).toHaveProperty('storage.path');
+      expect(res.body).toHaveProperty('backups.lastGoodAt');
+      expect(res.body).toHaveProperty('health.activeSessions');
+      expect(res.body).toHaveProperty('scanner.signaturesAt');
+      expect(res.body.health.activeSessions).toBeGreaterThan(0);
     },
   },
 ];

@@ -21,6 +21,7 @@ import { db, pool, schema } from './db/client.js';
 import { hashPassword, isRefusedDemoPassword, passwordSchema } from './auth/passwords.js';
 import { createPasswordReset, resetLink } from './auth/resets.js';
 import { listLiveSessions, revokeAllSessions } from './auth/sessions.js';
+import { audit } from './db/audit.js';
 
 type Kind = 'provider' | 'client';
 type Flags = Record<string, string | true>;
@@ -115,7 +116,15 @@ async function findAccount(kind: Kind, email: string): Promise<Account> {
   return { kind, id: c.id, name: c.name, email: c.email, providerId: c.providerId, deactivatedAt: c.deactivatedAt };
 }
 
-/** The audit bridge until C2.1: an activity row the advisor can see. */
+/**
+ * Two records, on purpose (C5.2).
+ *
+ * The **activity** row is what the advisor sees on the client's page — it is
+ * the human story, in the words they read. The **audit** row is the firm's
+ * record of a privileged action taken outside the app entirely, by whoever had
+ * a shell on the machine; that one is append-only and cannot be edited, which
+ * is exactly what a "reset someone's two-step verification" line needs to be.
+ */
 async function record(account: Pick<Account, 'kind' | 'id' | 'providerId'>, description: string) {
   await db.insert(schema.activities).values({
     providerId: account.providerId,
@@ -126,6 +135,15 @@ async function record(account: Pick<Account, 'kind' | 'id' | 'providerId'>, desc
     actorId: null,
     actorName: 'Administrator (CLI)',
     targetId: account.id,
+  });
+  await audit({
+    action: 'admin.action',
+    targetType: account.kind,
+    targetId: account.id,
+    clientId: account.kind === 'client' ? account.id : null,
+    actorKind: 'admin',
+    actorId: null,
+    meta: { description },
   });
 }
 

@@ -32,15 +32,67 @@
 | C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | SHIPPED 2026-09-07 |
 | C4.3 | `feat(notify): server unread + notifications, reminder scheduler, generic email notices` | SHIPPED 2026-09-07 |
 | C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | SHIPPED 2026-09-07 |
-| C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | NOT STARTED |
+| C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | SHIPPED 2026-09-07 |
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C5.2** — audit coverage, the `/settings/system` panel on `GET /ops/status` v2, `backup.ps1`
-v2 (files + manifest + `backup:record` into `backup_runs`), `restore.ps1` v2 and `npm run integrity`,
-with the runbook sections written. **It has to be run for real on this box** — a script that has
-never run is not shipped (C0.3's rule), and the restore drill must be re-run because
-`scripts/count.mjs` TABLES will change again.
+**NEXT = C5.3** — `ops/windows/`: `Caddyfile.example`, the three WinSW service definitions
+(`docflow-api.xml`, `docflow-worker.xml`, `caddy.xml`), `install.ps1` / `update.ps1` / `verify.ps1` /
+`firewall.ps1`, the Postgres and ClamAV configuration snippets, the production block in
+`server/.env.example`, and the rest of `docs/PILOT-RUNBOOK.md`. **These are authored here and
+executed on the firm PC** — this box is Windows 11 *Home*, so BitLocker, WinSW services, ClamAV and
+Caddy cannot be exercised locally. Everything that *can* be checked here (syntax, `verify.ps1`
+against a running dev server) must be.
+
+C5.2 notes: the operational half — what a backup is worth, and what the log knows.
+
+- **`manifest.mjs` (v2) replaces the manifest PowerShell used to build inline**, because the check
+  that matters needs the database: it asks which files should exist, hashes each one in the copy,
+  and **fails the backup** if a file the system says it can serve is missing or hashes differently.
+  A set with a manifest is a verified set; a set without one is a folder. It also records which
+  `pg_dump` wrote the dump — restoring a 17 dump with a 16 `pg_restore` fails, and the drill should
+  be able to say so rather than guess.
+- **`integrity.mjs` (v2) checks both trees**: `document_versions.storage_key` under `DATA_ROOT` (the
+  keys already start with `files/`) and the legacy `documents.storage_path` under `server/uploads`.
+  Only *servable* versions — clean and published — are fatal; a quarantined version's bytes were
+  deleted on purpose. **Gotcha:** the storage root is `DATA_ROOT` itself, not `DATA_ROOT/files`.
+- **`record-backup.mjs`** writes `backup_runs` **and** an append-only `backup.run` audit row, on
+  failure as well as success — a backup that silently stopped happening is the failure this table
+  exists to make visible. `backup.ps1` records the failure in its own catch block.
+- **`backup.ps1` v2** copies `DATA_ROOT\files` with `robocopy /XO` (versions are immutable, so a
+  season of scans is not re-copied nightly) beside the legacy tree, then manifest, then prune, then
+  record. **`restore.ps1` v2** mirrors both trees into `-RestoreTo` (which *is* the restored
+  `DATA_ROOT`), verifies the v2 manifest's file list, and still tolerates a v1 set — an old backup
+  stays usable.
+- **`GET /ops/status` v2 and `/settings/system`**: last good backup, scanner reachability *and
+  signature age* (a new clamd `VERSION` call — "the scanner is up" is worth much less than "its
+  signatures are from this week"), free space on `DATA_ROOT`, failed jobs, versions stuck
+  unpublished over an hour, live sessions. Ordered by what cannot be recovered from later, and
+  every row that is not fine says what to do in a sentence. **No client or document is named**, so
+  the panel can be left open on a screen in a shared office.
+- **Audit coverage completed** per the Security design: `auth.login`, `auth.login_failed` (with the
+  *reason* — the caller still gets one indistinguishable 401, but the log knows "an address we have
+  never heard of, forty times" from "someone is guessing Sarah's password"), `auth.logout`,
+  `session.revoked`, `auth.password_changed`, `auth.password_reset`, `auth.mfa_enrolled`,
+  `invitation.created`, `invitation.accepted`, `client.created` / `deactivated` / `reactivated`,
+  `admin.action` (the CLI now writes an append-only row beside its activity row, because a shell
+  action needs a record nothing in the app can edit) and `backup.run`. **Emails are hashed
+  everywhere; `test/audit.test.ts` asserts no address and no filename ever reaches the log.**
+- **Both scripts were run for real on this box** (C0.3's rule: a script that has never run is not
+  shipped) — see the runbook's new "Nightly backup and the restore drill (v2)" section, which also
+  documents the two-drive offline rotation.
+
+Gate: root `npm run typecheck` clean, `npm run lint` 0 errors / 9 warnings, `npm run build` OK,
+`npm test` 30 passed; server `npm run build` + `typecheck:test` clean, **`ops-scripts` 9 +
+`audit` 6 + `auth` 3 = 18 passed**, and the `GET /api/ops/status` matrix row re-run (6 cases green).
+**The full authz matrix was not re-run** — this box had 542 MB free and it has been OOM-killed twice
+at ~25 minutes; C5.2 adds no route and changes no status, only the ops response body (whose row was
+run). **C5.4's release gate runs the suite whole.** Suite total 680. No migration.
+
+**Real run, 2026-09-07:** backup OK in 4.4 s (dump 59.5 KB, 5 version files + 5 legacy files, all
+hashes recorded, `backup_runs` written, `backup.run` audit row confirmed in the database); restore
+drill **PASS** in 7.2 s — 20 tables matched the manifest, 5 versions and 5 legacy files verified
+against both the restored database and the manifest.
 
 C5.1 notes: the states a pilot is judged on, and the one real accessibility defect the audit found.
 

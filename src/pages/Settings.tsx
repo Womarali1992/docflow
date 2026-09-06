@@ -63,6 +63,28 @@ const Settings: React.FC = () => {
         <div className="df-section">
           <div className="df-section-head">
             <div>
+              <div className="df-section-title">System status</div>
+              <div className="df-section-sub">Backups, virus scanner, disk and background work</div>
+            </div>
+            <div className="df-right">
+              <button className="df-btn df-sm" onClick={() => navigate('/settings/system')}>
+                <I.Shield size={12} /> Open system status
+              </button>
+            </div>
+          </div>
+          <div className="df-section-body">
+            <div className="df-small df-muted">
+              Worth a glance on a Monday: it says when the last backup actually worked, whether the virus scanner is
+              answering, and how much room is left for documents.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isProvider && (
+        <div className="df-section">
+          <div className="df-section-head">
+            <div>
               <div className="df-section-title">Checklists</div>
               <div className="df-section-sub">The lists an engagement is built from</div>
             </div>

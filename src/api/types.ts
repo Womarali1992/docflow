@@ -381,9 +381,15 @@ export interface NotificationList {
   notifications: Notification[];
 }
 
-/** GET /ops/status — advisor only; grows into the C5.2 system panel. */
+/**
+ * GET /ops/status (v2, C5.2) — advisor only.
+ *
+ * Counts and timestamps, never a document or a client name: the system panel
+ * can be left open on a screen in a shared office.
+ */
 export interface OpsStatus {
   time: string;
+  firmTimezone: string;
   jobs: {
     pending: number;
     running: number;
@@ -395,7 +401,30 @@ export interface OpsStatus {
     required: boolean;
     reachable: boolean;
     endpoint: string;
+    /** When the scanner's signature database was built, if it says. */
+    signaturesAt: string | null;
     note: string | null;
+  };
+  storage: {
+    path: string;
+    freeBytes: number | null;
+    totalBytes: number | null;
+    note: string | null;
+  };
+  backups: {
+    lastRunAt: string | null;
+    lastRunOk: boolean | null;
+    lastGoodAt: string | null;
+    lastGoodFiles: number | null;
+    lastGoodDumpBytes: number | null;
+    lastError: string | null;
+    note: string | null;
+  };
+  health: {
+    /** Uploads that stored bytes but never published — the pipeline stalled. */
+    unpublishedVersions: number;
+    quarantinedVersions: number;
+    activeSessions: number;
   };
   mail: {
     configured: boolean;

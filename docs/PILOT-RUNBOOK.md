@@ -96,6 +96,84 @@ the reader tolerates a BOM); the recorded run is the rerun.
   (C1.3) resets their MFA one by one; there is no bulk recovery, so the key is part of the backup.
 - No scheduling yet; C5.3 adds the Task Scheduler job and the offline-drive rotation.
 
+## Nightly backup and the restore drill (v2 — C5.2)
+
+Supersedes the v1 section above. v1 backed up `server\uploads`, which was the whole store when it
+was written; since C2.3 the bytes live under `DATA_ROOT`, and v2 copies both trees while the legacy
+one still exists (C5.4 removes it).
+
+### What a v2 backup set contains
+
+```
+<Dest>\<yyyy-MM-dd>\
+  db.dump          pg_dump -Fc of the whole database
+  files\           every document version's bytes, mirroring DATA_ROOT\files
+  uploads\         the legacy tree (until C5.4)
+  config\          server.env  <-- SECRETS. The destination must be an encrypted volume.
+  manifest.json    sha256 of the dump and of every file, row counts, pg_dump version
+```
+
+**The manifest is what makes the set a backup rather than a folder.** `npm run backup:manifest`
+asks the database which files should exist, hashes each one in the copy, and **fails the run** if a
+file the database says it can serve is missing or hashes differently. A set with a manifest is a
+complete, verified set; a set without one is nothing.
+
+### Run a backup
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\backup.ps1 -Dest E:\docflow-backups
+```
+
+Order is dump -> files -> manifest -> `backup_runs`, and every run is recorded whether it worked or
+not. `/settings/system` reads that table, so **"did the backup run?" is answered in the app**, not by
+looking at a drive.
+
+Versions are immutable, so the files copy is `robocopy /XO` — incremental. A season of scans is not
+re-copied every night; only what is new.
+
+Scheduled task on the firm PC (C5.3 installs it): daily 02:00, as `docflow-svc`, "run whether user is
+logged on or not". Keep 30 days (`-Keep`).
+
+### Restore drill
+
+**A backup nobody has restored is a hypothesis.** Run this monthly, and after any change to what is
+backed up:
+
+```powershell
+$env:PG_ADMIN_URL = 'postgres://postgres@localhost:5432/postgres'
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\windows\restore.ps1 -From E:\docflow-backups\2026-09-07
+```
+
+It refuses any target that is not `docflow_restore*`, so it can never restore over the live
+database. It then compares every table's row count with the manifest and runs `npm run integrity`,
+which checks each version's bytes against **both** the database's sha256 and the manifest's.
+
+### Drill record
+
+| Date | Set | Result | Notes |
+|---|---|---|---|
+| 2026-09-05 | dev box, v1 | PASS | legacy schema, uploads only |
+| 2026-09-07 | `C:\Users\omara\docflow-backups\2026-09-07_020646` (dev box, v2) | **PASS** in 7.2 s | 20 tables matched, 5 document versions + 5 legacy files verified against the database and the manifest; restored to `docflow_restore` and `C:\Users\omara\docflow-restore` |
+
+### Offline copy rotation
+
+Two drives, labelled A and B. A stays connected for the nightly task; B lives somewhere else — a
+different building, a safe, not the same desk.
+
+- **Weekly (say Friday):** run the backup once more with `-Dest <B>`, then disconnect B and swap it
+  with A's off-site position. `-Keep 30` prunes each drive independently, so a drive that has been
+  away for a fortnight keeps everything it had.
+- **Why bother:** ransomware encrypts what is mounted. The only copy it cannot reach is the one that
+  is unplugged. This is also the only protection against "the backup drive died on the same day".
+- **Check when you swap:** open `/settings/system` and confirm the last good backup is from last
+  night. If it is older, the scheduled task has stopped — find out why before touching the drives.
+
+### If a restore is for real, not a drill
+
+Restore into `docflow_restore` first and check it, exactly as the drill does. Only then promote it
+(see "Promoting a restored database" above). Never `pg_restore` over the live database: if the set
+turns out to be damaged, you will have destroyed the only other copy.
+
 ## Accounts (C1.3)
 
 All account administration happens on the server console with `npm run admin -- <command>` from

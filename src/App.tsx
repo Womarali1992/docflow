@@ -13,6 +13,7 @@ import Forgot from "./pages/Forgot";
 import Reset from "./pages/Reset";
 import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
+import SystemStatus from "./pages/SystemStatus";
 import FinancialOverview from "./pages/FinancialOverview";
 import Client from "./pages/Client";
 import Clients from "./pages/Clients";
@@ -47,6 +48,7 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="/work" element={<Work />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/system" element={<SystemStatus />} />
           <Route path="/overview" element={<FinancialOverview />} />
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:clientId" element={<Client />} />

@@ -77,6 +77,41 @@ export async function ping(timeoutMs = 2000): Promise<boolean> {
 }
 
 /**
+ * Asks clamd what it is running. The reply carries the signature database's
+ * number and build date — "the scanner is up" is worth much less than "the
+ * scanner is up and its signatures are from this week".
+ *
+ * Shape: `ClamAV 1.3.1/27245/Fri Sep  5 08:31:02 2026`.
+ */
+export async function version(timeoutMs = 2000): Promise<string | null> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: clamdHost(), port: clamdPort() });
+    let done = false;
+    const finish = (value: string | null) => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => socket.write('zVERSION\0'));
+    socket.on('data', (d) => finish(d.toString('utf8').replace(/\0+$/, '').trim() || null));
+    socket.on('timeout', () => finish(null));
+    socket.on('error', () => finish(null));
+    socket.on('close', () => finish(null));
+  });
+}
+
+/** The signature build date out of a clamd VERSION reply, if it carries one. */
+export function signatureDate(versionReply: string | null): string | null {
+  if (!versionReply) return null;
+  const parts = versionReply.split('/');
+  if (parts.length < 3) return null;
+  const parsed = new Date(parts.slice(2).join('/').trim());
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
  * Streams a file to clamd and waits for its verdict.
  *
  * Never throws: a caller deciding what to do with a client's document should not

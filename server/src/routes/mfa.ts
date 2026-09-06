@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authenticateAnyStage } from '../middleware/auth.js';
+import { auditRequest } from '../db/audit.js';
 import { setSessionStage } from '../auth/sessions.js';
 import {
   beginEnrollment,
@@ -79,6 +80,12 @@ router.post('/enroll/confirm', mfaVerifyLimiter, async (req, res) => {
   if (result !== 'ok') return res.status(401).json(invalidCode);
 
   const recoveryCodes = await completeEnrollment(mfa);
+  await auditRequest(req, {
+    action: 'auth.mfa_enrolled',
+    targetType: req.auth!.kind,
+    targetId: req.auth!.sub,
+    meta: { recoveryCodes: recoveryCodes.length },
+  });
   await setSessionStage(session.id, 'active');
   res.json({ stage: 'active', recoveryCodes });
 });

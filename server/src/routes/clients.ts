@@ -9,6 +9,7 @@ import { hashPassword, passwordSchema } from '../auth/passwords.js';
 import { createPasswordReset, resetLink } from '../auth/resets.js';
 import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { NAME_MAX } from '../security/limits.js';
+import { auditRequest, hashedEmail } from '../db/audit.js';
 
 const router = Router();
 
@@ -122,6 +123,14 @@ router.post('/', requireProvider, async (req, res) => {
     })
     .returning({ id: schema.clients.id });
 
+  await auditRequest(req, {
+    action: 'client.created',
+    targetType: 'client',
+    targetId: created.id,
+    clientId: created.id,
+    // The address is hashed: an audit log is not a place to keep contact details.
+    meta: { emailHash: hashedEmail(email), withPassword: Boolean(passwordHash) },
+  });
   res.status(201).json(await loadClientRow(created.id, 'provider'));
 });
 
@@ -180,6 +189,13 @@ router.post('/:id/invitations', requireProvider, async (req, res) => {
   if (existing.deactivatedAt) return res.status(409).json(DEACTIVATED);
 
   const { token, expiresAt } = await createInvitation(existing.id, req.auth!.sub);
+  await auditRequest(req, {
+    action: 'invitation.created',
+    targetType: 'client',
+    targetId: existing.id,
+    clientId: existing.id,
+    meta: { expiresAt: expiresAt.toISOString() },
+  });
   const link = invitationLink(token);
   const emailQueued = await enqueueEmail({
     template: 'invitation',
@@ -219,8 +235,15 @@ router.post('/:id/deactivate', requireProvider, async (req, res) => {
     const now = new Date();
     await db.update(schema.clients).set({ deactivatedAt: now, updatedAt: now }).where(eq(schema.clients.id, existing.id));
   }
-  await revokeAllSessions('client', existing.id);
+  const revoked = await revokeAllSessions('client', existing.id);
   await dropUnusedInvitations(existing.id);
+  await auditRequest(req, {
+    action: 'client.deactivated',
+    targetType: 'client',
+    targetId: existing.id,
+    clientId: existing.id,
+    meta: { sessionsRevoked: revoked },
+  });
   res.json(await loadClientRow(existing.id, 'provider'));
 });
 
@@ -231,6 +254,12 @@ router.post('/:id/reactivate', requireProvider, async (req, res) => {
   if (existing.deactivatedAt) {
     await db.update(schema.clients).set({ deactivatedAt: null, updatedAt: new Date() }).where(eq(schema.clients.id, existing.id));
   }
+  await auditRequest(req, {
+    action: 'client.reactivated',
+    targetType: 'client',
+    targetId: existing.id,
+    clientId: existing.id,
+  });
   res.json(await loadClientRow(existing.id, 'provider'));
 });
 

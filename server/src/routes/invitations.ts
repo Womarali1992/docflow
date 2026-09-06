@@ -12,6 +12,7 @@ import { acceptInvitation, findInvitation } from '../auth/invitations.js';
 import { isRefusedDemoPassword, passwordSchema } from '../auth/passwords.js';
 import { clientMe, openSession, type AuthState } from '../auth/signin.js';
 import { looksLikeToken, tokenState, type TokenState } from '../auth/tokens.js';
+import { auditRequest } from '../db/audit.js';
 import { lookupLimiter } from '../security/limits.js';
 
 const router = Router();
@@ -69,6 +70,13 @@ router.post('/:token/accept', async (req, res) => {
   if (!r.ok) return res.status(r.status).json(r.body);
 
   await acceptInvitation(r.value.invitation, parsed.data.password);
+  // Public route: there is no session yet, so the actor is the link holder.
+  await auditRequest(req, {
+    action: 'invitation.accepted',
+    targetType: 'client',
+    targetId: r.value.client.id,
+    clientId: r.value.client.id,
+  });
   const stage = await openSession(req, res, 'client', r.value.client.id);
   const me = await clientMe(r.value.client.id);
   if (!me) return res.status(404).json({ error: 'Not found' });
