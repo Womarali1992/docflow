@@ -114,3 +114,48 @@ role inside the app.
 Clients are never given a password by hand: "New client" in the app shows a one-time invitation
 link (7 days), and the client page has Resend invite, Reset link (one hour) and Deactivate. Every
 CLI change appears in the advisor's activity feed as "Administrator (CLI) …" until C2.1's audit log.
+
+## Background jobs and email (C1.4)
+
+Slow work — sending mail, re-scanning a quarantined upload, sweeping abandoned staging files —
+runs in a **separate worker process**, not in the API. The queue is the `jobs` table, so a
+restart never loses work and a mail server that stops answering slows nothing down for the
+advisor or the client.
+
+| | Development | Firm PC (from C5.3) |
+|---|---|---|
+| API | `npm run dev` in `server\` | `docflow-api` service |
+| Worker | `npm run worker` in `server\` | `docflow-worker` service |
+
+A job is retried on failure after 1 min, 5 min, 15 min, then hourly, up to 5 attempts; after
+that it stops and is counted as **failed** — it is never deleted, so it can still be read. A
+worker that dies mid-job releases its lock after 5 minutes and another worker picks the job up.
+`GET /api/ops/status` (advisor only) reports pending / running / failed counts and whether a
+mail server is configured; C5.2 puts this on the System status panel.
+
+### Email is optional
+
+With **`SMTP_URL` unset nothing is emailed and no job is queued.** Invitations and password
+resets still work: the app shows the one-time link and the advisor sends it however they like —
+the copy-link is the supported way to run the pilot before the firm mailbox is wired up. The
+invitation and reset dialogs say which happened, so the advisor never assumes an email went out.
+
+The one path with no copy-link is the client's own "Forgot password" form: until SMTP is set it
+silently does nothing visible (by design — the response must not reveal whether an account
+exists). Until then, reset a client from their page, or an advisor with
+`npm run admin -- reset-link`.
+
+To turn email on, set both variables in `server\.env` and restart the worker:
+
+```
+SMTP_URL=smtps://docflow%40firm.com:APP_PASSWORD@smtp.office365.com:587
+MAIL_FROM=DocFlow <docflow@firm.com>
+```
+
+Percent-encode the `@` in the username. Check `GET /api/ops/status` afterwards: `mail.configured`
+must be `true`. Send yourself an invitation as a live test; if the job fails, `jobs.last_error`
+carries the SMTP error and the count shows on the ops status.
+
+Every notice is deliberately **generic** — subject and body never contain a filename, an amount,
+a category, message text or another client's name. They say something is waiting and link to the
+portal, because an inbox is not a confidential channel.

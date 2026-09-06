@@ -33,6 +33,9 @@ process.env.RATE_LIMIT_LOOKUP_IP = '100000';
 process.env.PASSWORD_BCRYPT_COST = '4';
 process.env.UPLOADS_DIR = path.join(here, '.uploads-tmp');
 delete process.env.ALLOW_PROVIDER_SIGNUP;
+// No mail server in tests: the mailer must degrade to copy-link, and the email
+// handler is exercised with an injected transport instead of a socket.
+delete process.env.SMTP_URL;
 
 const { db, pool } = await import('../src/db/client.js');
 const { migrate } = await import('drizzle-orm/node-postgres/migrator');

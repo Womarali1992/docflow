@@ -13,7 +13,8 @@ import {
   toSessionDto,
 } from '../auth/sessions.js';
 import { hashPassword, isRefusedDemoPassword, passwordSchema, verifyPassword } from '../auth/passwords.js';
-import { completePasswordReset, createPasswordReset, findPasswordReset, setPassword } from '../auth/resets.js';
+import { completePasswordReset, createPasswordReset, findPasswordReset, resetLink, setPassword } from '../auth/resets.js';
+import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { clientMe, openSession, providerMe, type AuthState, type Me } from '../auth/signin.js';
 import { looksLikeToken, tokenState } from '../auth/tokens.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
@@ -187,23 +188,34 @@ const resetRequestSchema = z.object({
   kind: z.enum(['provider', 'client']),
 });
 
-/* Always 202: the answer never says whether the account exists. A reset row is
-   created for a live account; the email goes out once C1.4 adds the mailer, and
-   until then the advisor (or the admin CLI) hands over a copy-link. */
+/* Always 202: the answer never says whether the account exists, so the response
+   is identical whether or not a row (and an email) was created. This is the one
+   reset path with no copy-link — without SMTP the advisor or the admin CLI still
+   has to hand the link over, which is why `emailQueued` is never leaked here. */
 router.post('/password-reset/request', lookupLimiter, async (req, res) => {
   const parsed = resetRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   const { email, kind } = parsed.data;
 
   if (kind === 'provider') {
-    const [p] = await db.select({ id: schema.providers.id, deactivatedAt: schema.providers.deactivatedAt }).from(schema.providers).where(eq(schema.providers.email, email));
-    if (p && !p.deactivatedAt) await createPasswordReset('provider', p.id);
+    const [p] = await db.select({ id: schema.providers.id, deactivatedAt: schema.providers.deactivatedAt, firmName: schema.providers.firmName }).from(schema.providers).where(eq(schema.providers.email, email));
+    if (p && !p.deactivatedAt) {
+      const { token } = await createPasswordReset('provider', p.id);
+      await enqueueEmail({ template: 'password_reset', to: email, link: resetLink(token), firmName: p.firmName ?? undefined });
+    }
   } else {
     const [c] = await db
-      .select({ id: schema.clients.id, deactivatedAt: schema.clients.deactivatedAt, passwordHash: schema.clients.passwordHash })
+      .select({ id: schema.clients.id, deactivatedAt: schema.clients.deactivatedAt, passwordHash: schema.clients.passwordHash, providerId: schema.clients.providerId })
       .from(schema.clients)
       .where(eq(schema.clients.email, email));
-    if (c && !c.deactivatedAt && c.passwordHash) await createPasswordReset('client', c.id);
+    if (c && !c.deactivatedAt && c.passwordHash) {
+      const { token } = await createPasswordReset('client', c.id);
+      // Only worth a second query when there is a mail server to send it through.
+      const [p] = isMailConfigured()
+        ? await db.select({ firmName: schema.providers.firmName, name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId))
+        : [undefined];
+      await enqueueEmail({ template: 'password_reset', to: email, link: resetLink(token), firmName: p?.firmName ?? p?.name ?? undefined });
+    }
   }
   res.status(202).json({ ok: true });
 });

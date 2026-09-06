@@ -9,6 +9,7 @@ import documentRoutes from './routes/documents.js';
 import messageRoutes from './routes/messages.js';
 import presetRoutes from './routes/presets.js';
 import activityRoutes from './routes/activities.js';
+import opsRoutes from './routes/ops.js';
 import { appOrigin, originCheck } from './auth/csrf.js';
 import { encryptionKey } from './auth/crypto.js';
 import { permissionsPolicy, securityHeaders } from './security/headers.js';
@@ -57,6 +58,8 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/presets', presetRoutes);
 app.use('/api/activities', activityRoutes);
+// Advisor-only operational status (queue depth, mail configuration); grows in C5.2.
+app.use('/api/ops', opsRoutes);
 
 // Unknown API routes → 404 JSON (must come after all mounts, before the error handler)
 app.use('/api', (_req, res) => {

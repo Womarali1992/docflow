@@ -1,5 +1,5 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, numeric, index, uniqueIndex } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 export const requestFrequencyEnum = pgEnum('request_frequency', [
   'daily',
@@ -294,6 +294,35 @@ export const passwordResets = pgTable(
 );
 
 /* =========================================================
+   Jobs: the background queue (email, scan retries, sweeping). Claimed with
+   FOR UPDATE SKIP LOCKED so several workers can share the table. A job is
+   pending while doneAt is null and attempts < maxAttempts; past that it is
+   failed and stays for the ops panel to show. dedupeKey collapses duplicates
+   (one reminder per client per day, C4.3).
+   ========================================================= */
+export const jobs = pgTable(
+  'jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    type: text('type').notNull(),
+    payload: jsonb('payload').notNull().default({}),
+    runAt: timestamp('run_at', { withTimezone: true }).defaultNow().notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    maxAttempts: integer('max_attempts').default(5).notNull(),
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    lockedBy: text('locked_by'),
+    lastError: text('last_error'),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+    dedupeKey: text('dedupe_key').unique(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // Partial: the worker only ever looks at unfinished rows.
+    pendingIdx: index('jobs_run_at_idx').on(t.runAt).where(sql`${t.doneAt} is null`),
+  })
+);
+
+/* =========================================================
    Relations
    ========================================================= */
 export const providersRelations = relations(providers, ({ many }) => ({
@@ -337,5 +366,7 @@ export type MfaTotp = typeof mfaTotp.$inferSelect;
 export type RecoveryCode = typeof recoveryCodes.$inferSelect;
 export type Invitation = typeof invitations.$inferSelect;
 export type PasswordReset = typeof passwordResets.$inferSelect;
+export type Job = typeof jobs.$inferSelect;
+export type NewJob = typeof jobs.$inferInsert;
 export type SessionStage = (typeof sessionStageEnum.enumValues)[number];
 export type NewPreset = typeof presets.$inferInsert;

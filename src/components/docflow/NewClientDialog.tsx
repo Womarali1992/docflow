@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Modal from './Modal';
 import LinkModal, { type OneTimeLinkView } from './LinkModal';
+import { invitationHint } from './linkHints';
 import { I } from './icons';
 import { api } from '@/api/client';
 import { useClients } from '@/context/ClientsContext';
@@ -61,7 +62,7 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
           title: `Invite ${c.name}`,
           link: link.link,
           expiresAt: link.expiresAt,
-          hint: 'Send this link to the client. It sets their password and walks them through two-step verification. You can make a new one from their page at any time.',
+          hint: invitationHint(link.emailQueued, 'new-client'),
         });
       } catch (e) {
         toast({ title: 'Client created, but no invitation yet', description: getErrorMessage(e), variant: 'destructive' });

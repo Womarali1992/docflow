@@ -7,6 +7,7 @@ import { revokeAllSessions } from '../auth/sessions.js';
 import { createInvitation, dropUnusedInvitations, invitationLink } from '../auth/invitations.js';
 import { hashPassword, passwordSchema } from '../auth/passwords.js';
 import { createPasswordReset, resetLink } from '../auth/resets.js';
+import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { NAME_MAX } from '../security/limits.js';
 
 const router = Router();
@@ -160,14 +161,33 @@ router.patch('/:id', requireProvider, async (req, res) => {
 
 const DEACTIVATED = { error: 'This client is deactivated. Reactivate them first.', code: 'deactivated' };
 
-/* A fresh invitation link (replaces any unused one). Email goes out from C1.4; the link is always returned. */
+/**
+ * For the email sign-off, so a notice says who it is from without naming anything
+ * else. Skipped entirely while no mail server is configured — the whole pilot runs
+ * that way today, and this would be a query per invitation for nothing.
+ */
+async function firmNameFor(providerId: string): Promise<string | undefined> {
+  if (!isMailConfigured()) return undefined;
+  const [p] = await db.select({ firmName: schema.providers.firmName, name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, providerId));
+  return p?.firmName ?? p?.name ?? undefined;
+}
+
+/* A fresh invitation link (replaces any unused one). The email is queued when a mail
+   server is configured; the link comes back either way so onboarding never depends on it. */
 router.post('/:id/invitations', requireProvider, async (req, res) => {
   const existing = await ownClient(req, req.params.id);
   if (!existing) return notFound(res);
   if (existing.deactivatedAt) return res.status(409).json(DEACTIVATED);
 
   const { token, expiresAt } = await createInvitation(existing.id, req.auth!.sub);
-  res.status(201).json({ link: invitationLink(token), expiresAt, emailQueued: false });
+  const link = invitationLink(token);
+  const emailQueued = await enqueueEmail({
+    template: 'invitation',
+    to: existing.email,
+    link,
+    firmName: await firmNameFor(req.auth!.providerId),
+  });
+  res.status(201).json({ link, expiresAt, emailQueued });
 });
 
 /* A copy-link password reset for a client who already has a password (otherwise: invite them). */
@@ -180,7 +200,14 @@ router.post('/:id/password-reset', requireProvider, async (req, res) => {
   }
 
   const { token, expiresAt } = await createPasswordReset('client', existing.id);
-  res.json({ link: resetLink(token), expiresAt, emailQueued: false });
+  const link = resetLink(token);
+  const emailQueued = await enqueueEmail({
+    template: 'password_reset',
+    to: existing.email,
+    link,
+    firmName: await firmNameFor(req.auth!.providerId),
+  });
+  res.json({ link, expiresAt, emailQueued });
 });
 
 /* Reversible: sign-in refused, every session ended, pending invitations dropped. Data untouched. */

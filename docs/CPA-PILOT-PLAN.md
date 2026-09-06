@@ -19,7 +19,7 @@
 | C1.1 | `feat(auth): opaque server sessions (30 min idle / 12 h absolute), revocation, origin check, helmet, limits` | SHIPPED 2026-09-05 |
 | C1.2 | `feat(auth): TOTP MFA with recovery codes; forced enrollment; pre-auth session stage` | SHIPPED 2026-09-05 |
 | C1.3 | `feat(auth): invitations, password reset, admin CLI, deactivation revokes sessions` | SHIPPED 2026-09-05 |
-| C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | NOT STARTED |
+| C1.4 | `feat(jobs): Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback` | SHIPPED 2026-09-06 |
 | C2.1 | `feat(schema): engagements, requests, document_versions, reviews, audit_log (expand); legacy import script with report` | NOT STARTED |
 | C2.2 | `feat(api): engagement/request/document/version/review resources with explicit actions; legacy routes kept` | NOT STARTED |
 | C2.3 | `feat(upload): authorize → stage → validate → scan → publish pipeline; quarantine; sweeper; every upload is a version` | NOT STARTED |
@@ -36,8 +36,35 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C1.4** (Postgres job queue + worker service; SMTP mailer with generic templates; copy-link fallback).
-Phase 0 complete; C1.1–C1.3 shipped.
+**NEXT = C2.1** (workflow schema, expand, + legacy import with report). **Phase 1 complete**;
+Phase 0 and C1.1–C1.4 shipped. C2.1 needs a backup manifest younger than 24 h (`ops/windows/backup.ps1`)
+and must be rehearsed on a C0.3 restore before it touches the dev database.
+
+C1.4 notes: migration `0006_jobs` (additive; `jobs` joins `scripts/count.mjs` TABLES). `jobs/queue.ts`
+= `enqueue` (returns null when `dedupeKey` exists — callers treat that as success), `claim` (one UPDATE
+with `FOR UPDATE SKIP LOCKED`, increments `attempts` up front so a dead worker costs one attempt, and
+re-claims a lock older than `STUCK_LOCK_MS` = 5 min), `complete`, `fail` (backoff ladder 1 min / 5 min /
+15 min / hourly), `queueStats`. **Pending = `doneAt IS NULL AND attempts < maxAttempts`; failed = the
+same with the attempts spent** — failed rows are never deleted and never retried, which is what
+`GET /api/ops/status` counts. `jobs/worker.ts` = `runOnce` (exported; the tests drive it directly instead
+of a timer) + `startWorker` (poll `WORKER_POLL_MS`=5000, batch `WORKER_BATCH`=5, interruptible idle so
+`stop()` does not wait a full poll); an unknown job type fails the job rather than the loop.
+`src/worker.ts` = the entry (`npm run worker`, `npm run worker:start` → `dist/worker.js`, the
+`docflow-worker` service in C5.3), SIGINT/SIGTERM finish the job in flight then close the pool.
+Handlers: `email.ts` (nodemailer; `transportFromEnv` caches per `SMTP_URL`; `sendEmailJob(job, transport)`
+takes an injectable transport so tests never open a socket; **no transport → `'skipped'`, not a failure**),
+`scan_retry.ts` and `sweeper.ts` are logging stubs for C2.3. Split on purpose: `jobs/mail.ts`
+(`isMailConfigured`, `mailFrom`, `enqueueEmail`, template names) is what routes import, so nodemailer
+stays in the worker. Four generic templates — invitation, password_reset, new_item, needs_attention —
+asserted by test to contain no filename / amount / message text, to link to the portal and to say
+"do not reply". `POST /clients/:id/invitations` and `/password-reset` now answer a real `emailQueued`;
+`POST /auth/password-reset/request` enqueues but still always answers a bare 202 (never `emailQueued`,
+which would leak account existence). New `routes/ops.ts` → `GET /api/ops/status` (advisor only, 403 for
+clients) with queue counts + `mail.configured` + an operator note; in the authz matrix. Frontend: only
+`components/docflow/linkHints.ts` (+ its two call sites) so the invitation / reset dialog stops saying
+"Send this link to the client" when the app already emailed it. `SMTP_URL` is deleted in `test/setup.ts`,
+so the suite always exercises the copy-link path unless a test sets it. **User decision 2026-09-06: ship
+with SMTP unconfigured** — no live send has been made; prerequisite 3 (firm SMTP credentials) is still open.
 
 C1.3 notes: migration `0005_invites_resets` (additive: `invitations`, `password_resets`, `providers`/`clients` +
 `deactivatedAt`, `passwordChangedAt`; both tables join `scripts/count.mjs` TABLES). `server/src/auth/passwords.ts`

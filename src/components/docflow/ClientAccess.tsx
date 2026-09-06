@@ -6,6 +6,7 @@ import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { ACCESS_LABEL, accessState } from '@/utils/clientAccess';
 import LinkModal, { type OneTimeLinkView } from './LinkModal';
+import { invitationHint, resetHint } from './linkHints';
 import Modal from './Modal';
 import { I } from './icons';
 
@@ -42,7 +43,7 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
         title: state === 'invited' ? `New invitation for ${client.name}` : `Invite ${client.name}`,
         link: r.link,
         expiresAt: r.expiresAt,
-        hint: 'Send this link to the client. It sets their password and walks them through two-step verification. Any earlier invitation link stops working.',
+        hint: invitationHint(r.emailQueued, 'client-page'),
       });
       await refresh();
     }, 'Could not create the invitation');
@@ -54,7 +55,7 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
         title: `Password reset for ${client.name}`,
         link: r.link,
         expiresAt: r.expiresAt,
-        hint: 'Hand this to the client. Using it sets a new password and signs them out everywhere.',
+        hint: resetHint(r.emailQueued),
       });
     }, 'Could not create the reset link');
 

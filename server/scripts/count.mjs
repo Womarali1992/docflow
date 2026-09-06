@@ -21,6 +21,7 @@ export const TABLES = [
   'recovery_codes',
   'invitations',
   'password_resets',
+  'jobs',
 ];
 
 export async function countAll(url) {

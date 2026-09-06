@@ -414,6 +414,21 @@ const cases: Case[] = [
     req: (fx) => request(app).delete(`/api/presets/${fx.provider1.preset}`),
     expect: S(200, 404, 403, 403, 403, 401),
   },
+
+  /* ----------------------------------------------------------------- ops */
+  {
+    // Queue depth and mail configuration are the firm's business, not a client's.
+    name: 'GET /api/ops/status',
+    req: () => request(app).get('/api/ops/status'),
+    expect: S(200, 200, 403, 403, 403, 401),
+    check: (res) => {
+      expect(res.body.jobs).toMatchObject({ pending: 0, running: 0, failed: 0, done: 0 });
+      expect(res.body.mail.configured).toBe(false);
+      // Counts and configuration only: never the connection string behind them.
+      expect(Object.keys(res.body.mail).sort()).toEqual(['configured', 'note']);
+      expect(JSON.stringify(res.body)).not.toMatch(/smtps?:\/\//i);
+    },
+  },
 ];
 
 describe('authorization matrix', () => {
