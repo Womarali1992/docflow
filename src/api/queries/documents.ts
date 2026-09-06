@@ -74,6 +74,14 @@ function useDocumentMutation<TInput, TResult>(fn: (input: TInput) => Promise<TRe
   });
 }
 
+/** Filing: display name, category, which engagement it belongs to. */
+export function useUpdateDocument() {
+  return useDocumentMutation<{ id: string; patch: Parameters<typeof api.documents.update>[1] }, Document>(
+    (input) => api.documents.update(input.id, input.patch),
+    (input) => input.id
+  );
+}
+
 /** A new version supersedes the previous one and sends the request back for review. */
 export function useUploadVersion() {
   return useDocumentMutation<{ id: string; file: File }, UploadResult>(

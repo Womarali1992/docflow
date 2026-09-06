@@ -193,7 +193,7 @@ const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable
 
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {answer && (
-            <button className="df-btn df-sm df-ghost" onClick={() => navigate(`/documents/${answer.id}`)}>
+            <button className="df-btn df-sm df-ghost" onClick={() => navigate(`/review/${answer.id}`)}>
               <I.Doc size={12} /> Open
             </button>
           )}

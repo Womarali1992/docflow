@@ -18,6 +18,7 @@ import Client from "./pages/Client";
 import Clients from "./pages/Clients";
 import Engagement from "./pages/Engagement";
 import Templates from "./pages/Templates";
+import Review from "./pages/Review";
 import ClientPortal from "./pages/ClientPortal";
 import DocumentsPage from "./pages/Documents";
 import DocumentPage from "./pages/Document";
@@ -44,6 +45,7 @@ const App = () => (
           <Route path="/clients/:clientId" element={<Client />} />
           <Route path="/engagements/:engagementId" element={<Engagement />} />
           <Route path="/templates" element={<Templates />} />
+          <Route path="/review/:documentId" element={<Review />} />
           <Route path="/documents" element={<DocumentsPage />} />
           <Route path="/documents/:documentId" element={<DocumentPage />} />
         </Route>

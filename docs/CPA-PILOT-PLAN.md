@@ -26,7 +26,7 @@
 | C2.4 | `feat(files): per-version preview/download with nosniff + no-store; PDF/image inline, Office/CSV download; legacy URL resolves current version` | SHIPPED 2026-09-06 |
 | C3.1 | `feat(web): React Query data layer, auth screens (MFA, invite, reset), shadcn primitives on df tokens, self-hosted Plex` | SHIPPED 2026-09-06 |
 | C3.2 | `feat(web): client directory, client page with engagements, engagement checklist, templates editor with starter tax templates` | SHIPPED 2026-09-07 |
-| C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | NOT STARTED |
+| C3.3 | `feat(web): review workspace (preview, versions, thread, Accept / Request correction / Waive); private-then-shared deliverables` | SHIPPED 2026-09-07 |
 | C3.4 | `feat(web): advisor home queue + filtered lists; search by client/year/category/status/filename; contexts removed` | NOT STARTED |
 | C4.1 | `feat(portal): Your next steps, request cards (upload / ask / I don't have this), separate views` | NOT STARTED |
 | C4.2 | `feat(portal): multi-file upload queue, Submitted/Received/Accepted/Needs-correction states, phone layout + camera` | NOT STARTED |
@@ -36,10 +36,49 @@
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | NOT STARTED |
 | C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
 
-**NEXT = C3.3** (the review workspace at `/review/:documentId`: preview, version history, thread,
-Accept / Request correction / Waive, and `Document.tsx` redirecting there). C3.1 and **C3.2 have
-shipped**, so the data layer and the advisor's engagement screens exist; C3.3 is where a document is
-actually looked at, and it is the last screen before C3.4 removes the two contexts.
+**NEXT = C3.4** — the advisor home queue (four tiles + "Needs decision", each opening
+`/work?filter=…`), `/documents` search backed by `GET /search`, and the **deletion of
+`ClientsContext`, `DocumentsContext` and `documentGrouping.ts`**. Gate for that commit:
+`grep -r "context/DocumentsContext\|context/ClientsContext" src` comes back empty. It also removes
+the last two API shims due in Phase 3: the legacy `GET /documents` list shape and the legacy review
+fields on `PATCH /documents/:id`. **`ClientPortal.tsx` still uses `documentGrouping` — C4.1 rewrites
+the portal, so C3.4 must either keep that one file or move its grouping helper; decide before
+deleting.**
+
+C3.3 notes: the review workspace — the screen a tax season is actually spent in.
+
+- **`/review/:documentId`** (`pages/Review.tsx`): the document on the left, everything needed to
+  decide about it on the right (request context · decision · versions · filing · document thread).
+  `pages/Document.tsx` is now **only a redirect**, so every old `/documents/:id` link — activity
+  rows, bookmarks — keeps working. The checklist and uploads lists link straight here.
+- **`components/docflow/review/DocumentPreview.tsx`** mirrors the server's rule rather than
+  inventing one: PDF and the four web image types render inline, everything else says "download to
+  view". The bytes already arrive under `Content-Security-Policy: sandbox`; the iframe carries its
+  own empty `sandbox` on top, because a client's PDF is untrusted input rendering inside the
+  advisor's live session. A file that has not passed the scanner is **not shown at all**, and the
+  notice says which case it is — "still being checked" and "we found something in it" call for very
+  different things from the person reading them.
+- **`ReviewActions.tsx`** — Accept (**A**) and Request correction (**C**), with the shortcuts
+  ignored while the keyboard is in a field or a dialog is open. **A decision is always about the
+  version on screen**: the previewed version's id is what is sent, so an advisor reading v1 cannot
+  accidentally accept v2. Where it is recorded depends on what is being reviewed — a checklist
+  answer moves its *request* (which is what the client sees), an ad-hoc upload is decided on the
+  document. A deliverable offers no review at all: it is the advisor's own material.
+- **`VersionHistory.tsx`** shows the decision made about *each* version, sorted by its own
+  timestamp: accepting v2 does not retroactively accept v1, and a correction asked for on v1 stays
+  on the file after v2 arrives.
+- **`Organization.tsx`** — display name, category and which engagement the document belongs to
+  (`PATCH /documents/:id` already accepted all three). Renaming changes the *display* name only; the
+  filename the client sent stays on every version, so the advisor's tidying can never be mistaken
+  for the client having sent something different.
+- Deliverable sharing is repeated here (confirm dialog, shared/private badge, unshare) because this
+  is where a deliverable is read before it goes out.
+- New CSS: `.df-review` (preview + 380 px rail, one column under 1100 px), `.df-preview*`.
+
+Frontend-only: no server file changed, and nothing was added to the API. Gate: root `npm run
+typecheck` clean, `npm run lint` 0 errors / 11 inherited warnings, `npm run build` OK, `npm test`
+18 passed. The server suite is unchanged from C3.2 (650) and was not re-run for a commit that
+touches no server file.
 
 C3.2 notes: the advisor's workspace, rebuilt around engagements instead of a heap of documents.
 

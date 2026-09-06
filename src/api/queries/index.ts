@@ -46,6 +46,7 @@ export {
   useDocument,
   useDocumentVersions,
   useDocumentReviews,
+  useUpdateDocument,
   useUploadVersion,
   useUploadToEngagement,
   useAcceptDocument,

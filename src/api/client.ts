@@ -278,6 +278,11 @@ export const api = {
         body: JSON.stringify(input),
       }),
     update: (id: string, patch: Partial<{
+      /* Filing (C2.1 workflow columns). */
+      displayName: string;
+      category: string | null;
+      engagementId: string | null;
+      /* Legacy fields, kept until C5.4. */
       name: string;
       folder: string;
       isRequested: boolean;

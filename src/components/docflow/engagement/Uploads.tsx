@@ -52,10 +52,10 @@ const Uploads: React.FC<Props> = ({ documents, requests }) => {
               key={doc.id}
               className="df-row df-clickable"
               style={{ gridTemplateColumns: '1fr auto auto', alignItems: 'center' }}
-              onClick={() => navigate(`/documents/${doc.id}`)}
+              onClick={() => navigate(`/review/${doc.id}`)}
               role="link"
               tabIndex={0}
-              onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/documents/${doc.id}`); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/review/${doc.id}`); }}
             >
               <div style={{ minWidth: 0 }}>
                 <div className="df-name">{doc.displayName ?? doc.name}</div>
@@ -70,7 +70,7 @@ const Uploads: React.FC<Props> = ({ documents, requests }) => {
                 {version?.available === false && <span className="df-pill df-warn">Not readable</span>}
                 {doc.archivedAt && <span className="df-pill df-plain">Archived</span>}
               </div>
-              <button className="df-btn df-sm df-ghost" onClick={(e) => { e.stopPropagation(); navigate(`/documents/${doc.id}`); }}>
+              <button className="df-btn df-sm df-ghost" onClick={(e) => { e.stopPropagation(); navigate(`/review/${doc.id}`); }}>
                 <I.Doc size={12} /> Open
               </button>
             </div>
