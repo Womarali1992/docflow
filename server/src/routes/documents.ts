@@ -27,6 +27,7 @@ import { absPathFor, humanSize } from '../storage.js';
 import { absPathForKey } from '../files/store.js';
 import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
+import { contentDisposition } from '../files/filename.js';
 import { serializeDocument, serializeReview } from './serialize.js';
 import { notify } from '../notify.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, isId, notFound } from './scope.js';
@@ -59,12 +60,6 @@ async function loadForAdvisor(req: Request, res: Response): Promise<Document | n
 function clientMayReplaceFile(doc: Document): boolean {
   if (doc.kind === 'deliverable' || doc.folder === 'Reports') return false;
   return Boolean(doc.isRequested) || doc.requestId !== null || doc.uploadedByKind === 'client';
-}
-
-/** Strip characters that would break a Content-Disposition header. */
-function safeFilename(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  return name.replace(/[\r\n"\\]/g, '_').replace(/[\x00-\x1f]/g, '').trim() || 'download';
 }
 
 /**
@@ -333,10 +328,7 @@ router.get('/:id/download', async (req, res) => {
   if (size) res.setHeader('Content-Length', String(size));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'private, no-store');
-  res.setHeader(
-    'Content-Disposition',
-    `${dispType}; filename="${safeFilename(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`
-  );
+  res.setHeader('Content-Disposition', contentDisposition(dispType === 'attachment' ? 'attachment' : 'inline', filename));
 
   const stream = fs.createReadStream(abs);
   stream.on('error', () => {

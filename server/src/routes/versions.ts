@@ -23,6 +23,7 @@ import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { auditRequest } from '../db/audit.js';
 import { absPathForKey } from '../files/store.js';
+import { contentDisposition } from '../files/filename.js';
 import { serializeReview, serializeVersion } from './serialize.js';
 import { findDocument, findVersion, notFound } from './scope.js';
 import type { Document, DocumentVersion } from '../db/schema.js';
@@ -67,12 +68,6 @@ router.get('/:id/versions/:versionId', async (req, res) => {
 
 /** The only types a browser is asked to render inline. Everything else downloads. */
 const PREVIEWABLE = new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']);
-
-/** Strips anything that would break — or forge — a Content-Disposition header. */
-function safeFilename(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  return name.replace(/[\r\n"\\]/g, '_').replace(/[\x00-\x1f]/g, '').trim() || 'download';
-}
 
 /**
  * A version is only readable once a scanner has passed it. The refusals say
@@ -128,7 +123,6 @@ async function deliver(req: Request, res: Response, document: Document, version:
     });
   }
 
-  const filename = safeFilename(version.originalFilename);
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Length', String(version.sizeBytes));
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -137,9 +131,9 @@ async function deliver(req: Request, res: Response, document: Document, version:
     // Rendered in the client's browser while their session is live: no scripts,
     // no forms, no navigation out of it.
     res.setHeader('Content-Security-Policy', 'sandbox');
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(version.originalFilename)}`);
+    res.setHeader('Content-Disposition', contentDisposition('inline', version.originalFilename));
   } else {
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(version.originalFilename)}`);
+    res.setHeader('Content-Disposition', contentDisposition('attachment', version.originalFilename));
   }
 
   await auditRequest(req, {
@@ -158,16 +152,22 @@ async function deliver(req: Request, res: Response, document: Document, version:
   stream.pipe(res);
 }
 
-router.get('/:id/versions/:versionId/download', async (req, res) => {
-  const found = await findVersion(req.auth!, req.params.id, req.params.versionId);
-  if (!found) return notFound(res);
-  await deliver(req, res, found.document, found.version, 'download');
+/*
+ * `next` on purpose: Express 4 does not catch a rejected async handler, so an
+ * error in here would surface as an unhandled rejection and stop the process —
+ * one bad file taking the portal down for everybody. It goes to the error
+ * handler instead, which answers 500 and keeps serving.
+ */
+router.get('/:id/versions/:versionId/download', (req, res, next) => {
+  findVersion(req.auth!, req.params.id, req.params.versionId)
+    .then((found) => (found ? deliver(req, res, found.document, found.version, 'download') : notFound(res)))
+    .catch(next);
 });
 
-router.get('/:id/versions/:versionId/preview', async (req, res) => {
-  const found = await findVersion(req.auth!, req.params.id, req.params.versionId);
-  if (!found) return notFound(res);
-  await deliver(req, res, found.document, found.version, 'preview');
+router.get('/:id/versions/:versionId/preview', (req, res, next) => {
+  findVersion(req.auth!, req.params.id, req.params.versionId)
+    .then((found) => (found ? deliver(req, res, found.document, found.version, 'preview') : notFound(res)))
+    .catch(next);
 });
 
 export default router;
