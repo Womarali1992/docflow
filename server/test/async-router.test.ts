@@ -91,7 +91,10 @@ describe('asyncRouter', () => {
     const app = appWith((r) =>
       r.get(
         '/guarded',
-        (_req, res, next) => (res.locals.seen = true) && next(),
+        (_req, res, next) => {
+          res.locals.seen = true;
+          next();
+        },
         async (_req, res) => void res.json({ seen: res.locals.seen })
       )
     );

@@ -68,7 +68,8 @@ export interface Document {
      legacy columns this shape used to mirror. ---- */
   engagementId?: string | null;
   requestId?: string | null;
-  kind?: DocumentKind | null;
+  /* NOT NULL since 0008_contract; serializeDocument() always sends it. */
+  kind: DocumentKind;
   displayName?: string | null;
   category?: string | null;
   currentVersionId?: string | null;
