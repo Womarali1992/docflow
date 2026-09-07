@@ -6,7 +6,7 @@
  * deliverable. A `clientId` in the query narrows an advisor's search; from a
  * client it is ignored entirely rather than honoured or rejected.
  */
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
@@ -14,7 +14,7 @@ import { NAME_MAX } from '../security/limits.js';
 import { serializeDocument, serializeRequest } from './serialize.js';
 import { isId } from './scope.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 const LIMIT = 50;

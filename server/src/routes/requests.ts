@@ -20,7 +20,8 @@
  * Every move is an explicit verb (invariant 5). PATCH only edits wording,
  * category, deadline and order.
  */
-import { Router, type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
+import { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
+import { asyncRouter } from './async-router.js';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -33,7 +34,7 @@ import { advisorOnly, badRequest, clientOnly, findRequest, isId, notFound } from
 import { notify } from '../notify.js';
 import type { Request as RequestRow } from '../db/schema.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 /**

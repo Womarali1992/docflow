@@ -6,13 +6,13 @@
  * it. The read side exists now so both portals can be built against a real
  * endpoint rather than a placeholder, and it correctly returns an empty list.
  */
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 const LIMIT = 50;

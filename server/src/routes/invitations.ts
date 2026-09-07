@@ -4,7 +4,7 @@
  * throttled. Accepting sets the first password and opens a session that still
  * owes its MFA enrollment.
  */
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -15,7 +15,7 @@ import { looksLikeToken, tokenState, type TokenState } from '../auth/tokens.js';
 import { auditRequest } from '../db/audit.js';
 import { lookupLimiter } from '../security/limits.js';
 
-const router = Router();
+const router = asyncRouter();
 
 router.use(lookupLimiter);
 

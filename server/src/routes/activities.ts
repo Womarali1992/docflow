@@ -1,9 +1,9 @@
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 router.get('/', async (req, res) => {

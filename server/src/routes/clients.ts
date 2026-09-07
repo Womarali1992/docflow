@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from 'express';
+import { type Request, type Response } from 'express';
+import { asyncRouter } from './async-router.js';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -12,7 +13,7 @@ import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { NAME_MAX } from '../security/limits.js';
 import { auditRequest, hashedEmail } from '../db/audit.js';
 
-const router = Router();
+const router = asyncRouter();
 
 router.use(authenticate);
 

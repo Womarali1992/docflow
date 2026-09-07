@@ -16,7 +16,8 @@
  * `DELETE /documents/:id` ARCHIVES rather than deletes — nothing a client sent
  * is ever destroyed by a click.
  */
-import { Router, type Request, type Response } from 'express';
+import { type Request, type Response } from 'express';
+import { asyncRouter } from './async-router.js';
 import fs from 'node:fs';
 import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
@@ -32,7 +33,7 @@ import { notify } from '../notify.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, isId, notFound } from './scope.js';
 import type { Document } from '../db/schema.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 export { serializeDocument };

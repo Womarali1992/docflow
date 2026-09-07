@@ -15,7 +15,7 @@
  * can be left open on a screen in a shared office.
  */
 import fs from 'node:fs';
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, count, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
@@ -25,7 +25,7 @@ import { clamdHost, clamdPort, ping, scanRequired, signatureDate, version } from
 import { dataRoot } from '../files/store.js';
 import { firmTimezone } from '../jobs/schedule.js';
 
-const router = Router();
+const router = asyncRouter();
 
 router.use(authenticate);
 

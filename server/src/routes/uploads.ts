@@ -14,7 +14,8 @@
  * Answers are the same across all three: 201 published, 202 stored but still
  * being checked, and a stable `code` on every refusal.
  */
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import { type NextFunction, type Request, type Response } from 'express';
+import { asyncRouter } from './async-router.js';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
@@ -27,7 +28,7 @@ import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, not
 import { notify } from '../notify.js';
 import type { Document } from '../db/schema.js';
 
-const router = Router();
+const router = asyncRouter();
 
 /*
  * NOTE: this router is mounted at /api, so router-level middleware would run for

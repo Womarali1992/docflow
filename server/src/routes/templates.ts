@@ -6,7 +6,7 @@
  * this provider has any template at all, nothing is ever seeded again, so a
  * deliberately cleared list stays cleared.
  */
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { asc, eq, isNull, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -16,7 +16,7 @@ import { ensureStarterTemplates } from '../workflow/starter-templates.js';
 import { serializeTemplate } from './serialize.js';
 import { findTemplate, notFound } from './scope.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate, requireProvider);
 
 const itemSchema = z.object({

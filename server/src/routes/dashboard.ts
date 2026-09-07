@@ -17,12 +17,12 @@
  * checklist it came from — without it the queue could only offer "here is a
  * client", which is one click short of the thing that needs doing.
  */
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate, requireProvider);
 
 router.get('/', async (req, res) => {

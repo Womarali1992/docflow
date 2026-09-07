@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -7,7 +7,7 @@ import { recordActivity } from '../db/activity-log.js';
 import { notify } from '../notify.js';
 import { MESSAGE_MAX } from '../security/limits.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 router.get('/', async (req, res) => {

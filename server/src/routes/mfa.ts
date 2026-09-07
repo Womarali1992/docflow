@@ -4,7 +4,7 @@
  * Reachable in any session stage (the pre-auth stages exist for these routes);
  * `verify` and `enroll/confirm` move the session to `active`.
  */
-import { Router } from 'express';
+import { asyncRouter } from './async-router.js';
 import { z } from 'zod';
 import { authenticateAnyStage } from '../middleware/auth.js';
 import { auditRequest } from '../db/audit.js';
@@ -21,7 +21,7 @@ import {
 } from '../auth/mfa.js';
 import { mfaVerifyLimiter } from '../security/limits.js';
 
-const router = Router();
+const router = asyncRouter();
 
 router.use(authenticateAnyStage);
 

@@ -6,7 +6,8 @@
  * State changes are explicit verbs, never a permissive PATCH (invariant 5):
  * PATCH edits wording and dates, `close` / `reopen` move the engagement.
  */
-import { Router, type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
+import { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
+import { asyncRouter } from './async-router.js';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -19,7 +20,7 @@ import { serializeDocument, serializeEngagement, serializeRequest } from './seri
 import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
 import { notify } from '../notify.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 /**

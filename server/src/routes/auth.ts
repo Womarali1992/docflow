@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from 'express';
+import { type Request, type Response } from 'express';
+import { asyncRouter } from './async-router.js';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
@@ -20,7 +21,7 @@ import { audit, hashedEmail, ipOf } from '../db/audit.js';
 import { looksLikeToken, tokenState } from '../auth/tokens.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
 
-const router = Router();
+const router = asyncRouter();
 
 const loginSchema = z.object({
   email: z.string().email().max(NAME_MAX),

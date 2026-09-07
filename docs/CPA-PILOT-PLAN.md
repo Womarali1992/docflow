@@ -100,10 +100,14 @@ migration — invariant 12's stated exception). Written 2026-09-07; not yet appl
 - deleted `src/pages/FinancialOverview.tsx` and `/overview` (**the user's decision, 2026-09-07**): it
   drew a calendar of document due dates, had been read-only since C3.4, and deadlines have lived on
   checklist requests since then. Its dead CSS went with it;
-- the legacy half of `integrity.mjs` / `manifest.mjs` / `backup.ps1` is gone, so a new backup set
-  carries one file tree. `restore.ps1` still restores a **pre-C5.4 set** that has both — a backup you
-  cannot restore is not a backup. The `server/uploads/` **tree itself is still on disk** and is
-  deleted by hand, after the byte-identity check below, not by this commit.
+- the backup scripts decide what to copy from **what is on disk**, not from which commit is checked
+  out: `backup.ps1`, `manifest.mjs` and `integrity.mjs` all copy, record and verify `server/uploads`
+  for exactly as long as it exists, and ignore it afterwards. C5.4 first removed that handling
+  outright, which was wrong — the migration that stops the rows referencing the tree is a later
+  manual step, so for the whole window in between a nightly set would have silently omitted bytes
+  the database still pointed at. `restore.ps1` was always tolerant of both shapes; the others now
+  match it. The `server/uploads/` **tree itself is still on disk** and is deleted by hand, after the
+  redundancy check below, not by this commit.
 
 **Preconditions for running the migration.** Re-verified on the dev database 2026-09-07, after the
 code above was written:
@@ -141,6 +145,17 @@ curly quotes, a CRLF injection attempt and the empty fallback, plus an end-to-en
 Two lessons for C5.4's release checks: **the manual client journey should include a file whose
 name is not plain ASCII**, and any remaining `async` route handler is an availability bug waiting
 for the right input.
+
+**The second lesson is now closed in code (2026-09-07).** There were **65** `async` route handlers,
+and `d59fe14` had fixed exactly the two that had already caused an outage. Fixing the rest by hand
+would have been 65 chances to miss one and no protection at all for the next route somebody writes,
+so the guarantee moved into the router: `src/routes/async-router.ts` exports `asyncRouter()`, an
+`express.Router()` whose verb methods wrap each handler so a rejected promise — or a synchronous
+throw — becomes `next(err)` and reaches the JSON error handler in `app.ts`. All 16 route files use
+it; `Router()` appears nowhere else, and `test/async-router.test.ts` asserts that by reading the
+directory, so a new file that forgets fails the suite rather than production. Middleware was already
+safe: `makeAuthenticate` routes its own failures through `next(err)`. Express 5 does this natively,
+and when the pilot moves to it the helper can go.
 
 C5.3 notes: the deployment surface. Authored here, executed on the firm PC — this box is Windows 11
 **Home**, so BitLocker, WinSW, ClamAV and Caddy could not be exercised locally; everything that

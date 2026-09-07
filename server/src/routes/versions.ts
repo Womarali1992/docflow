@@ -16,7 +16,8 @@
  *     the client's browser with the client's session alive.
  */
 import fs from 'node:fs';
-import { Router, type Request, type Response } from 'express';
+import { type Request, type Response } from 'express';
+import { asyncRouter } from './async-router.js';
 import { desc, eq } from 'drizzle-orm';
 import { fileTypeFromBuffer } from 'file-type';
 import { db, schema } from '../db/client.js';
@@ -28,7 +29,7 @@ import { serializeReview, serializeVersion } from './serialize.js';
 import { findDocument, findVersion, notFound } from './scope.js';
 import type { Document, DocumentVersion } from '../db/schema.js';
 
-const router = Router();
+const router = asyncRouter();
 router.use(authenticate);
 
 router.get('/:id/versions', async (req, res) => {
