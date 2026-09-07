@@ -4,15 +4,18 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, schema } from '../src/db/client.js';
+import { db, pool, schema } from '../src/db/client.js';
 import { countAll, TABLES } from '../scripts/count.mjs';
 import { checkIntegrity } from '../scripts/integrity.mjs';
 import { checkRedundancy } from '../scripts/legacy-redundancy.mjs';
 import { buildManifest } from '../scripts/manifest.mjs';
 import { recordBackup } from '../scripts/record-backup.mjs';
 import { ensureDatabase } from '../scripts/create-db.mjs';
+import { collectStatus, journalEntries } from '../scripts/status.mjs';
 import { seedFixture, type Fixture } from './helpers.js';
 
 const url = () => process.env.DATABASE_URL!;
@@ -207,5 +210,92 @@ describe('ops scripts', () => {
     await expect(ensureDatabase({ name: 'docflow', owner: 'docflow', adminUrl: url() })).rejects.toThrow(/Refusing/);
     await expect(ensureDatabase({ name: 'postgres', owner: 'docflow', adminUrl: url() })).rejects.toThrow(/Refusing/);
     await expect(ensureDatabase({ name: 'docflow_restore', owner: 'docflow; drop', adminUrl: url() })).rejects.toThrow(/role/);
+  });
+});
+
+/**
+ * `npm run status` (H0) — the one command that answers "what exactly is running
+ * here". The audit had to reconstruct all of this by hand, so the tests worth
+ * having are the two that make it trustworthy: the migration gap is real rather
+ * than assumed, and nothing it prints is a secret.
+ */
+describe('npm run status', () => {
+  const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'status.mjs');
+
+  beforeEach(async () => {
+    await seedFixture();
+  });
+
+  it('describes the checkout, the database and the volume without inventing anything', async () => {
+    const s = await collectStatus({ url: url() });
+
+    expect(s.database).toMatchObject({ name: 'docflow_test', reachable: true });
+    expect(s.node).toBe(process.version);
+    expect(s.env).toBe('test');
+    // The test database migrates from empty before every file, so it is current.
+    expect(s.migrations!.pending).toEqual([]);
+    expect(s.migrations!.last).toBe(journalEntries().at(-1)!.tag);
+    expect(s.migrations!.unknown).toBe(0);
+    expect(s.work!.documentVersions).toBe(6);
+    // DATA_ROOT is server/.data-tmp in tests: inside the checkout, which is the
+    // finding this flag exists to make in production rather than a test failure.
+    expect(s.storage.insideCheckout).toBe(true);
+    expect(s.storage.exists).toBe(true);
+    // Whether mail is configured here depends on the developer's server/.env —
+    // every ops script loads it (lib.mjs), including this one. What must hold
+    // whatever it says is that no credential comes back out.
+    expect(Object.keys(s.smtp)).not.toContain('password');
+    expect(JSON.stringify(s.smtp)).not.toMatch(/:[^:@/"]+@/);
+    // No CI artifact in a local run — null, not a guess.
+    expect(s.tests).toBeNull();
+  });
+
+  it('names the migrations a database has not taken yet', async () => {
+    // The pilot's laptop database is one migration behind (0008_contract is the
+    // destructive one, deliberately unapplied). Reproduce that shape by removing
+    // the newest row, then put it back: an unnoticed migration gap is exactly
+    // what this field exists to catch.
+    const last = journalEntries().at(-1)!;
+    const { rows } = await pool.query('SELECT hash, created_at FROM drizzle.__drizzle_migrations WHERE created_at = $1', [
+      last.when,
+    ]);
+    expect(rows).toHaveLength(1);
+    await pool.query('DELETE FROM drizzle.__drizzle_migrations WHERE created_at = $1', [last.when]);
+    try {
+      const s = await collectStatus({ url: url() });
+      expect(s.migrations!.pending).toEqual([last.tag]);
+      expect(s.migrations!.appliedCount).toBe(journalEntries().length - 1);
+      expect(s.migrations!.last).toBe(journalEntries().at(-2)!.tag);
+    } finally {
+      await pool.query('INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)', [
+        rows[0].hash,
+        rows[0].created_at,
+      ]);
+    }
+  });
+
+  it('runs as a command, prints JSON, and prints no password', () => {
+    // A status report is for pasting into an issue, so the credentials in
+    // DATABASE_URL and SMTP_URL must not survive the trip. Both are given to the
+    // child on purpose, with passwords nothing else in the tree uses.
+    const smtpPassword = 'st4tus-should-never-print-this';
+    const stdout = execFileSync(process.execPath, [scriptPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SMTP_URL: `smtps://status%40example.test:${smtpPassword}@smtp.example.test:465`,
+        MAIL_FROM: 'DocFlow <status@example.test>',
+      },
+    });
+
+    const report = JSON.parse(stdout);
+    expect(report.database.name).toBe('docflow_test');
+    expect(report.smtp).toMatchObject({ configured: true, host: 'smtp.example.test:465', user: 'status@example.test' });
+
+    const dbPassword = new URL(url()).password;
+    expect(dbPassword.length).toBeGreaterThan(0);
+    expect(stdout).not.toContain(dbPassword);
+    expect(stdout).not.toContain(smtpPassword);
+    expect(report.database.url).toContain(':***@');
   });
 });

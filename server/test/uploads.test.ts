@@ -15,7 +15,6 @@
  *      genuine clamd is tagged and skips.
  */
 import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
@@ -25,7 +24,7 @@ import { interpret, ping, scanFile } from '../src/files/scan.js';
 import { sweepOnce } from '../src/jobs/handlers/sweeper.js';
 import { scanRetryJob } from '../src/jobs/handlers/scan_retry.js';
 import { FIXTURES } from './fixtures.js';
-import { app, loginAs, request, seedFixture, type Fixture } from './helpers.js';
+import { app, fakeClamd, loginAs, request, seedFixture, type Fixture } from './helpers.js';
 
 /** Files sitting in staging right now. Should be empty except mid-upload. */
 function stagedFiles(): string[] {
@@ -38,41 +37,6 @@ type FixtureName = keyof typeof FIXTURES;
 function attach(req: ReturnType<typeof request>['post'] extends (u: string) => infer T ? T : never, which: FixtureName) {
   const f = FIXTURES[which];
   return req.attach('file', Buffer.from(f.bytes), { filename: f.name });
-}
-
-/**
- * A fake clamd. Speaks just enough INSTREAM to drive every branch, on a real
- * socket, so no ClamAV is needed to test the scanner.
- */
-function fakeClamd(behaviour: 'clean' | 'infected' | 'garbage' | 'silent' | 'pong') {
-  const server = net.createServer((socket) => {
-    let seen = Buffer.alloc(0);
-    socket.on('data', (chunk) => {
-      seen = Buffer.concat([seen, chunk]);
-      if (seen.includes(Buffer.from('zPING\0'))) {
-        if (behaviour !== 'silent') socket.write('PONG\0');
-        return;
-      }
-      // The client finishes a stream with a zero-length chunk.
-      const tail = seen.subarray(seen.length - 4);
-      if (seen.length >= 14 && tail.equals(Buffer.from([0, 0, 0, 0]))) {
-        if (behaviour === 'clean') socket.write('stream: OK\0');
-        else if (behaviour === 'infected') socket.write('stream: Eicar-Test-Signature FOUND\0');
-        else if (behaviour === 'garbage') socket.write('ERROR: something went wrong\0');
-        // 'silent' answers nothing at all.
-      }
-    });
-    socket.on('error', () => undefined);
-  });
-  return {
-    async start(): Promise<number> {
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-      return (server.address() as net.AddressInfo).port;
-    },
-    async stop() {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
-  };
 }
 
 describe('authorize before bytes', () => {

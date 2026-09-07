@@ -1,0 +1,41 @@
+{
+  "totpConcurrent": [
+    "ok",
+    "ok"
+  ],
+  "concurrentVersions": {
+    "attempted": 8,
+    "fulfilled": 4,
+    "failures": [
+      "23505",
+      "23505",
+      "23505",
+      "23505"
+    ]
+  },
+  "outOfOrderScan": {
+    "olderVersion": 6,
+    "newerVersion": 7,
+    "currentBecameOlder": true
+  },
+  "acceptedAfterReplacementScan": "accepted",
+  "acceptOldVersion": {
+    "httpStatus": 200,
+    "requestStatus": "accepted",
+    "reviewedVersion": 1,
+    "currentVersion": 2
+  },
+  "concurrentFirstUpload": {
+    "statuses": [
+      202,
+      500,
+      202,
+      500
+    ],
+    "documentRows": 1
+  },
+  "rejectedUpload": {
+    "status": 400,
+    "extraDocumentRows": 1
+  }
+}

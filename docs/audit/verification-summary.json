@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-07",
+  "timezone": "Asia/Bangkok",
+  "head": "705cdbd",
+  "serverTests": { "passed": 660, "files": 17, "durationSeconds": 600.68, "authorizationMatrix": 454, "realClamavExercised": false, "caveat": "The real ClamAV test returns successfully without assertions when no scanner answers." },
+  "frontendTests": { "passed": 30, "files": 4 },
+  "additionalAuditHookProbes": { "passed": 2, "meaning": "Observed defects reproduced; these are not assertions of correct behavior." },
+  "typecheck": { "frontend": "passed", "server": "passed via build", "serverTests": "passed" },
+  "lint": { "errors": 0, "warnings": 9 },
+  "build": { "frontend": "passed", "server": "passed", "compiledApiHealth": 200, "worker": "syntax check only", "frontendJsBytesApprox": 533280, "frontendJsGzipBytesApprox": 156370 },
+  "workingDatabase": { "name": "docflow", "migrationsApplied": 8, "lastMigration": "0007_workflow_model", "pendingMigration": "0008_contract", "readOnlyDuringAudit": true },
+  "integrity": { "versions": 24, "legacyFiles": 5, "missing": 0, "mismatched": 0 },
+  "legacyRedundancy": { "redundant": 5, "total": 5, "orphans": 0 },
+  "smtp": { "configured": true, "connectionAuthentication": "passed", "messagesSentDuringAudit": 0, "historicalCompletedEmailJobs": 2 },
+  "deployment": { "localDevelopment": true, "localhostLinks": true, "dataRootInsideCheckout": true, "docflowServicesInstalled": false, "caddyServiceInstalled": false, "clamavServiceFound": false, "postgres5432WildcardListener": true, "externalReachabilityTested": false },
+  "manualReleaseGatesCompletedDuringAudit": false,
+  "applicationSourceChanged": false,
+  "knownUnfinishedCleanup": "Automatic approval review blocked deletion of synthetic docs/audit/scratch-data fixtures; they remain locally and are Git-ignored."
+}
