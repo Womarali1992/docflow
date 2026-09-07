@@ -12,6 +12,7 @@
     "worker:start": "node dist/worker.js",
     "test": "vitest run",
     "typecheck:test": "tsc -p tsconfig.test.json",
+    "mail:check": "node scripts/mail-check.mjs",
     "count": "node scripts/count.mjs",
     "integrity": "node scripts/integrity.mjs",
     "legacy:redundancy": "node scripts/legacy-redundancy.mjs",
