@@ -285,16 +285,16 @@ the reader tolerates a BOM); the recorded run is the rerun.
 ## Nightly backup and the restore drill (v2 — C5.2)
 
 Supersedes the v1 section above. v1 backed up `server\uploads`, which was the whole store when it
-was written; since C2.3 the bytes live under `DATA_ROOT`. **C5.4 stopped `backup.ps1` copying the
-legacy tree**, so a set taken from this commit on contains one file tree. `restore.ps1` still
-understands an older set that has both — a backup you cannot restore is not a backup.
+was written; since C2.3 the bytes live under `DATA_ROOT`. **Every backup script decides what to copy
+from what is on disk, never from which commit is checked out** — so `server\uploads` is copied,
+recorded and verified for exactly as long as it exists, and silently ignored afterwards. A set from
+either side of the contraction restores, and nobody has to do anything special on the day.
 
-> **Mind the gap.** `backup.ps1` stopped copying `server\uploads` in the same commit that wrote
-> `0008_contract` — but the migration has not been run and the tree is still on disk, with 5
-> `documents` rows still carrying a `storage_path`. Until the byte-identity check below confirms
-> those 5 files are redundant copies of versions already under `DATA_ROOT`, a nightly set taken now
-> does **not** contain them. Either finish the contraction or copy `server\uploads` by hand; do not
-> leave it sitting in this gap.
+That is a deliberate correction. C5.4's code half stopped `backup.ps1` copying the tree and
+`manifest.mjs` recording it, on the assumption that the migration had already removed it — but the
+migration is a later, manual step, and in between the rows still pointed at those bytes. A backup
+script that stops copying data before the data stops being referenced is a way to lose it. The
+scripts now behave the way `restore.ps1` always did: tolerant of both shapes.
 
 ### What a v2 backup set contains
 
@@ -302,9 +302,13 @@ understands an older set that has both — a backup you cannot restore is not a 
 <Dest>\<yyyy-MM-dd>\
   db.dump          pg_dump -Fc of the whole database
   files\           every document version's bytes, mirroring DATA_ROOT\files
+  uploads\         the pre-C5.4 tree - present only while server\uploads still exists
   config\          server.env  <-- SECRETS. The destination must be an encrypted volume.
   manifest.json    sha256 of the dump and of every file, row counts, pg_dump version
 ```
+
+`manifest.uploads` is always present, and is an empty list once there is no tree left to carry — the
+same shape either way, so `restore.ps1` never has to ask which side of the contraction a set is from.
 
 **The manifest is what makes the set a backup rather than a folder.** `npm run backup:manifest`
 asks the database which files should exist, hashes each one in the copy, and **fails the run** if a

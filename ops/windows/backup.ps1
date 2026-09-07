@@ -6,6 +6,7 @@
     Writes one self-contained backup set per run under <Dest>\<yyyy-MM-dd>:
         db.dump          pg_dump custom-format archive of the DATABASE_URL database
         files\           copy of DATA_ROOT\files - every document version's bytes (immutable, so /XO)
+        uploads\         copy of server\uploads, only while that pre-C5.4 tree still exists
         config\          server.env (contains secrets - Dest must be an encrypted volume) and the migrations journal
         manifest.json    sha256 of the dump and every file, row counts, written by npm run backup:manifest
     Then records the run in backup_runs (npm run backup:record) and removes sets older than -Keep days.
@@ -15,8 +16,10 @@
     servable is missing from the copy. Never writes inside the repository.
 
     Every byte lives under DATA_ROOT as a document version; the manifest verifies each one against
-    the database. C5.4 removed the legacy server\uploads tree, so there is only the one tree to copy
-    - restore.ps1 still understands an older set that has both.
+    the database. C5.4 stops the application reading server\uploads, but the tree is deleted by hand
+    afterwards - so this copies it whenever it is still on disk, and simply does not when it is not.
+    That is deliberate: the decision is driven by what is on disk, never by which commit is checked
+    out, because in between the two the rows still point at those bytes.
 
     Reads DATABASE_URL and DATA_ROOT from server\.env. Needs node on PATH and the PostgreSQL client
     tools ($env:PG_BIN, or the newest install under Program Files).
@@ -49,6 +52,8 @@ if (-not $PgBin) { $PgBin = $env:PG_BIN }
 
 $repo = Get-RepoRoot
 $serverDir = Join-Path $repo 'server'
+# Pre-C5.4 tree. Copied only while it exists; gone once the contraction is done.
+$uploadsSrc = Join-Path $serverDir 'uploads'
 $envFile = Join-Path $serverDir '.env'
 $destFull = [System.IO.Path]::GetFullPath($Dest)
 if ($destFull.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -114,6 +119,21 @@ try {
         Write-Log "No files directory at $filesSrc yet (nothing uploaded since C2.3)"
     }
 
+    #    The legacy tree, for as long as one is still there. C5.4 stops the app
+    #    reading server\uploads, but the migration that drops the column and the
+    #    hand-deletion of the directory come later - and in that window the rows
+    #    still point at these bytes. A backup script that stops copying data
+    #    before the data stops being referenced is a way to lose it, so this is
+    #    driven by what is on disk, not by which commit is checked out. Once the
+    #    tree is gone this is a no-op and the set simply has no uploads\.
+    if (Test-Path $uploadsSrc) {
+        $uploadsDest = Join-Path $set 'uploads'
+        New-Item -ItemType Directory -Path $uploadsDest -Force | Out-Null
+        Write-Log "Copying legacy uploads from $uploadsSrc (pre-contraction tree still present)"
+        & robocopy $uploadsSrc $uploadsDest /E /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (uploads)" }
+        Write-Log "  $(@(Get-ChildItem $uploadsDest -File -Recurse).Count) legacy file(s) copied"
+    }
 
     # 4. Configuration.
     $configDir = Join-Path $set 'config'

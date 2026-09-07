@@ -162,8 +162,11 @@ if ($restored.migrations -ne $manifest.counts.migrations) { $failures += 'migrat
 # 6. File integrity against the restored database and the manifest.
 Write-Log 'Checking every stored file against the restored database and the manifest'
 $integrity = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\integrity.mjs') `
-    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--manifest', $manifestPath) -IgnoreExitCode
+    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--uploads', $uploadsFull, '--manifest', $manifestPath) -IgnoreExitCode
 $rows += [pscustomobject]@{ item = 'versions verified'; manifest = $manifestFiles.Count; restored = $integrity.checkedVersions; ok = [bool]$integrity.ok }
+# Zero on a contracted set, and the row still prints - "0 of 0 verified" is a
+# fact about the set, whereas a missing row looks like a check nobody ran.
+$rows += [pscustomobject]@{ item = 'legacy files verified'; manifest = $manifestUploads.Count; restored = $integrity.checkedUploads; ok = [bool]$integrity.ok }
 if (-not $integrity.ok) {
     foreach ($m in @($integrity.missing)) { $failures += "missing $($m.kind) file $($m.path) ($($m.id))" }
     foreach ($m in @($integrity.mismatched)) { $failures += "$($m.path): $($m.reason)" }

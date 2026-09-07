@@ -12,6 +12,11 @@
  * run without one less than 24 hours old; the importer went with the columns it
  * read, in C5.4.)
  *
+ * It records the legacy `uploads/` tree too, for as long as a database still has
+ * a `storage_path` column and a set still carries one. Both go away with
+ * `0008_contract`, and then `uploads` is simply an empty list — the same shape,
+ * so restore.ps1 does not need to know which side of the contraction it is on.
+ *
  *   node scripts/manifest.mjs --set <backup-day-dir> [--url ...] [--started <iso>]
  *                              [--pg-dump-version "pg_dump (PostgreSQL) 17.6"]
  *
@@ -47,9 +52,12 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
   /* Storage keys already start with `files/`, so the set directory itself is
      the root they resolve against — the same shape as DATA_ROOT. */
 
+  const uploadsDir = path.join(setDir, 'uploads');
+
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   let versions;
+  let legacy = [];
   try {
     versions = (
       await client.query(
@@ -59,6 +67,23 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
           ORDER BY v.created_at`
       )
     ).rows;
+    /* The legacy tree, for as long as a database still has one. `storage_path`
+       is dropped by 0008_contract, so ask before selecting it: this script has
+       to work on both shapes, exactly as restore.ps1 does. Recording the tree
+       matters most in the window C5.4 opens — the code stops reading the column
+       before the migration removes it, and a backup that quietly stops covering
+       data that is still referenced is how a tree gets lost. */
+    const hasStoragePath = (
+      await client.query(
+        `SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'documents' AND column_name = 'storage_path'`
+      )
+    ).rowCount;
+    if (hasStoragePath) {
+      legacy = (
+        await client.query('SELECT id, storage_path, size_bytes FROM documents WHERE storage_path IS NOT NULL ORDER BY id')
+      ).rows;
+    }
   } finally {
     await client.end();
   }
@@ -87,6 +112,26 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
     fileBytes += bytes;
   }
 
+  /* Legacy tree. Empty on a contracted database and on any set taken after the
+     tree was deleted — `uploads` then stays an empty array rather than
+     disappearing, so restore.ps1 reads the same shape either way. */
+  const uploads = [];
+  let uploadBytes = 0;
+  for (const rel of walk(uploadsDir)) {
+    const abs = path.join(uploadsDir, rel);
+    const bytes = fs.statSync(abs).size;
+    uploads.push({ path: rel, bytes, sha256: sha256File(abs) });
+    uploadBytes += bytes;
+  }
+  /* A row still pointing at a legacy file the set does not contain. Fatal for
+     the same reason a missing servable version is: this set cannot restore the
+     system as it currently stands. */
+  const legacyMissing = legacy
+    .map((d) => norm(d.storage_path))
+    .filter((rel) => !fs.existsSync(path.join(uploadsDir, rel)));
+  for (const rel of legacyMissing) {
+    problems.push({ kind: 'missing', storageKey: rel, versionId: null, legacy: true, servable: true });
+  }
 
   const counts = await countAll(url);
   const dumpBytes = fs.statSync(dumpPath).size;
@@ -103,6 +148,11 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
     dump: { file: 'db.dump', bytes: dumpBytes, sha256: sha256File(dumpPath) },
     counts,
     files: { count: files.length, bytes: fileBytes, entries: files },
+    /* Legacy tree — present and empty once there is nothing left to carry. */
+    uploads,
+    uploadCount: uploads.length,
+    uploadBytes,
+    legacyMissing,
     problems,
   };
 

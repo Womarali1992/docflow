@@ -56,6 +56,22 @@ describe('ops scripts', () => {
     expect(c.migrations).toBeGreaterThanOrEqual(3);
   });
 
+  it('skips the legacy pass on a contracted database, even when pointed at an uploads dir', async () => {
+    // integrity.mjs still walks `documents.storage_path` when a database has
+    // that column, because the restore drill runs it against restored pre-C5.4
+    // sets. This schema is post-0008, so the legacy pass must find nothing to
+    // do rather than throwing on a column that is not there.
+    const r = await checkIntegrity({
+      url: url(),
+      dataRoot: dataRoot(),
+      uploadsDir: path.join(dataRoot(), 'no-such-uploads'),
+    });
+    expect(r.ok).toBe(true);
+    expect(r.legacyDocuments).toBe(0);
+    expect(r.checkedUploads).toBe(0);
+    expect(r.checkedVersions).toBeGreaterThan(0);
+  });
+
   it('passes integrity when every version is where the database says', async () => {
     const r = await check();
     expect(r.ok).toBe(true);
@@ -142,6 +158,12 @@ describe('ops scripts', () => {
     expect(manifest.counts.tables.document_versions).toBe(6);
     expect(manifest.files.entries).toHaveLength(6);
     expect(manifest.files.entries.every((e: { sha256: string }) => /^[0-9a-f]{64}$/.test(e.sha256))).toBe(true);
+    // Contracted schema: no legacy tree to carry, but the key is still present
+    // and empty. restore.ps1 reads `manifest.uploads` on sets from both sides of
+    // the contraction, and an absent key under StrictMode is an error, not a zero.
+    expect(manifest.uploads).toEqual([]);
+    expect(manifest.uploadCount).toBe(0);
+    expect(manifest.legacyMissing).toEqual([]);
 
     const run = await recordBackup({
       url: url(),
