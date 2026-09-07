@@ -7,9 +7,19 @@
  * mid-send without losing the job (the queue is the database).
  */
 import 'dotenv/config';
-import { pool } from './db/client.js';
-import { isMailConfigured } from './jobs/mail.js';
-import { POLL_INTERVAL_MS, startWorker } from './jobs/worker.js';
+import { validateProductionConfig } from './config/validate.js';
+
+/**
+ * First, and before the imports below (F7). The worker publishes bytes and
+ * reads `DATA_ROOT`, so a misconfigured one would quietly write into the wrong
+ * tree; and as in `index.ts`, a static import would let a module-scope throw
+ * beat the readable message to it.
+ */
+validateProductionConfig();
+
+const { pool } = await import('./db/client.js');
+const { isMailConfigured } = await import('./jobs/mail.js');
+const { POLL_INTERVAL_MS, startWorker } = await import('./jobs/worker.js');
 
 const worker = startWorker();
 

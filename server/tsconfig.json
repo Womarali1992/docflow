@@ -4,6 +4,10 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "esModuleInterop": true,
+    // src/files/sniff.worker.js is plain JavaScript on purpose (see its header):
+    // bare `node` has to be able to start it from src/ and from dist/ alike.
+    // This is what carries it into the build; nothing else in src/ is .js.
+    "allowJs": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,

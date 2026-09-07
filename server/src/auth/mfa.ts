@@ -13,7 +13,7 @@ import { randomInt } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, lt, or } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { MfaTotp } from '../db/schema.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
@@ -87,6 +87,18 @@ export type TotpResult = 'ok' | 'invalid' | 'reused';
  * Checks a code against the stored secret and records the accepted step so
  * the same code cannot be used again. `'reused'` is reported as invalid to the
  * caller but kept distinct for tests and logs.
+ *
+ * **The database decides, not the row** (F2). This used to compare against the
+ * `row` the caller had already read and then update by id, which is a
+ * check-then-act across two statements: two sign-ins racing on one shoulder-
+ * surfed code both read `lastUsedStep = null`, both passed the check, and both
+ * got a session. The replay guard held only because nothing ever tried twice at
+ * once — `mfa.test.ts` verifies it sequentially, which is why it passed.
+ *
+ * Now the guard is the WHERE clause of a single conditional UPDATE. Postgres
+ * takes a row lock, so the second statement sees the first one's write and
+ * matches nothing; `RETURNING` says which caller won. The in-memory pre-check
+ * stays as a fast path for the obvious replay, but it decides nothing.
  */
 export async function consumeTotp(row: MfaTotp, code: string, now = Date.now()): Promise<TotpResult> {
   const digits = code.replace(/\s+/g, '');
@@ -100,11 +112,17 @@ export async function consumeTotp(row: MfaTotp, code: string, now = Date.now()):
   if (delta === null) return 'invalid';
   const step = currentStep(now) + delta;
   if (row.lastUsedStep !== null && step <= row.lastUsedStep) return 'reused';
-  await db
+  const [claimed] = await db
     .update(schema.mfaTotp)
     .set({ lastUsedStep: step, updatedAt: new Date(now) })
-    .where(eq(schema.mfaTotp.id, row.id));
-  return 'ok';
+    .where(
+      and(
+        eq(schema.mfaTotp.id, row.id),
+        or(isNull(schema.mfaTotp.lastUsedStep), lt(schema.mfaTotp.lastUsedStep, step))
+      )
+    )
+    .returning({ id: schema.mfaTotp.id });
+  return claimed ? 'ok' : 'reused';
 }
 
 /** Marks the pending secret as enrolled and issues the first recovery codes. */

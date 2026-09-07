@@ -19,11 +19,11 @@ import fs from 'node:fs';
 import { type Request, type Response } from 'express';
 import { asyncRouter } from './async-router.js';
 import { desc, eq } from 'drizzle-orm';
-import { fileTypeFromBuffer } from 'file-type';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { auditRequest } from '../db/audit.js';
 import { absPathForKey } from '../files/store.js';
+import { sniffHead } from '../files/sniff.js';
 import { contentDisposition } from '../files/filename.js';
 import { serializeReview, serializeVersion } from './serialize.js';
 import { findDocument, findVersion, notFound } from './scope.js';
@@ -87,18 +87,6 @@ function unavailable(res: Response, version: DocumentVersion): boolean {
   return false;
 }
 
-/** Magic bytes from the head of a file; enough for every signature that matters here. */
-async function sniffHead(abs: string) {
-  const handle = await fs.promises.open(abs, 'r');
-  try {
-    const head = Buffer.alloc(4100);
-    const { bytesRead } = await handle.read(head, 0, head.length, 0);
-    return await fileTypeFromBuffer(head.subarray(0, bytesRead));
-  } finally {
-    await handle.close();
-  }
-}
-
 /** Streams the bytes with the headers the mode calls for, then audits the read. */
 async function deliver(req: Request, res: Response, document: Document, version: DocumentVersion, mode: 'download' | 'preview') {
   if (unavailable(res, version)) return;
@@ -115,7 +103,17 @@ async function deliver(req: Request, res: Response, document: Document, version:
   // upload: a stored row could be wrong, and the browser acts on this header.
   // Only the head is read — every signature this matters for lives in the first
   // few KB, and a 25 MB file should not be loaded twice to answer one question.
-  const contentType = (await sniffHead(abs))?.mime ?? version.mimeType;
+  //
+  // The same terminable sniff the upload path uses (F1). These bytes were
+  // scanned and published, so a hang here is unlikely — but "unlikely" on a
+  // download route is still the whole server, and falling back to the recorded
+  // mimeType is exactly the right answer when the sniff cannot finish.
+  let contentType: string;
+  try {
+    contentType = (await sniffHead(abs))?.mime ?? version.mimeType;
+  } catch {
+    contentType = version.mimeType;
+  }
 
   if (mode === 'preview' && !PREVIEWABLE.has(contentType)) {
     return res.status(415).json({

@@ -22,6 +22,7 @@ import opsRoutes from './routes/ops.js';
 import { appOrigin, originCheck } from './auth/csrf.js';
 import { encryptionKey } from './auth/crypto.js';
 import { permissionsPolicy, securityHeaders } from './security/headers.js';
+import { defaultDistDir, isStaticEnabled, spa } from './security/static.js';
 import { JSON_BODY_LIMIT, globalLimiter } from './security/limits.js';
 
 export const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:8080';
@@ -42,12 +43,25 @@ if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 
 app.use(securityHeaders);
 app.use(permissionsPolicy);
-app.use(
-  cors({
-    origin: CORS_ORIGIN,
-    credentials: true,
-  })
-);
+/**
+ * CORS exists for the split-origin development shape: Vite on :8080 calling the
+ * API on :4000. When this process serves the app itself there is exactly one
+ * origin, and granting a *second* one credentialed access would hand any stray
+ * dev server on :8080 the ability to read the API with the operator's cookies.
+ *
+ * Not a hypothetical on this deployment: `.env` carries `CORS_ORIGIN` from the
+ * development shape, so a served run would otherwise inherit it silently. The
+ * origin check still refuses cross-site *writes*, but reads would go through.
+ * Serving the app means same-origin, so CORS is simply not mounted.
+ */
+if (!isStaticEnabled()) {
+  app.use(
+    cors({
+      origin: CORS_ORIGIN,
+      credentials: true,
+    })
+  );
+}
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(cookieParser());
 app.use('/api', globalLimiter);
@@ -97,6 +111,18 @@ app.use('/api/ops', opsRoutes);
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
+
+/**
+ * The built SPA, when asked for (`SERVE_STATIC=1`).
+ *
+ * Mounted here on purpose: after every `/api` route *and* after the `/api` 404,
+ * so nothing under `/api` can ever fall through to the HTML shell and answer a
+ * missing endpoint with a 200 page. Before the error handler, so a missing
+ * `dist/` is a 500 with a stack rather than a silent blank.
+ *
+ * Off by default — `npm run dev` still serves the app from Vite on :8080.
+ */
+if (isStaticEnabled()) app.use(spa(defaultDistDir()));
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (isBodyParserError(err)) {

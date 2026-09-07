@@ -121,15 +121,15 @@ describe('hardening', () => {
   /* ------------------------------------------------------------------ F2 */
 
   /**
-   * `consumeTotp` reads the row, decides, then updates by id. Two verifications
-   * holding the same row both decide "not used yet" and both win — a stolen code
-   * is usable for as long as its 30-second step lasts. The existing replay test
-   * passes because it is sequential.
+   * `consumeTotp` read the row, decided, then updated by id. Two verifications
+   * holding the same row both decided "not used yet" and both won — a stolen
+   * code was usable for as long as its 30-second step lasted. The existing
+   * replay test passed because it is sequential.
    *
-   * Fixed by H1 (2.2): one conditional UPDATE … RETURNING, and the database
-   * decides which caller was first.
+   * FIXED by H1 (2.2): one conditional UPDATE … RETURNING, so the row lock
+   * decides which caller was first rather than a stale in-memory copy.
    */
-  it.fails('F2: one authenticator code signs in exactly once, even used twice at once', async () => {
+  it('F2: one authenticator code signs in exactly once, even used twice at once', async () => {
     const mfa = await getMfa('client', fx.client1a.id);
     const code = totpCode();
 

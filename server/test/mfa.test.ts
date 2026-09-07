@@ -157,6 +157,36 @@ describe('mfa', () => {
       expect((await verify(other, { code })).status).toBe(200);
     });
 
+    /**
+     * The same guard as the test above, under the condition it was actually
+     * missing: two sign-ins spending one code at the same instant (F2).
+     *
+     * Sequential replay was always refused — the pre-check saw the recorded
+     * step. Concurrent replay was not, because both requests read the row
+     * before either wrote it, so a shoulder-surfed code was good for two
+     * sessions for the rest of its 30-second step. It is the database that
+     * decides now, so exactly one of these can win.
+     */
+    it('refuses the same code to a second sign-in racing the first (F2)', async () => {
+      const code = totpCode();
+      const [{ cookie: first }, { cookie: second }] = await Promise.all([
+        passwordLogin(fx, 'client1b'),
+        passwordLogin(fx, 'client1b'),
+      ]);
+
+      const [a, b] = await Promise.all([verify(first, { code }), verify(second, { code })]);
+
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual([200, 401]);
+
+      // And the losing session is still pre-auth, not quietly active.
+      const winner = a.status === 200 ? first : second;
+      const loser = a.status === 200 ? second : first;
+      expect((await sessionRow(winner)).stage).toBe('active');
+      expect((await sessionRow(loser)).stage).toBe('preauth');
+      expect((await clients(loser)).status).toBe(403);
+    });
+
     it('throttles after 5 wrong codes per session and keeps the session pre-auth', async () => {
       const { cookie } = await passwordLogin(fx, 'provider1');
       for (let i = 0; i < 5; i++) {

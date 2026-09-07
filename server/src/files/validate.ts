@@ -11,7 +11,7 @@
  * nothing has ever checked.
  */
 import fs from 'node:fs';
-import { fileTypeFromBuffer } from 'file-type';
+import { SniffTimeout, sniffHead, type SniffOptions } from './sniff.js';
 
 /** Accepted types → the canonical extension the version is stored under. */
 export const ALLOWED_TYPES: Record<string, string> = {
@@ -111,10 +111,21 @@ function ooxmlIsEncrypted(buf: Buffer): boolean {
 }
 
 /**
- * Validates a staged file. Reads the head for sniffing and the whole file only
- * for the text and encryption checks, which need to look past the first block.
+ * Validates a staged file.
+ *
+ * The type comes from the first few KB through `sniffHead`, which parses them in
+ * a worker it can kill (F1 — see `sniff.ts`). The whole file is still read, but
+ * only for the text and encryption checks, which are `Buffer.includes` scans:
+ * linear, no parser, and bounded by the 25 MB upload limit.
+ *
+ * `sniffOptions` exists so a test can point the sniff at a worker that hangs;
+ * production passes nothing.
  */
-export async function validateStagedFile(absPath: string, originalFilename: string): Promise<ValidationResult> {
+export async function validateStagedFile(
+  absPath: string,
+  originalFilename: string,
+  sniffOptions?: SniffOptions
+): Promise<ValidationResult> {
   const stat = fs.statSync(absPath);
   if (stat.size === 0) return fail('empty_file', 'That file is empty.');
 
@@ -125,7 +136,18 @@ export async function validateStagedFile(absPath: string, originalFilename: stri
   }
 
   const buf = fs.readFileSync(absPath);
-  const sniffed = await fileTypeFromBuffer(buf);
+  let sniffed: { mime: string; ext: string } | null;
+  try {
+    sniffed = await sniffHead(buf, sniffOptions);
+  } catch (err) {
+    // A parse that had to be killed tells us nothing about the bytes, so the
+    // file is refused rather than guessed at. The client gets something they
+    // can act on instead of the reason, which is ours to fix, not theirs.
+    if (err instanceof SniffTimeout) {
+      return fail('type_mismatch', 'That file could not be read. Re-save it and try again.');
+    }
+    throw err;
+  }
 
   if (!sniffed) {
     // No signature at all: only the text formats are legitimately signature-less.
