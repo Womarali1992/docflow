@@ -13,6 +13,7 @@
     "typecheck:test": "tsc -p tsconfig.test.json",
     "count": "node scripts/count.mjs",
     "integrity": "node scripts/integrity.mjs",
+    "legacy:redundancy": "node scripts/legacy-redundancy.mjs",
     "backup:manifest": "node scripts/manifest.mjs",
     "backup:record": "node scripts/record-backup.mjs",
     "db:create": "node scripts/create-db.mjs",

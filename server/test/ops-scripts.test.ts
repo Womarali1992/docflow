@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '../src/db/client.js';
 import { countAll, TABLES } from '../scripts/count.mjs';
 import { checkIntegrity } from '../scripts/integrity.mjs';
+import { checkRedundancy } from '../scripts/legacy-redundancy.mjs';
 import { buildManifest } from '../scripts/manifest.mjs';
 import { recordBackup } from '../scripts/record-backup.mjs';
 import { ensureDatabase } from '../scripts/create-db.mjs';
@@ -106,6 +107,23 @@ describe('ops scripts', () => {
     const tampered = await checkIntegrity({ url: url(), dataRoot: dataRoot(), manifest });
     expect(tampered.ok).toBe(false);
     expect(tampered.mismatched.map((m: { id: string }) => m.id)).toContain(fx.client2a.deliverableVersion);
+  });
+
+  it('reports the legacy-redundancy question as moot once the database is contracted', async () => {
+    // This schema is post-0008: there is no `documents.storage_path` to compare
+    // against. The script has to say so rather than throw (restore.ps1 and the
+    // runbook both call it on databases in either shape) and rather than report
+    // a clean PASS, which would read as "the tree was checked and is redundant"
+    // when nothing was checked at all.
+    const r = await checkRedundancy({
+      url: url(),
+      dataRoot: dataRoot(),
+      uploadsDir: path.join(dataRoot(), 'no-such-uploads'),
+    });
+    expect(r.contracted).toBe(true);
+    expect(r.ok).toBe(true);
+    expect(r.legacyFiles).toBe(0);
+    expect(r.note).toMatch(/already run/);
   });
 
   it('writes a manifest that describes the set, and records the run', async () => {

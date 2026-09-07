@@ -53,11 +53,12 @@ that the drop has happened.
 **What is left, and only the user can do it** — on the firm PC or a staging Windows box, recorded in
 `docs/PILOT-RUNBOOK.md` with dates:
 
-0. **Actually run the contraction.** The byte-identity check on the 5 legacy files, then
-   `npm run db:migrate` to apply `0008_contract`, then deleting `server/uploads` — against a fresh
-   backup, in that order. The runbook has the sequence. Until this is done the migration exists only
-   as a file, and the guarantees the code assumes (`kind` NOT NULL, one client per address) are not
-   enforced by any persistent database.
+0. **Actually run the contraction.** All four preconditions pass as of 2026-09-07, including
+   `npm run legacy:redundancy` (5/5, 0 orphans), so what is left is: a fresh backup,
+   `npm run db:migrate` to apply `0008_contract`, then `Remove-Item server\uploads -Recurse`. The
+   runbook has the exact sequence. Until this is done the migration exists only as a file, and the
+   guarantees the code assumes (`kind` NOT NULL, one client per address) are not enforced by any
+   persistent database.
 1. A client's whole journey — invitation → MFA → upload → correction → resubmission → download — on a
    desktop **and** on a phone, including **one file whose name is not plain ASCII** (see the
    Content-Disposition defect below).
@@ -112,12 +113,18 @@ code above was written:
 | `documents` with `kind IS NULL` | `SET NOT NULL` aborts, and such a row would lose its only classification | **0** ✅ |
 | duplicate or NULL `clients.email_normalized` | the unique index fails loudly rather than dedupe silently | **0 / 0** ✅ |
 | rows in `presets` | the table is dropped | **0** ✅ |
-| every file in `server/uploads` **byte-identical** (sha256) to a clean, published version under `DATA_ROOT`, no orphans | this, and only this, is what licenses deleting the tree | **NOT YET RUN** ❌ |
+| every file in `server/uploads` **byte-identical** (sha256) to a retained version under `DATA_ROOT`, no orphans | this, and only this, is what licenses deleting the tree | **5/5 redundant, 0 orphans** ✅ |
 
 That last check is worth naming because `npm run integrity` does **not** prove it — integrity proves
 the legacy tree is *intact*, never that it is *redundant*, and only the second question licenses an
-`rm`. As of this commit 5 `documents` rows still carry a `storage_path`, so the tree is still
-load-bearing until that check passes.
+`rm`. It is now `npm run legacy:redundancy` (`scripts/legacy-redundancy.mjs`) rather than a
+one-off query, because a precondition that exists only as prose is one nobody re-runs on the next
+machine. It matches each `storage_path` against a version of the same document with the same
+sha256, confirms those bytes are on disk under `DATA_ROOT`, refuses to accept a quarantined version
+(bytes destroyed on purpose) as proof, and reports orphans separately.
+
+**All four preconditions now hold on the dev database (2026-09-07).** What remains is running the
+migration and deleting the tree.
 
 **Post-C5.3 defect, found and fixed 2026-09-07 (`d59fe14`).** Populating the dev database with
 realistic demo data (`npm run db:demo`, `279abcf`) produced a document called

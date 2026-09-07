@@ -366,34 +366,44 @@ before making it NOT NULL and unique. `server\uploads` is then deleted by hand.
 | `SELECT count(*) FROM documents WHERE kind IS NULL` | a row the import never converted would lose its only data | **0** ✅ |
 | duplicate / NULL `clients.email_normalized` | the unique index fails loudly rather than dedupe silently | **0 / 0** ✅ |
 | `SELECT count(*) FROM presets` | the table is dropped | **0** ✅ |
-| every file in `server\uploads` sha256-compared to its document's current version under `DATA_ROOT` | this is what makes deleting the tree safe | **NOT YET RUN** ❌ |
+| `npm run legacy:redundancy` — every file in `server\uploads` sha256-compared to a retained version under `DATA_ROOT` | this is what makes deleting the tree safe | **5 / 5 redundant, 0 orphans** ✅ 2026-09-07 |
 
 That last row is the important one, and it is **not** what `npm run integrity` does. Integrity proves
 the legacy tree is *intact*; deleting it needs proof it is *redundant*. The two are different
-questions, and only the second one licenses an `rm`. 5 `documents` rows still carry a `storage_path`,
-so until that check passes the tree is still the only home of those bytes.
+questions, and only the second one licenses an `rm`. `scripts\legacy-redundancy.mjs` asks the second
+one directly: for each `documents.storage_path` still set, it finds a version of that same document
+with the same sha256, confirms those bytes exist under `DATA_ROOT` and hash identically, and refuses
+to count a quarantined version (whose bytes were destroyed on purpose) as proof. It also lists
+orphans — files in the tree no row points at, the one case where an `rm` destroys the only copy of
+something. Exit 0 only when every file is accounted for and there are no orphans. After
+`0008_contract` has run there is no `storage_path` column left, and the script says so rather than
+pretending to check.
 
 A backup was taken by hand before the first attempt (`docflow-backups\2026-09-07_113927`). **Take a
-fresh one immediately before actually running the migration** — that set predates this commit.
+fresh one immediately before actually running the migration** — that set predates the contraction
+commit.
 
 **The order, when you run it:**
 
 ```
 cd server
 npm run count                     # record the before-state
-node scripts/integrity.mjs        # legacy tree intact
-# --- the redundancy check above must pass here ---
+npm run integrity                 # legacy tree intact
+npm run legacy:redundancy         # ...and redundant. MUST pass; it is the licence for the rm
+.\ops\windows\backup.ps1          # fresh set, from the repo root
 npm run db:migrate                # applies 0008_contract
 npm run count                     # presets gone, migrations = 9
-# only now:  Remove-Item server\uploads -Recurse
+npm run integrity                 # the surviving tree still matches the database
+# only now:  Remove-Item server\uploads -Recurse -Force
 ```
 
 **Still outstanding — the pilot is not finished until these are done and dated here.** They need the
 firm PC (or a staging Windows box), a phone and a second machine on the LAN:
 
-- [ ] **the contraction itself**, in the order above: fresh backup → byte-identity check on the 5
-      legacy files → `npm run db:migrate` → delete `server\uploads`. Everything else in this list can
-      be done before or after; this one is the destructive step, and it has not been run.
+- [ ] **the contraction itself**, in the order above. `npm run legacy:redundancy` passed 5/5 with 0
+      orphans on 2026-09-07, so all four preconditions are met; what is left is a fresh backup →
+      `npm run db:migrate` → delete `server\uploads`. Everything else in this list can be done before
+      or after; this one is the destructive step, and it has not been run.
 - [ ] a client's whole journey — invitation → MFA → upload → correction → resubmission → download —
       on a desktop **and** a phone, including **one file whose name is not plain ASCII**
       (`Résumé.pdf`, `2026 Form 1040 — draft.pdf`). This is a real defect class, not a formality:

@@ -101,6 +101,7 @@ Root (frontend):
 | `npm run db:demo`                  | A tax season of engagements, checklists, uploads and deliverables  |
 | `npm run count`                    | Row counts + files on record + migrations, as JSON (`--url` to point elsewhere) |
 | `npm run integrity`                | Verify every stored file exists and matches the database / a backup manifest |
+| `npm run legacy:redundancy`        | Before C5.4's drop: prove every `server/uploads` file is already retained under `DATA_ROOT` |
 | `npm run db:create -- --name docflow_restore` | Create a scratch database (`docflow_test` / `docflow_restore*` only) |
 
 Backup and restore live in `ops/windows/` (`backup.ps1`, `restore.ps1`); the procedure and the
