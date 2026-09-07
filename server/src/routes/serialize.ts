@@ -93,16 +93,38 @@ export function serializeReview(r: Review) {
 }
 
 /**
- * The document shape. Keeps every legacy field the current frontend reads
- * (Compatibility ledger: the legacy `GET /documents` list keeps its shape until
- * C3.4) and adds the workflow fields beside them. `storagePath` is replaced by
- * `hasFile`, exactly as C0.2 established.
+ * The document shape.
+ *
+ * Field-by-field rather than a spread, now that there is nothing to strip: the
+ * legacy columns this used to carry went with C5.4, and `storagePath` — the one
+ * the spread existed to remove — went with them. Listing the fields is what
+ * keeps invariant 6 true by construction, so a column added to the table later
+ * cannot reach the browser just because nobody thought about it here.
  */
 export function serializeDocument(doc: Document) {
-  const { storagePath, ...rest } = doc;
   return {
-    ...rest,
-    hasFile: Boolean(storagePath) || doc.currentVersionId !== null,
+    id: doc.id,
+    clientId: doc.clientId,
+    providerId: doc.providerId,
+    name: doc.name,
+    mimeType: doc.mimeType,
+    sizeBytes: doc.sizeBytes,
+    uploadedByKind: doc.uploadedByKind,
+    uploadedById: doc.uploadedById,
+    uploadedAt: doc.uploadedAt,
+    engagementId: doc.engagementId,
+    requestId: doc.requestId,
+    kind: doc.kind,
+    displayName: doc.displayName,
+    category: doc.category,
+    currentVersionId: doc.currentVersionId,
+    sharedAt: doc.sharedAt,
+    sharedById: doc.sharedById,
+    archivedAt: doc.archivedAt,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    /* True once bytes exist to fetch; where they sit is a server-side fact. */
+    hasFile: doc.currentVersionId !== null,
     /* Convenience for the client portal: a deliverable is only visible once shared. */
     shared: doc.sharedAt !== null,
   };

@@ -294,8 +294,10 @@ describe('deliverable sharing', () => {
     const empty = await request(app)
       .post('/api/documents')
       .set('Cookie', advisor)
-      .send({ clientId: fx.client1a.id, name: 'Draft return.pdf', folder: 'Reports' });
+      .send({ clientId: fx.client1a.id, name: 'Draft return.pdf', category: 'Reports' });
     expect(empty.status).toBe(201);
+    // C5.4: an advisor's own file is material they are sending. The old rule read
+    // the folder name, so renaming a drawer changed what a document was.
     expect(empty.body.kind).toBe('deliverable');
 
     const noFile = await request(app).post(`/api/documents/${empty.body.id}/share`).set('Cookie', advisor);

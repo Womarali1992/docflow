@@ -285,8 +285,16 @@ the reader tolerates a BOM); the recorded run is the rerun.
 ## Nightly backup and the restore drill (v2 — C5.2)
 
 Supersedes the v1 section above. v1 backed up `server\uploads`, which was the whole store when it
-was written; since C2.3 the bytes live under `DATA_ROOT`, and v2 copies both trees while the legacy
-one still exists (C5.4 removes it).
+was written; since C2.3 the bytes live under `DATA_ROOT`. **C5.4 stopped `backup.ps1` copying the
+legacy tree**, so a set taken from this commit on contains one file tree. `restore.ps1` still
+understands an older set that has both — a backup you cannot restore is not a backup.
+
+> **Mind the gap.** `backup.ps1` stopped copying `server\uploads` in the same commit that wrote
+> `0008_contract` — but the migration has not been run and the tree is still on disk, with 5
+> `documents` rows still carrying a `storage_path`. Until the byte-identity check below confirms
+> those 5 files are redundant copies of versions already under `DATA_ROOT`, a nightly set taken now
+> does **not** contain them. Either finish the contraction or copy `server\uploads` by hand; do not
+> leave it sitting in this gap.
 
 ### What a v2 backup set contains
 
@@ -294,7 +302,6 @@ one still exists (C5.4 removes it).
 <Dest>\<yyyy-MM-dd>\
   db.dump          pg_dump -Fc of the whole database
   files\           every document version's bytes, mirroring DATA_ROOT\files
-  uploads\         the legacy tree (until C5.4)
   config\          server.env  <-- SECRETS. The destination must be an encrypted volume.
   manifest.json    sha256 of the dump and of every file, row counts, pg_dump version
 ```
@@ -340,6 +347,65 @@ which checks each version's bytes against **both** the database's sha256 and the
 |---|---|---|---|
 | 2026-09-05 | dev box, v1 | PASS | legacy schema, uploads only |
 | 2026-09-07 | `C:\Users\omara\docflow-backups\2026-09-07_020646` (dev box, v2) | **PASS** in 7.2 s | 20 tables matched, 5 document versions + 5 legacy files verified against the database and the manifest; restored to `docflow_restore` and `C:\Users\omara\docflow-restore` |
+
+### The C5.4 contraction (2026-09-07)
+
+The one destructive migration in the programme. `0008_contract` drops 18 legacy `documents` columns
+and the `presets` table, makes `documents.kind` NOT NULL, and backfills `clients.email_normalized`
+before making it NOT NULL and unique. `server\uploads` is then deleted by hand.
+
+> **STATUS: NOT YET RUN.** The migration is written and committed; it has been applied only to
+> `docflow_test`, which the test harness builds from empty on every run. The dev database is still at
+> `0007_workflow_model` with every legacy column and the `presets` table intact, and `server\uploads`
+> still holds its 5 files. Do not read the table below as a record of a completed drop.
+
+**What must be checked first, on the target database — all of it, every time, on every machine:**
+
+| Check | Why | Dev box, 2026-09-07 |
+|---|---|---|
+| `SELECT count(*) FROM documents WHERE kind IS NULL` | a row the import never converted would lose its only data | **0** ✅ |
+| duplicate / NULL `clients.email_normalized` | the unique index fails loudly rather than dedupe silently | **0 / 0** ✅ |
+| `SELECT count(*) FROM presets` | the table is dropped | **0** ✅ |
+| every file in `server\uploads` sha256-compared to its document's current version under `DATA_ROOT` | this is what makes deleting the tree safe | **NOT YET RUN** ❌ |
+
+That last row is the important one, and it is **not** what `npm run integrity` does. Integrity proves
+the legacy tree is *intact*; deleting it needs proof it is *redundant*. The two are different
+questions, and only the second one licenses an `rm`. 5 `documents` rows still carry a `storage_path`,
+so until that check passes the tree is still the only home of those bytes.
+
+A backup was taken by hand before the first attempt (`docflow-backups\2026-09-07_113927`). **Take a
+fresh one immediately before actually running the migration** — that set predates this commit.
+
+**The order, when you run it:**
+
+```
+cd server
+npm run count                     # record the before-state
+node scripts/integrity.mjs        # legacy tree intact
+# --- the redundancy check above must pass here ---
+npm run db:migrate                # applies 0008_contract
+npm run count                     # presets gone, migrations = 9
+# only now:  Remove-Item server\uploads -Recurse
+```
+
+**Still outstanding — the pilot is not finished until these are done and dated here.** They need the
+firm PC (or a staging Windows box), a phone and a second machine on the LAN:
+
+- [ ] **the contraction itself**, in the order above: fresh backup → byte-identity check on the 5
+      legacy files → `npm run db:migrate` → delete `server\uploads`. Everything else in this list can
+      be done before or after; this one is the destructive step, and it has not been run.
+- [ ] a client's whole journey — invitation → MFA → upload → correction → resubmission → download —
+      on a desktop **and** a phone, including **one file whose name is not plain ASCII**
+      (`Résumé.pdf`, `2026 Form 1040 — draft.pdf`). This is a real defect class, not a formality:
+      one such filename took the whole API process down on 2026-09-07.
+- [ ] the nightly backup having run **three nights in a row** — that proves the scheduled task, not
+      the script.
+- [ ] a restore drill on a **clean Windows machine**, passing `npm run integrity`.
+- [ ] `Test-NetConnection <machine> -Port 443` succeeds and `4000` / `5432` / `3310` do not, run
+      **from another machine on the LAN**.
+- [ ] a keyboard-only walk of both portals.
+- [ ] firm SMTP credentials in `server\.env`, worker restarted, `mail.configured: true` on
+      `/settings/system`, and one real invitation sent.
 
 ### Offline copy rotation
 
@@ -424,11 +490,19 @@ Every notice is deliberately **generic** — subject and body never contain a fi
 a category, message text or another client's name. They say something is waiting and link to the
 portal, because an inbox is not a confidential channel.
 
-## Legacy import (C2.1) — run once, on purpose
+## Legacy import (C2.1) — done, and the script is gone (C5.4)
 
-The workflow model (engagements → requests → documents → versions → reviews) arrives as an
-**additive** migration: every legacy column and route keeps working until C5.4. One script then
-converts the existing rows into the new shape.
+**This section is history.** The import ran for real against the dev database on 2026-09-06 (record
+below), and C5.4 deleted `db/migrate-legacy.ts` along with the legacy columns it reads — a script
+that cannot compile is worse than no script. **After C5.4 no pre-C2.1 DocFlow database can be
+imported.** If one ever turns up, the route back is: check out a commit before C5.4, run the import
+there against a restored copy, then migrate that database forward through `0008_contract`.
+
+What it did, for the record:
+
+The workflow model (engagements → requests → documents → versions → reviews) arrived as an
+**additive** migration: every legacy column and route kept working until C5.4. One script then
+converted the existing rows into the new shape.
 
 ```
 cd server
@@ -472,7 +546,7 @@ npx tsx src/db/migrate-legacy.ts --backup-manifest <manifest> --dry-run
 
 | When | Set | Result |
 |---|---|---|
-| 2026-09-06 | `docflow-backups\2026-09-06` | Restore drill **PASS** (5 files verified, counts match). Migrated to `0007_workflow_model`, then imported: 3 engagements, 3 requests, 5 versions, 2 reviews, 8 documents converted, 5 scan jobs queued. All 5 versions' bytes matched their recorded sha256 and size; the 5 legacy uploads were untouched. A second run created nothing. Then run against the dev database with `--trust-legacy-files`; `npm run db:seed` still succeeds afterwards. |
+| 2026-09-06 | `docflow-backups\2026-09-06` | Restore drill **PASS** (5 files verified, counts match). Migrated to `0007_workflow_model`, then imported: 3 engagements, 3 requests, 5 versions, 2 reviews, 8 documents converted, 5 scan jobs queued. All 5 versions' bytes matched their recorded sha256 and size; the 5 legacy uploads were untouched. A second run created nothing. Then run against the dev database with `--trust-legacy-files`. |
 
 The rehearsal earned its keep: it caught `scripts\count.mjs` failing on a backup set restored from
 *before* this migration (it counted tables the older schema does not have). `countAll` now counts

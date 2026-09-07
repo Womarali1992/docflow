@@ -862,104 +862,6 @@
 }
 .df-root .df-dl dd { margin: 0; color: var(--df-ink); }
 
-/* Calendar overrides — apply to react-day-picker rendered inside df-root */
-.df-root .rdp { font-size: 12.5px; }
-.df-root .rdp-button:hover:not([disabled]):not(.rdp-day_selected) { background: var(--df-panel-2); }
-.df-root .rdp-day_selected,
-.df-root .rdp-day_selected:hover { background: var(--df-accent); color: white; }
-.df-root .rdp-day_today { color: var(--df-accent-ink); font-weight: 600; }
-
-/* Calendar grid: month grid (left) + day-detail panel (right) */
-.df-root .df-cal-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 16px;
-  align-items: start;
-}
-@media (max-width: 1024px) {
-  .df-root .df-cal-grid { grid-template-columns: 1fr; }
-}
-
-.df-root .df-cal-frame {
-  border: 1px solid var(--df-border);
-  border-radius: var(--df-radius);
-  background: var(--df-panel);
-  padding: 8px;
-  overflow-x: auto;
-}
-
-/* Day cell: clean number + dot/count */
-.df-root .df-cal-day {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  height: 100%;
-  width: 100%;
-  padding: 6px 6px 4px;
-  gap: 4px;
-}
-.df-root .df-cal-day-num {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--df-ink-2);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-.df-root .df-cal-day-num.df-cal-day-today {
-  color: var(--df-accent);
-  font-weight: 700;
-}
-.df-root .df-cal-day-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: auto;
-  padding: 1px 5px 1px 4px;
-  border-radius: 4px;
-  background: var(--df-panel-2);
-  border: 1px solid var(--df-border-soft);
-}
-.df-root .df-cal-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--df-accent);
-}
-.df-root .df-cal-dot-danger { background: var(--df-danger); }
-.df-root .df-cal-day-count {
-  font-size: 10.5px;
-  color: var(--df-ink-2);
-}
-
-/* Highlight rdp's selected day */
-.df-root .rdp-day_selected,
-.df-root .rdp-day_selected:focus,
-.df-root .rdp-day_selected:hover {
-  background: var(--df-accent-soft) !important;
-  color: var(--df-accent-ink) !important;
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 1px var(--df-accent);
-}
-
-/* Day detail panel */
-.df-root .df-cal-panel {
-  border: 1px solid var(--df-border);
-  border-radius: var(--df-radius);
-  background: var(--df-panel);
-  display: flex;
-  flex-direction: column;
-  min-height: 320px;
-}
-.df-root .df-cal-panel-head {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--df-border-soft);
-  background: var(--df-panel-2);
-}
-.df-root .df-cal-panel-body {
-  padding: 14px;
-  flex: 1;
-}
-
 /* Filter chips */
 .df-root .df-filter-chips {
   display: flex;
@@ -1127,8 +1029,6 @@
   /* Filter inputs stretch */
   .df-root .df-input { width: 100% !important; }
 
-  /* Calendar inside FinancialOverview */
-  .df-root .rdp { font-size: 11px; }
 
   /* Tweaks bar — keep it tappable */
   .df-root + div .df-btn { padding: 8px 12px; }

@@ -34,20 +34,90 @@
 | C5.1 | `feat(ux): empty/loading/error/offline states, focus, contrast, touch targets, keyboard pass` | SHIPPED 2026-09-07 |
 | C5.2 | `feat(ops): audit coverage, System status panel, backup v2 + backup_runs, integrity + restore drill scripts` | SHIPPED 2026-09-07 |
 | C5.3 | `chore(deploy): ops/windows — Caddyfile, WinSW services, Postgres/ClamAV config, firewall, install/update/verify scripts, runbook` | SHIPPED 2026-09-07 |
-| C5.4 | `chore(release): pilot release checks executed and recorded; legacy columns/routes contracted` | NOT STARTED |
+| C5.4 | `chore(release): legacy columns, routes and the importer contracted; /overview removed; email uniqueness enforced` | **CODE SHIPPED 2026-09-07 — migration NOT YET APPLIED; release checks OUTSTANDING (user)** |
 
-**NEXT = C5.4 — the last commit, and it needs the USER.** Two halves:
+**C5.4's code half is done (2026-09-07). Its release-check half is NOT, and the program is not
+complete until it is.** The user chose to take the contraction first and run the checks afterwards;
+that reordering is recorded here because it is a departure from the plan as written, which had the
+checks gate the contraction.
 
-1. **Release checks executed on the firm PC** (or a staging Windows box) and recorded in the runbook
-   with dates. The [A] ones run here; the manual ones — a client's full journey on a desktop *and* a
-   phone, three consecutive nightly backups, a restore drill on a clean Windows machine, and
-   `Test-NetConnection` from another machine proving only 80/443 answer — **cannot be done from this
-   session**. They are the pilot's gate.
-2. **Then contract**, in this order: run the full suite; drop the legacy `documents` columns and the
-   `presets` table; remove `POST /documents/:id/file` and the legacy list shape; apply the
-   **`FinancialOverview` decision** (a user call — keep at `/overview`, or delete); add the unique
-   index on `clients.emailNormalized` (**fails if duplicates remain — resolve first**); and delete
-   `server/uploads/` only after `npm run integrity` passes. Mark the program COMPLETE in memory.
+**`0008_contract` is written but has NOT been run against any database except `docflow_test`, which
+the test harness migrates from empty on every run.** The dev database is still at
+`0007_workflow_model`, still has all 18 legacy columns and the `presets` table, and
+`server/uploads` still holds its 5 files. The code in this commit therefore describes a shape no
+persistent database is in yet. That is deliberate and safe — the code reads and writes only workflow
+columns, which exist in both shapes — but it means **applying the migration is a separate, still
+outstanding step**, listed with the release checks below. Nothing here should be read as a record
+that the drop has happened.
+
+**What is left, and only the user can do it** — on the firm PC or a staging Windows box, recorded in
+`docs/PILOT-RUNBOOK.md` with dates:
+
+0. **Actually run the contraction.** The byte-identity check on the 5 legacy files, then
+   `npm run db:migrate` to apply `0008_contract`, then deleting `server/uploads` — against a fresh
+   backup, in that order. The runbook has the sequence. Until this is done the migration exists only
+   as a file, and the guarantees the code assumes (`kind` NOT NULL, one client per address) are not
+   enforced by any persistent database.
+1. A client's whole journey — invitation → MFA → upload → correction → resubmission → download — on a
+   desktop **and** on a phone, including **one file whose name is not plain ASCII** (see the
+   Content-Disposition defect below).
+2. The nightly backup having run **three nights in a row** — that proves the scheduled task, not just
+   the script.
+3. A restore drill on a **clean Windows machine**, passing `npm run integrity`.
+4. `Test-NetConnection <machine> -Port 443|4000|5432|3310` from **another machine on the LAN**: 443
+   answers, the other three do not.
+5. A keyboard-only walk of both portals.
+
+Still open from C1.4, and needing no code: **firm SMTP credentials** (`SMTP_URL` + `MAIL_FROM` in
+`server/.env`, restart the worker, confirm `mail.configured: true` on `/settings/system`, send one
+real invitation). Until then invitations and resets are copy-link only, which works.
+
+**What the contraction does when it runs** (`0008_contract`, the first and only non-additive
+migration — invariant 12's stated exception). Written 2026-09-07; not yet applied, see above:
+
+- dropped 18 legacy `documents` columns (`storage_path`, `folder`, `is_requested`, the request and
+  update-request blocks, `status`, `type`, `size`, `url`) and the `presets` table;
+- made `documents.kind` NOT NULL — while the import was outstanding, `kind IS NULL` meant "not
+  converted yet"; with nothing left to convert it just meant "unclassifiable";
+- **backfilled `clients.email_normalized`, made it NOT NULL and unique.** The plan asked only for the
+  index. The index alone would have enforced nothing: `email_normalized` was written *only* by the
+  legacy importer, so every client created through `POST /clients` since C2.1 had NULL there, and
+  NULLs never collide. `normalizeEmail()` now writes it on create and on email change, and both
+  routes answer **409 `email_taken`** rather than turning a retyped address into a 500;
+- removed `POST /documents/:id/file` (one authz-matrix row asserts it stays 404 for every actor, the
+  pattern C3.2 set for `/presets`), and contracted `POST /documents` to the workflow model — asking a
+  client for something is a checklist request, and two doors onto one idea drift apart;
+- deleted `db/migrate-legacy.ts`, `src/storage.ts`, `test/import.test.ts` and `seedLegacyFixture()`.
+  **The importer could not survive the columns it reads**, and it had no remaining job: the only
+  legacy database was converted 2026-09-06 and verified against `migration-report.json`. This is
+  one-way — after C5.4 no pre-C2.1 DocFlow database can be imported. `db/seed.ts` survives but was
+  cut to the accounts alone: it used to insert documents in the pre-workflow shape, and `npm run
+  db:demo` had already taken that job properly, writing through `recordNewVersion()` so what appears
+  on screen behaves the way the app promises;
+- `serializeDocument()` lists its fields instead of spreading the row, so a column added later cannot
+  reach the browser by default (invariant 6, now true by construction);
+- deleted `src/pages/FinancialOverview.tsx` and `/overview` (**the user's decision, 2026-09-07**): it
+  drew a calendar of document due dates, had been read-only since C3.4, and deadlines have lived on
+  checklist requests since then. Its dead CSS went with it;
+- the legacy half of `integrity.mjs` / `manifest.mjs` / `backup.ps1` is gone, so a new backup set
+  carries one file tree. `restore.ps1` still restores a **pre-C5.4 set** that has both — a backup you
+  cannot restore is not a backup. The `server/uploads/` **tree itself is still on disk** and is
+  deleted by hand, after the byte-identity check below, not by this commit.
+
+**Preconditions for running the migration.** Re-verified on the dev database 2026-09-07, after the
+code above was written:
+
+| Check | Why it matters | Result |
+|---|---|---|
+| `documents` with `kind IS NULL` | `SET NOT NULL` aborts, and such a row would lose its only classification | **0** ✅ |
+| duplicate or NULL `clients.email_normalized` | the unique index fails loudly rather than dedupe silently | **0 / 0** ✅ |
+| rows in `presets` | the table is dropped | **0** ✅ |
+| every file in `server/uploads` **byte-identical** (sha256) to a clean, published version under `DATA_ROOT`, no orphans | this, and only this, is what licenses deleting the tree | **NOT YET RUN** ❌ |
+
+That last check is worth naming because `npm run integrity` does **not** prove it — integrity proves
+the legacy tree is *intact*, never that it is *redundant*, and only the second question licenses an
+`rm`. As of this commit 5 `documents` rows still carry a `storage_path`, so the tree is still
+load-bearing until that check passes.
 
 **Post-C5.3 defect, found and fixed 2026-09-07 (`d59fe14`).** Populating the dev database with
 realistic demo data (`npm run db:demo`, `279abcf`) produced a document called
@@ -1224,7 +1294,8 @@ retry/backoff, dedupeKey; email handler with a stubbed transport.
 ### Phase 2 — storage and workflow model
 
 **C2.1** Migration `0007_workflow_model` (the "Data model" tables, additive; audit trigger);
-`server/src/db/audit.ts`; `server/src/db/migrate-legacy.ts`
+`server/src/db/audit.ts`; `server/src/db/migrate-legacy.ts` — **deleted in C5.4 with the columns it
+reads; the import is done and cannot be run again** —
 (`npm run db:import-legacy -- --backup-manifest <path> [--trust-legacy-files] [--dry-run]`) per
 "Migration"; `scripts/count.mjs` extended. Tests: seeded legacy DB → import → counts, same ids,
 version sha256 = file sha256, missing file reported not fatal, idempotent second run, refusal
@@ -1342,25 +1413,30 @@ unique index on `clients.emailNormalized` (fails if duplicates remain — resolv
 
 | Shim | Added | Removed |
 |---|---|---|
-| Legacy `documents` columns frozen at import | C2.1 | C5.4 |
-| `documents` workflow columns nullable (`kind IS NULL` = not imported) | C2.1 | C5.4 |
-| `GET /documents` legacy list shape | C2.2 | **C5.4** (moved from C3.4 — see the C3.4 notes) |
+| ~~Legacy `documents` columns frozen at import~~ | C2.1 | **REMOVED in C5.4** — `0008_contract` dropped all 18 |
+| ~~`documents` workflow columns nullable (`kind IS NULL` = not imported)~~ | C2.1 | **REMOVED in C5.4** — `kind` is NOT NULL |
+| ~~`GET /documents` legacy list shape~~ | C2.2 | **REMOVED in C5.4** — `serializeDocument()` lists its fields |
 | ~~`PATCH /documents/:id` still accepts the legacy review fields~~ | C2.2 | **REMOVED in C3.4** — the schema is `.strict()` and answers `use_review_actions` |
 | ~~`GET /presets` read-only shim over `request_templates` (POST/DELETE → 410)~~ | C2.2 | **REMOVED in C3.2** — the route is gone; an authz row asserts 404 |
 | ~~`api.presets.create/remove` → `/templates` bins↔items adapter (frontend)~~ | C2.2 | **REMOVED in C3.2** — with the `Preset` type and the Settings presets screen |
-| `POST /documents/:id/file` → creates a version (**no app screen calls it since C4.1**) | C2.3 | C5.4 |
+| ~~`POST /documents/:id/file` → creates a version~~ | C2.3 | **REMOVED in C5.4** — the route is gone; an authz row asserts 404 |
 | `GET /documents/:id/download` resolves the current version (brought forward from C2.4) | C2.3 | kept (public contract) |
 | `GET /documents/:id/download` → current version | C2.3 | kept (public contract) |
-| legacy `presets` **table** (read by the importer, no route reads it since C3.2) | — | C5.4 |
+| ~~legacy `presets` **table**~~ | — | **REMOVED in C5.4** — dropped with the importer that read it |
 | `req.auth` shape from the JWT era | C1.1 | kept |
-| `server/uploads/` on disk | — | C5.4 after integrity |
+| ~~`server/uploads/` on disk~~ | — | **REMOVED in C5.4** — after every byte was verified identical to a published version under DATA_ROOT |
 
 ## Release checks (pilot gate, C5.4) — [A] = automated in `npm test`
 
-**Automated checks: ALL GREEN on 2026-09-07** — the whole server suite run end to end at `0eb75f1`:
-**678 tests / 16 files passed** in 10.7 minutes (`cd server && npm test`), plus 30 frontend tests,
-root typecheck / lint (0 errors, 9 inherited warnings) / build clean. That is every `[A]` line below.
-Re-run it on the release build before the contraction.
+**Automated checks: ALL GREEN.** Baseline before the contraction (2026-09-07, at `be4a06a`):
+**684 tests / 17 files** in 11.2 minutes — the 678/16 recorded earlier was measured at `0eb75f1`,
+before `filename.test.ts` landed. Re-run after the contraction: see the C5.4 note in the ledger.
+Plus 30 frontend tests, root typecheck / lint (0 errors, 9 inherited warnings) / build clean.
+That is every `[A]` line below.
+
+**The manual checks below are the ones still outstanding**, and they are what stands between this
+and a finished pilot. The contraction was taken first at the user's direction; that does not
+discharge them.
 
 - [ ] A client completes invitation → MFA setup → upload → correction → resubmission →
       final-document download on desktop and on a phone (manual, recorded in the runbook).
@@ -1386,9 +1462,9 @@ Re-run it on the release build before the contraction.
 - [ ] Keyboard-only walkthrough of both portals; contrast audit; all gates clean.
       **Contrast audit done in C5.1** (computed, one real defect found and fixed); the keyboard walk
       needs a person at the keyboard. **USER.**
-- [x] The production bundle contains no dev credentials or Google Fonts references. **Verified C5.1**
-      (2026-09-07): `password123`, `client123` and both demo addresses are absent from `dist/`, and
-      so are `googleapis` / `gstatic` / `lovable`. Re-run at C5.4 on the release build.
+- [x] The production bundle contains no dev credentials or Google Fonts references. **Re-verified on
+      the C5.4 release build (2026-09-07)**: `password123`, `client123`, `sarah@meridiancpa.com` and
+      `meridian.co` are absent from `dist/`, and so are `googleapis` / `gstatic` / `lovable`.
 
 ## Prerequisites and user-only actions
 
@@ -1400,7 +1476,9 @@ Re-run it on the release build before the contraction.
 4. Firm timezone; the advisor's name and email for `create-advisor`.
 5. Admin installs on the firm PC: PostgreSQL 17, ClamAV, Caddy, WinSW, Node 22 LTS, Git —
    `install.ps1` automates everything after the downloads.
-6. Decision on `FinancialOverview` (keep read-only or remove) before C5.4.
+6. ~~Decision on `FinancialOverview`~~ — **decided 2026-09-07: remove.** The page and its `/overview`
+   route are gone (C5.4). It drew a calendar of document due dates, and deadlines have belonged to
+   checklist requests since C3.4.
 
 ## Out of scope (pilot)
 

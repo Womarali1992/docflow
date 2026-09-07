@@ -1,22 +1,7 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, numeric, index, uniqueIndex, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
-export const requestFrequencyEnum = pgEnum('request_frequency', [
-  'daily',
-  'monthly',
-  'quarterly',
-  'yearly',
-  'one-time',
-]);
-
 export const actorKindEnum = pgEnum('actor_kind', ['provider', 'client']);
-
-export const documentStatusEnum = pgEnum('document_status', [
-  'pending',
-  'reviewed',
-  'needs_update',
-  'in_review',
-]);
 
 export const activityTypeEnum = pgEnum('activity_type', ['document', 'message', 'update']);
 
@@ -75,9 +60,12 @@ export const clients = pgTable(
     clientSince: text('client_since'),
     aum: numeric('aum', { precision: 14, scale: 2 }),
     lastActivity: timestamp('last_activity', { withTimezone: true }).defaultNow(),
-    /* lower(trim(email)), filled by the C2.1 import. The unique index is a separate
-       C5.4 migration that fails loudly if duplicates are still present. */
-    emailNormalized: text('email_normalized'),
+    /* lower(trim(email)) — one client per address, enforced. Backfilled and made
+       unique by `0008_contract`; written by `normalizeEmail()` on every create and
+       email change (until C5.4 only the legacy importer set it, which would have
+       left the index enforcing nothing: new rows were all NULL, and NULLs never
+       collide). `email` keeps the address as the client typed it. */
+    emailNormalized: text('email_normalized').notNull(),
     /* Set by the advisor (or the admin CLI); reversible. Sessions are revoked, sign-in refused. */
     deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
@@ -87,6 +75,7 @@ export const clients = pgTable(
   (t) => ({
     providerIdx: index('clients_provider_idx').on(t.providerId),
     emailIdx: index('clients_email_idx').on(t.email),
+    emailNormalizedKey: uniqueIndex('clients_email_normalized_key').on(t.emailNormalized),
   })
 );
 
@@ -105,12 +94,7 @@ export const documents = pgTable(
       .references(() => providers.id, { onDelete: 'cascade' }),
 
     name: text('name').notNull(),
-    type: text('type'),
-    size: text('size'),
-    folder: text('folder').default('Documents'),
-    url: text('url'),
 
-    storagePath: text('storage_path'),
     mimeType: text('mime_type'),
     sizeBytes: integer('size_bytes'),
 
@@ -118,28 +102,20 @@ export const documents = pgTable(
     uploadedById: uuid('uploaded_by_id'),
     uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
 
-    isRequested: boolean('is_requested').default(false),
-    requestedById: uuid('requested_by_id'),
-    requestedAt: timestamp('requested_at', { withTimezone: true }),
-    description: text('description'),
-    requestFrequency: requestFrequencyEnum('request_frequency'),
-    dueDate: timestamp('due_date', { withTimezone: true }),
+    /* ---- Workflow model (C2.1), and since C5.4 the only model there is: the
+       legacy columns that used to sit above — folder, storage_path, is_requested,
+       the update-request block, status — were dropped by `0008_contract` once
+       every row had been imported.
 
-    hasUpdateRequest: boolean('has_update_request').default(false),
-    updateRequestedById: uuid('update_requested_by_id'),
-    updateRequestedAt: timestamp('update_requested_at', { withTimezone: true }),
-    updateRequestDescription: text('update_request_description'),
-    requestedVersion: text('requested_version'),
-
-    status: documentStatusEnum('status').default('pending'),
-
-    /* ---- Workflow model (C2.1). Every column here is nullable on purpose: a row
-       with `kind` still null has not been through the legacy import yet, which is
-       what makes the import idempotent and gives its report something to count.
-       C5.4 tightens these and drops the legacy columns above. ---- */
+       `kind` is NOT NULL from C5.4 (Compatibility ledger). While the import was
+       outstanding, `kind IS NULL` meant "this row has not been converted yet",
+       which is what made the import idempotent; with nothing left to convert,
+       a document with no kind is simply a document nobody can classify. The
+       rest stay nullable because they are genuinely optional: a file can arrive
+       with no engagement, no category and no version yet. ---- */
     engagementId: uuid('engagement_id').references(() => engagements.id, { onDelete: 'set null' }),
     requestId: uuid('request_id').references(() => requests.id, { onDelete: 'set null' }),
-    kind: documentKindEnum('kind'),
+    kind: documentKindEnum('kind').notNull(),
     displayName: text('display_name'),
     category: text('category'),
     /* The version served today. Circular with document_versions.documentId, hence the annotation. */
@@ -210,26 +186,6 @@ export const activities = pgTable(
   },
   (t) => ({
     providerIdx: index('activities_provider_idx').on(t.providerId),
-  })
-);
-
-/* =========================================================
-   Document presets
-   ========================================================= */
-export const presets = pgTable(
-  'presets',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    providerId: uuid('provider_id')
-      .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
-    name: text('name').notNull(),
-    bins: jsonb('bins').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-  },
-  (t) => ({
-    providerIdx: index('presets_provider_idx').on(t.providerId),
   })
 );
 
@@ -501,7 +457,8 @@ export const reviews = pgTable(
 
 /* =========================================================
    Request templates: the checklist starting points ("Individual tax return").
-   Replaces `presets`; the import converts each preset bin into items.
+   Replaced the legacy `presets` table, whose bins the import converted into
+   items; that table was dropped in C5.4.
    ========================================================= */
 export const requestTemplates = pgTable(
   'request_templates',
@@ -592,7 +549,6 @@ export const backupRuns = pgTable('backup_runs', {
 export const providersRelations = relations(providers, ({ many }) => ({
   clients: many(clients),
   documents: many(documents),
-  presets: many(presets),
 }));
 
 export const clientsRelations = relations(clients, ({ one, many }) => ({
@@ -623,7 +579,6 @@ export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 export type Activity = typeof activities.$inferSelect;
 export type NewActivity = typeof activities.$inferInsert;
-export type Preset = typeof presets.$inferSelect;
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
 export type MfaTotp = typeof mfaTotp.$inferSelect;
@@ -652,4 +607,3 @@ export type ReviewDecision = (typeof reviewDecisionEnum.enumValues)[number];
 export type Job = typeof jobs.$inferSelect;
 export type NewJob = typeof jobs.$inferInsert;
 export type SessionStage = (typeof sessionStageEnum.enumValues)[number];
-export type NewPreset = typeof presets.$inferInsert;

@@ -122,11 +122,21 @@ describe('limits', () => {
       .send({ name: 'n'.repeat(NAME_MAX + 1), email: 'long@example.test' });
     expect(longName.status).toBe(400);
 
+    // Asking a client for something is a checklist request (C2.2) — C5.4 removed
+    // the second door through POST /documents, so the limit is tested where the
+    // text actually lives.
     const longInstructions = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+      .set('Cookie', advisor)
+      .send({ items: [{ title: 'W-2', instructions: 'i'.repeat(INSTRUCTIONS_MAX + 1) }] });
+    expect(longInstructions.status).toBe(400);
+
+    // And the contracted create refuses what it no longer understands.
+    const legacyShape = await request(app)
       .post('/api/documents')
       .set('Cookie', advisor)
-      .send({ clientId: fx.client1a.id, name: 'W-2', isRequested: true, description: 'i'.repeat(INSTRUCTIONS_MAX + 1) });
-    expect(longInstructions.status).toBe(400);
+      .send({ clientId: fx.client1a.id, name: 'W-2', isRequested: true });
+    expect(legacyShape.status).toBe(400);
 
     const rename = await request(app)
       .patch(`/api/documents/${fx.client1a.upload}`)

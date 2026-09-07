@@ -14,7 +14,7 @@ import app from '../src/app.js';
 import { db, schema } from '../src/db/client.js';
 import { encryptSecret } from '../src/auth/crypto.js';
 import { generateCode } from '../src/auth/mfa.js';
-import { humanSize, storedFileName, writeStoredFileSync } from '../src/storage.js';
+import { normalizeEmail } from '../src/auth/email.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
 
 export { app };
@@ -67,7 +67,6 @@ export type LoggedInActor = Exclude<Actor, 'anonymous'>;
 export interface ProviderFixture {
   id: string;
   email: string;
-  preset: string;
 }
 
 export interface ClientFixture {
@@ -104,14 +103,6 @@ async function insertProvider(name: string, email: string): Promise<ProviderFixt
     .insert(schema.providers)
     .values({ name, email, passwordHash: PASSWORD_HASH, firmName: `${name} CPA`, role: 'advisor' })
     .returning({ id: schema.providers.id });
-  const [preset] = await db
-    .insert(schema.presets)
-    .values({
-      providerId: p.id,
-      name: `${name} preset`,
-      bins: [{ id: 'b1', label: 'Monthly', items: [{ name: 'Bank Statement' }] }],
-    })
-    .returning({ id: schema.presets.id });
   await db.insert(schema.activities).values({
     providerId: p.id,
     type: 'update',
@@ -121,7 +112,7 @@ async function insertProvider(name: string, email: string): Promise<ProviderFixt
     actorName: name,
   });
   await enrollMfa('provider', p.id);
-  return { id: p.id, email, preset: preset.id };
+  return { id: p.id, email };
 }
 
 /**
@@ -155,75 +146,63 @@ async function insertVersion(documentId: string, uploadedBy: { kind: 'provider' 
   return v.id;
 }
 
-function storedFile(id: string) {
-  const fileName = storedFileName(id, 'application/pdf');
-  writeStoredFileSync(fileName, PDF_BYTES);
-  return {
-    storagePath: fileName,
-    mimeType: 'application/pdf',
-    sizeBytes: PDF_BYTES.length,
-    size: humanSize(PDF_BYTES.length),
-    url: `/api/documents/${id}/download`,
-  };
-}
+/** What a document row records about its bytes; the bytes themselves are a version. */
+const FILE_FACTS = { mimeType: 'application/pdf', sizeBytes: PDF_BYTES.length } as const;
 
 async function insertClient(
   provider: ProviderFixture,
   name: string,
   email: string,
-  tag: string,
-  legacy = false
+  tag: string
 ): Promise<ClientFixture> {
   const [c] = await db
     .insert(schema.clients)
-    .values({ providerId: provider.id, name, email, passwordHash: PASSWORD_HASH, accountId: `CL-${tag}` })
+    .values({
+      providerId: provider.id,
+      name,
+      email,
+      emailNormalized: normalizeEmail(email),
+      passwordHash: PASSWORD_HASH,
+      accountId: `CL-${tag}`,
+    })
     .returning({ id: schema.clients.id });
 
   /*
-   * By default this is a database AFTER the C2.1 import: every document has a
-   * kind, an engagement and (where it has bytes) a version, with the legacy
-   * columns still populated so the compatibility routes stay exercised.
-   *
-   * With `legacy` it is what the firm's database looked like BEFORE the import —
-   * legacy columns only. That is what `seedLegacyFixture()` gives the import
-   * tests, so they run against the shape the script will really meet.
+   * One engagement per client, every document carrying a kind and (where it has
+   * bytes) a version. This used to have a `legacy` mode as well — the pre-import
+   * shape `seedLegacyFixture()` handed to the import tests — which went with the
+   * importer in C5.4: the columns it wrote no longer exist.
    */
-  const engagement = legacy
-    ? { id: null as unknown as string }
-    : (
-        await db
-          .insert(schema.engagements)
-          .values({
-            providerId: provider.id,
-            clientId: c.id,
-            title: `${tag} 2026 Individual Tax Return`,
-            kind: 'individual_tax',
-            taxYear: 2026,
-            status: 'open',
-          })
-          .returning({ id: schema.engagements.id })
-      )[0];
+  const [engagement] = await db
+    .insert(schema.engagements)
+    .values({
+      providerId: provider.id,
+      clientId: c.id,
+      title: `${tag} 2026 Individual Tax Return`,
+      kind: 'individual_tax',
+      taxYear: 2026,
+      status: 'open',
+    })
+    .returning({ id: schema.engagements.id });
 
   const upload = randomUUID();
   const req = randomUUID();
   const deliverable = randomUUID();
   const now = new Date();
-  // The checklist line behind the requested document; same id, as the import does.
-  if (!legacy) {
-    await db.insert(schema.requests).values({
-      id: req,
-      providerId: provider.id,
-      clientId: c.id,
-      engagementId: engagement.id,
-      title: `${tag} Insurance Policy`,
-      instructions: 'seeded request',
-      category: 'Documents',
-      required: true,
-      status: 'requested',
-      sortOrder: 0,
-      importedFromDocumentId: req,
-    });
-  }
+  // The checklist line behind the requested document; same id, as the import did.
+  await db.insert(schema.requests).values({
+    id: req,
+    providerId: provider.id,
+    clientId: c.id,
+    engagementId: engagement.id,
+    title: `${tag} Insurance Policy`,
+    instructions: 'seeded request',
+    category: 'Documents',
+    required: true,
+    status: 'requested',
+    sortOrder: 0,
+    importedFromDocumentId: req,
+  });
 
   await db.insert(schema.documents).values([
     {
@@ -231,57 +210,49 @@ async function insertClient(
       clientId: c.id,
       providerId: provider.id,
       name: `${tag} Bank Statement.pdf`,
-      ...(legacy ? {} : { displayName: `${tag} Bank Statement.pdf` }),
-      type: 'pdf',
-      folder: 'Uploads',
-      ...(legacy ? {} : { category: 'Uploads', engagementId: engagement.id, kind: 'client_upload' as const }),
+      displayName: `${tag} Bank Statement.pdf`,
+      category: 'Uploads',
+      engagementId: engagement.id,
+      kind: 'client_upload',
       uploadedByKind: 'client',
       uploadedById: c.id,
-      status: 'pending',
-      ...storedFile(upload),
+      ...FILE_FACTS,
     },
     {
       id: req,
       clientId: c.id,
       providerId: provider.id,
       name: `${tag} Insurance Policy`,
-      ...(legacy ? {} : { displayName: `${tag} Insurance Policy` }),
-      type: 'pdf',
-      folder: 'Documents',
-      ...(legacy ? {} : { category: 'Documents', engagementId: engagement.id, requestId: req, kind: 'client_upload' as const }),
-      isRequested: true,
-      requestedById: provider.id,
-      requestedAt: now,
-      description: 'seeded request',
+      displayName: `${tag} Insurance Policy`,
+      category: 'Documents',
+      engagementId: engagement.id,
+      requestId: req,
+      kind: 'client_upload',
     },
     {
       id: deliverable,
       clientId: c.id,
       providerId: provider.id,
       name: `${tag} Tax Return Draft.pdf`,
-      ...(legacy ? {} : { displayName: `${tag} Tax Return Draft.pdf` }),
-      type: 'pdf',
-      folder: 'Reports',
-      ...(legacy
-        ? {}
-        : {
-            category: 'Reports',
-            engagementId: engagement.id,
-            kind: 'deliverable' as const,
-            // Shared, as the import leaves deliverables that were already visible.
-            sharedAt: now,
-            sharedById: provider.id,
-          }),
+      displayName: `${tag} Tax Return Draft.pdf`,
+      category: 'Reports',
+      engagementId: engagement.id,
+      kind: 'deliverable',
+      // Shared: a deliverable the client can already see.
+      sharedAt: now,
+      sharedById: provider.id,
       uploadedByKind: 'provider',
       uploadedById: provider.id,
-      ...storedFile(deliverable),
+      ...FILE_FACTS,
     },
   ]);
 
-  const uploadVersion = legacy ? '' : await insertVersion(upload, { kind: 'client', id: c.id }, `${tag} Bank Statement.pdf`);
-  const deliverableVersion = legacy
-    ? ''
-    : await insertVersion(deliverable, { kind: 'provider', id: provider.id }, `${tag} Tax Return Draft.pdf`);
+  const uploadVersion = await insertVersion(upload, { kind: 'client', id: c.id }, `${tag} Bank Statement.pdf`);
+  const deliverableVersion = await insertVersion(
+    deliverable,
+    { kind: 'provider', id: provider.id },
+    `${tag} Tax Return Draft.pdf`
+  );
 
   await db.insert(schema.activities).values({
     providerId: provider.id,
@@ -306,29 +277,13 @@ async function insertClient(
   };
 }
 
-/**
- * The database as it is today: post-import, with engagements, requests and
- * versions. Almost every test wants this one.
- */
+/** Two providers, three clients, and for each client an upload, an open request and a deliverable. */
 export async function seedFixture(): Promise<Fixture> {
-  return seed(false);
-}
-
-/**
- * The database as it was BEFORE the C2.1 import — legacy columns only, no
- * engagements, requests or versions. The import tests use this, because running
- * the import against an already-converted database would prove nothing.
- */
-export async function seedLegacyFixture(): Promise<Fixture> {
-  return seed(true);
-}
-
-async function seed(legacy: boolean): Promise<Fixture> {
   const provider1 = await insertProvider('Provider One', 'p1@example.test');
   const provider2 = await insertProvider('Provider Two', 'p2@example.test');
-  const client1a = await insertClient(provider1, 'Client 1A', 'c1a@example.test', '1A', legacy);
-  const client1b = await insertClient(provider1, 'Client 1B', 'c1b@example.test', '1B', legacy);
-  const client2a = await insertClient(provider2, 'Client 2A', 'c2a@example.test', '2A', legacy);
+  const client1a = await insertClient(provider1, 'Client 1A', 'c1a@example.test', '1A');
+  const client1b = await insertClient(provider1, 'Client 1B', 'c1b@example.test', '1B');
+  const client2a = await insertClient(provider2, 'Client 2A', 'c2a@example.test', '2A');
 
   const [m1] = await db
     .insert(schema.messages)

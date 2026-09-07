@@ -12,13 +12,12 @@ import { checkIntegrity } from '../scripts/integrity.mjs';
 import { buildManifest } from '../scripts/manifest.mjs';
 import { recordBackup } from '../scripts/record-backup.mjs';
 import { ensureDatabase } from '../scripts/create-db.mjs';
-import { PDF_BYTES, seedFixture, type Fixture } from './helpers.js';
+import { seedFixture, type Fixture } from './helpers.js';
 
 const url = () => process.env.DATABASE_URL!;
-const uploadsDir = () => process.env.UPLOADS_DIR!;
 /** Storage keys start with `files/`, so DATA_ROOT is the root they hang off. */
 const dataRoot = () => process.env.DATA_ROOT!;
-const check = () => checkIntegrity({ url: url(), dataRoot: dataRoot(), uploadsDir: uploadsDir() });
+const check = () => checkIntegrity({ url: url(), dataRoot: dataRoot() });
 
 describe('ops scripts', () => {
   let fx: Fixture;
@@ -37,7 +36,6 @@ describe('ops scripts', () => {
       documents: 9,
       messages: 2,
       activities: 5,
-      presets: 2,
       sessions: 0,
       mfa_totp: 5,
       recovery_codes: 0,
@@ -57,12 +55,12 @@ describe('ops scripts', () => {
     expect(c.migrations).toBeGreaterThanOrEqual(3);
   });
 
-  it('passes integrity across both trees when everything is where the database says', async () => {
+  it('passes integrity when every version is where the database says', async () => {
     const r = await check();
     expect(r.ok).toBe(true);
-    // Versions under DATA_ROOT/files, legacy documents under uploads/.
+    // One tree since C5.4: versions under DATA_ROOT/files. The legacy
+    // server/uploads tree went with `documents.storage_path`.
     expect(r.checkedVersions).toBe(6);
-    expect(r.checkedUploads).toBe(6);
     expect(r.missing).toEqual([]);
     expect(r.mismatched).toEqual([]);
   });
@@ -95,28 +93,19 @@ describe('ops scripts', () => {
     ).toBe(true);
   });
 
-  it('reports a missing legacy file and a manifest hash mismatch', async () => {
-    const victim = path.join(uploadsDir(), `${fx.client1a.upload}.pdf`);
-    fs.unlinkSync(victim);
-    const missing = await check();
-    expect(missing.ok).toBe(false);
-    expect(missing.missing.map((m: { id: string }) => m.id)).toContain(fx.client1a.upload);
-
-    fs.writeFileSync(victim, PDF_BYTES);
+  it('reports a version whose bytes disagree with the manifest', async () => {
+    const [version] = await db
+      .select()
+      .from(schema.documentVersions)
+      .where(eq(schema.documentVersions.id, fx.client2a.deliverableVersion));
+    // The bytes match the database but not the backup set they were copied
+    // from: the restore drill is the caller that has to notice this.
     const manifest = {
-      uploads: [{ path: `${fx.client1b.upload}.pdf`, bytes: PDF_BYTES.length, sha256: '0'.repeat(64) }],
+      files: { entries: [{ path: version.storageKey, sha256: '0'.repeat(64) }] },
     };
-    const tampered = await checkIntegrity({ url: url(), dataRoot: dataRoot(), uploadsDir: uploadsDir(), manifest });
+    const tampered = await checkIntegrity({ url: url(), dataRoot: dataRoot(), manifest });
     expect(tampered.ok).toBe(false);
-    expect(tampered.mismatched.map((m: { id: string }) => m.id)).toContain(fx.client1b.upload);
-  });
-
-  it('reports a size that drifted from the database', async () => {
-    const victim = path.join(uploadsDir(), `${fx.client2a.deliverable}.pdf`);
-    fs.appendFileSync(victim, 'extra bytes');
-    const r = await check();
-    expect(r.ok).toBe(false);
-    expect(r.mismatched.map((m: { id: string }) => m.id)).toContain(fx.client2a.deliverable);
+    expect(tampered.mismatched.map((m: { id: string }) => m.id)).toContain(fx.client2a.deliverableVersion);
   });
 
   it('writes a manifest that describes the set, and records the run', async () => {
@@ -125,7 +114,6 @@ describe('ops scripts', () => {
     fs.writeFileSync(path.join(setDir, 'db.dump'), 'not a real dump, but it hashes');
     // A backup set is a copy: the manifest verifies what was copied, not the live tree.
     fs.cpSync(path.join(dataRoot(), 'files'), path.join(setDir, 'files'), { recursive: true });
-    fs.cpSync(uploadsDir(), path.join(setDir, 'uploads'), { recursive: true });
 
     const result = await buildManifest({ setDir, url: url() });
     expect(result.ok).toBe(true);

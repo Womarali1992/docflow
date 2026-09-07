@@ -503,7 +503,12 @@ describe('the sweeper', () => {
   });
 });
 
-describe('the legacy upload route goes through the same pipeline', () => {
+/*
+ * These two guarded the legacy `POST /documents/:id/file` route, to prove it was
+ * not a back door around the pipeline. C5.4 removed that route; the behaviours
+ * still matter, so they moved to the one route that remains.
+ */
+describe('re-uploading a document', () => {
   let fx: Fixture;
 
   beforeEach(async () => {
@@ -513,11 +518,11 @@ describe('the legacy upload route goes through the same pipeline', () => {
   it('creates a version instead of overwriting, and still refuses a spoofed file', async () => {
     const client = await loginAs(fx, 'client1a');
 
-    const spoof = await attach(request(app).post(`/api/documents/${fx.client1a.upload}/file`).set('Cookie', client), 'spoofPdf');
+    const spoof = await attach(request(app).post(`/api/documents/${fx.client1a.upload}/versions`).set('Cookie', client), 'spoofPdf');
     expect(spoof.status).toBe(400);
     expect(spoof.body.code).toBe('type_mismatch');
 
-    const ok = await attach(request(app).post(`/api/documents/${fx.client1a.upload}/file`).set('Cookie', client), 'pdf');
+    const ok = await attach(request(app).post(`/api/documents/${fx.client1a.upload}/versions`).set('Cookie', client), 'pdf');
     expect([200, 202]).toContain(ok.status);
 
     const versions = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, fx.client1a.upload));
@@ -527,7 +532,7 @@ describe('the legacy upload route goes through the same pipeline', () => {
 
   it('still refuses a client writing over advisor material', async () => {
     const client = await loginAs(fx, 'client1a');
-    const res = await attach(request(app).post(`/api/documents/${fx.client1a.deliverable}/file`).set('Cookie', client), 'pdf');
+    const res = await attach(request(app).post(`/api/documents/${fx.client1a.deliverable}/versions`).set('Cookie', client), 'pdf');
     expect(res.status).toBe(403);
     expect(stagedFiles()).toEqual([]);
   });

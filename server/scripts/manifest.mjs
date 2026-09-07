@@ -7,9 +7,10 @@
  * **every published version's storage key with the size and sha256 the database
  * believes it has**, verified against the bytes actually copied into the set.
  *
- * It is written last, on purpose: a set with a manifest is a complete set. The
- * legacy import (C2.1) refuses to run without one less than 24 hours old, and
- * the restore drill compares against it.
+ * It is written last, on purpose: a set with a manifest is a complete set, and
+ * the restore drill compares against it. (The legacy import used to refuse to
+ * run without one less than 24 hours old; the importer went with the columns it
+ * read, in C5.4.)
  *
  *   node scripts/manifest.mjs --set <backup-day-dir> [--url ...] [--started <iso>]
  *                              [--pg-dump-version "pg_dump (PostgreSQL) 17.6"]
@@ -45,12 +46,10 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
 
   /* Storage keys already start with `files/`, so the set directory itself is
      the root they resolve against — the same shape as DATA_ROOT. */
-  const uploadsDir = path.join(setDir, 'uploads');
 
   const client = new pg.Client({ connectionString: url });
   await client.connect();
   let versions;
-  let legacy;
   try {
     versions = (
       await client.query(
@@ -59,9 +58,6 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
            FROM document_versions v
           ORDER BY v.created_at`
       )
-    ).rows;
-    legacy = (
-      await client.query('SELECT id, storage_path, size_bytes FROM documents WHERE storage_path IS NOT NULL ORDER BY id')
     ).rows;
   } finally {
     await client.end();
@@ -91,17 +87,6 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
     fileBytes += bytes;
   }
 
-  const uploads = [];
-  let uploadBytes = 0;
-  for (const rel of walk(uploadsDir)) {
-    const abs = path.join(uploadsDir, rel);
-    const bytes = fs.statSync(abs).size;
-    uploads.push({ path: rel, bytes, sha256: sha256File(abs) });
-    uploadBytes += bytes;
-  }
-  const legacyMissing = legacy
-    .map((d) => norm(d.storage_path))
-    .filter((rel) => !fs.existsSync(path.join(uploadsDir, rel)));
 
   const counts = await countAll(url);
   const dumpBytes = fs.statSync(dumpPath).size;
@@ -118,11 +103,6 @@ export async function buildManifest({ setDir, url, startedAt, pgDumpVersion = nu
     dump: { file: 'db.dump', bytes: dumpBytes, sha256: sha256File(dumpPath) },
     counts,
     files: { count: files.length, bytes: fileBytes, entries: files },
-    /* Legacy tree, still carried until C5.4 removes server/uploads. */
-    uploads: uploads,
-    uploadCount: uploads.length,
-    uploadBytes,
-    legacyMissing,
     problems,
   };
 

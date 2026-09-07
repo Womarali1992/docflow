@@ -131,7 +131,6 @@ async function documentForRequest(request: typeof schema.requests.$inferSelect):
       displayName: request.title,
       category: request.category,
       name: request.title,
-      folder: request.category ?? 'Documents',
       uploadedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -177,7 +176,7 @@ async function documentForEngagement(req: Request, engagement: typeof schema.eng
   const staged = stagedFrom(req);
   const filename = staged?.originalFilename ?? 'Upload';
   const kind = auth.kind === 'provider' ? ('deliverable' as const) : ('client_upload' as const);
-  const folder = kind === 'deliverable' ? 'Reports' : 'Uploads';
+  const category = kind === 'deliverable' ? 'Reports' : 'Uploads';
   const now = new Date();
 
   const [created] = await db
@@ -188,9 +187,8 @@ async function documentForEngagement(req: Request, engagement: typeof schema.eng
       engagementId: engagement.id,
       kind,
       displayName: filename,
-      category: folder,
+      category,
       name: filename,
-      folder,
       uploadedByKind: auth.kind,
       uploadedById: auth.sub,
       uploadedAt: now,
@@ -227,7 +225,7 @@ router.post(
 function mayAddVersion(doc: Document, kind: 'provider' | 'client'): boolean {
   if (kind === 'provider') return true;
   if (doc.kind === 'deliverable') return false;
-  return doc.requestId !== null || doc.uploadedByKind === 'client' || Boolean(doc.isRequested);
+  return doc.requestId !== null || doc.uploadedByKind === 'client';
 }
 
 router.post(

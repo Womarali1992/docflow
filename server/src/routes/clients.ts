@@ -6,6 +6,7 @@ import { authenticate, requireProvider } from '../middleware/auth.js';
 import { revokeAllSessions } from '../auth/sessions.js';
 import { createInvitation, dropUnusedInvitations, invitationLink } from '../auth/invitations.js';
 import { hashPassword, passwordSchema } from '../auth/passwords.js';
+import { normalizeEmail } from '../auth/email.js';
 import { createPasswordReset, resetLink } from '../auth/resets.js';
 import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { NAME_MAX } from '../security/limits.js';
@@ -41,13 +42,24 @@ function clientColumns(viewerKind: 'provider' | 'client') {
     // NOTE: the correlation must be fully qualified as "clients"."id" — a bare
     // ${schema.clients.id} renders as "id", which Postgres binds to the inner
     // table's own id column, silently making every count 0.
+    /* Documents with bytes to open. Read `storage_path IS NOT NULL` until C5.4
+       dropped that column; a current version is where bytes live now. Archived
+       rows are excluded — the advisor filed them away, so counting them would
+       keep a number high that the screen says nothing about. */
     documentsCount: sql<number>`(
       SELECT COUNT(*)::int FROM ${schema.documents} d
-      WHERE d.client_id = ${schema.clients}."id" AND d.storage_path IS NOT NULL
+      WHERE d.client_id = ${schema.clients}."id" AND d.current_version_id IS NOT NULL AND d.archived_at IS NULL
     )`.as('documents_count'),
+    /* What this client still owes: the "N pending" pill and half the attention
+       sort on the client directory. This counted the legacy `is_requested` /
+       `has_update_request` flags; asking is a checklist request now, and the two
+       outstanding statuses are the ones sitting with the client. Matches
+       `serialize.ts#isOverdue`'s idea of outstanding, and must move with it. */
     pendingUpdates: sql<number>`(
-      SELECT COUNT(*)::int FROM ${schema.documents} d
-      WHERE d.client_id = ${schema.clients}."id" AND (d.is_requested = true OR d.has_update_request = true)
+      SELECT COUNT(*)::int FROM ${schema.requests} r
+      WHERE r.client_id = ${schema.clients}."id"
+        AND r.status IN ('requested', 'needs_correction')
+        AND r.archived_at IS NULL
     )`.as('pending_updates'),
     unreadMessages: sql<number>`(
       SELECT COUNT(*)::int FROM ${schema.messages} m
@@ -103,25 +115,60 @@ const createClientSchema = z.object({
   password: passwordSchema.optional(),
 });
 
+/**
+ * One client per address, the same rule `clients_email_normalized_key` enforces
+ * in the database (C5.4). Checked here so the advisor gets a sentence rather
+ * than a 500, and caught there as well because two advisors typing at once is a
+ * race this check cannot win.
+ *
+ * Deliberately NOT scoped to the calling provider: the index is global, so a
+ * per-provider check would pass and the insert would still fail. Answering
+ * "already in use" without saying whose keeps one firm from probing another's
+ * client list — the pilot has a single advisor, and this stays true if it grows.
+ */
+const EMAIL_TAKEN = { error: 'A client with that email address already exists.', code: 'email_taken' };
+
+async function emailIsTaken(email: string, exceptId?: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: schema.clients.id })
+    .from(schema.clients)
+    .where(eq(schema.clients.emailNormalized, normalizeEmail(email)));
+  return Boolean(row) && row.id !== exceptId;
+}
+
+/** Postgres unique-violation, i.e. the race above actually happened. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
+}
+
 router.post('/', requireProvider, async (req, res) => {
   const parsed = createClientSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   const { name, email, accountId, plan, aum, password } = parsed.data;
 
+  if (await emailIsTaken(email)) return res.status(409).json(EMAIL_TAKEN);
+
   const passwordHash = password ? await hashPassword(password) : null;
-  const [created] = await db
-    .insert(schema.clients)
-    .values({
-      providerId: req.auth!.providerId,
-      name,
-      email,
-      passwordHash,
-      passwordChangedAt: passwordHash ? new Date() : null,
-      accountId: accountId || `CL-${Date.now().toString().slice(-5)}`,
-      plan: plan || 'Core',
-      aum: aum === null || aum === undefined ? null : String(aum),
-    })
-    .returning({ id: schema.clients.id });
+  let created: { id: string };
+  try {
+    [created] = await db
+      .insert(schema.clients)
+      .values({
+        providerId: req.auth!.providerId,
+        name,
+        email,
+        emailNormalized: normalizeEmail(email),
+        passwordHash,
+        passwordChangedAt: passwordHash ? new Date() : null,
+        accountId: accountId || `CL-${Date.now().toString().slice(-5)}`,
+        plan: plan || 'Core',
+        aum: aum === null || aum === undefined ? null : String(aum),
+      })
+      .returning({ id: schema.clients.id });
+  } catch (err) {
+    if (isUniqueViolation(err)) return res.status(409).json(EMAIL_TAKEN);
+    throw err;
+  }
 
   await auditRequest(req, {
     action: 'client.created',
@@ -150,10 +197,15 @@ router.patch('/:id', requireProvider, async (req, res) => {
   if (!existing) return notFound(res);
 
   const { name, email, plan, aum, password } = parsed.data;
+  if (email !== undefined && (await emailIsTaken(email, existing.id))) return res.status(409).json(EMAIL_TAKEN);
+
   const now = new Date();
   const updates: Partial<typeof schema.clients.$inferInsert> = { updatedAt: now };
   if (name !== undefined) updates.name = name;
-  if (email !== undefined) updates.email = email;
+  if (email !== undefined) {
+    updates.email = email;
+    updates.emailNormalized = normalizeEmail(email);
+  }
   if (plan !== undefined) updates.plan = plan;
   if (aum !== undefined) updates.aum = aum === null ? null : String(aum);
   if (password !== undefined) {
@@ -161,7 +213,12 @@ router.patch('/:id', requireProvider, async (req, res) => {
     updates.passwordChangedAt = now;
   }
 
-  await db.update(schema.clients).set(updates).where(eq(schema.clients.id, req.params.id));
+  try {
+    await db.update(schema.clients).set(updates).where(eq(schema.clients.id, req.params.id));
+  } catch (err) {
+    if (isUniqueViolation(err)) return res.status(409).json(EMAIL_TAKEN);
+    throw err;
+  }
   // A new password ends every session the client had (plan: revocation paths).
   if (password !== undefined) await revokeAllSessions('client', req.params.id);
 

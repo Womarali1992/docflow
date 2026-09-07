@@ -7,7 +7,7 @@
     2. Drops and recreates the target database (name must start with docflow_restore - this
        script never restores over the live database; see docs\PILOT-RUNBOOK.md for promotion).
     3. pg_restore of db.dump, then mirrors the set's files\ into -RestoreTo (the restored
-       DATA_ROOT) and uploads\ into -RestoreTo\uploads (the legacy tree).
+       DATA_ROOT). A pre-C5.4 set also has uploads\, mirrored into -RestoreTo\uploads.
     4. Compares row counts with the manifest and runs scripts\integrity.mjs, which checks every
        document version's bytes against the database's sha256 and the manifest's.
     Prints PASS or FAIL and exits 0 / 1.
@@ -24,7 +24,7 @@
     Scratch database name (default docflow_restore).
 .PARAMETER RestoreTo
     Folder that receives the restored document tree (default %USERPROFILE%\docflow-restore). Mirrored:
-    <RestoreTo>\files for versions, <RestoreTo>\uploads for the legacy tree.
+    <RestoreTo>\files for versions (and <RestoreTo>\uploads for a pre-C5.4 set's legacy tree).
 .PARAMETER PgBin
     Folder containing pg_restore.exe (default: $env:PG_BIN or auto-detected).
 .PARAMETER AdminUrl
@@ -70,7 +70,13 @@ $set = (Resolve-Path $From).Path
 $manifestPath = Join-Path $set 'manifest.json'
 if (-not (Test-Path $manifestPath)) { throw "No manifest.json in $set" }
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-$manifestUploads = @($manifest.uploads)
+# A pre-C5.4 set also carries the legacy server\uploads tree. New sets do not,
+# and under StrictMode reading a property that is not there is an error - so ask
+# first. Restoring an older set has to keep working; that is what a backup is for.
+$manifestUploads = @()
+if ($manifest.PSObject.Properties.Name -contains 'uploads' -and $manifest.uploads) {
+    $manifestUploads = @($manifest.uploads)
+}
 
 $failures = @()
 
@@ -122,18 +128,21 @@ try {
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
 }
 
-# 4. Files. Two trees: versions under <RestoreTo>\files (storage keys already
-#    start with "files/", so RestoreTo is the DATA_ROOT of the restored system)
-#    and the legacy uploads beside it.
+# 4. Files: versions under <RestoreTo>\files (storage keys already start with
+#    "files/", so RestoreTo is the DATA_ROOT of the restored system), plus the
+#    legacy tree beside it when restoring a set taken before C5.4.
 Write-Log "Mirroring document versions to $filesFull"
 New-Item -ItemType Directory -Force -Path $filesFull | Out-Null
 & robocopy (Join-Path $set 'files') $filesFull /MIR /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (files)" }
 
-Write-Log "Mirroring legacy uploads to $uploadsFull"
-New-Item -ItemType Directory -Force -Path $uploadsFull | Out-Null
-& robocopy (Join-Path $set 'uploads') $uploadsFull /MIR /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (uploads)" }
+$uploadsSet = Join-Path $set 'uploads'
+if (Test-Path $uploadsSet) {
+    Write-Log "Mirroring legacy uploads to $uploadsFull (pre-C5.4 set)"
+    New-Item -ItemType Directory -Force -Path $uploadsFull | Out-Null
+    & robocopy $uploadsSet $uploadsFull /MIR /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (uploads)" }
+}
 
 # 5. Row counts vs manifest.
 Write-Log 'Comparing row counts with the manifest'
@@ -153,9 +162,8 @@ if ($restored.migrations -ne $manifest.counts.migrations) { $failures += 'migrat
 # 6. File integrity against the restored database and the manifest.
 Write-Log 'Checking every stored file against the restored database and the manifest'
 $integrity = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\integrity.mjs') `
-    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--uploads', $uploadsFull, '--manifest', $manifestPath) -IgnoreExitCode
+    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--manifest', $manifestPath) -IgnoreExitCode
 $rows += [pscustomobject]@{ item = 'versions verified'; manifest = $manifestFiles.Count; restored = $integrity.checkedVersions; ok = [bool]$integrity.ok }
-$rows += [pscustomobject]@{ item = 'legacy files verified'; manifest = $manifestUploads.Count; restored = $integrity.checkedUploads; ok = [bool]$integrity.ok }
 if (-not $integrity.ok) {
     foreach ($m in @($integrity.missing)) { $failures += "missing $($m.kind) file $($m.path) ($($m.id))" }
     foreach ($m in @($integrity.mismatched)) { $failures += "$($m.path): $($m.reason)" }

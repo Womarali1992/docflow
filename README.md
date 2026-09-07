@@ -28,7 +28,8 @@ cd server
 cp .env.example .env          # adjust if your DB/secret differ
 npm install
 npm run db:migrate            # apply schema migrations
-npm run db:seed               # seed demo data (idempotent; writes placeholder PDFs)
+npm run db:seed               # demo accounts + MFA (idempotent)
+npm run db:demo               # a tax season of documents, so there is something to look at
 npm run dev                   # API on http://localhost:4000
 ```
 
@@ -96,7 +97,8 @@ Root (frontend):
 | `node scripts/create-test-db.mjs`  | Create `docflow_test` once (set `PG_ADMIN_URL` if the dev role lacks CREATEDB) |
 | `npm run db:generate`              | Generate a Drizzle migration from the schema                       |
 | `npm run db:migrate`               | Apply pending migrations                                           |
-| `npm run db:seed`                  | Seed / self-heal demo data                                         |
+| `npm run db:seed`                  | Demo accounts (advisor + 3 clients) and their MFA enrollment       |
+| `npm run db:demo`                  | A tax season of engagements, checklists, uploads and deliverables  |
 | `npm run count`                    | Row counts + files on record + migrations, as JSON (`--url` to point elsewhere) |
 | `npm run integrity`                | Verify every stored file exists and matches the database / a backup manifest |
 | `npm run db:create -- --name docflow_restore` | Create a scratch database (`docflow_test` / `docflow_restore*` only) |

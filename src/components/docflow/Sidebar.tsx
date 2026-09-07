@@ -9,8 +9,9 @@ import { useAuth } from '@/context/AuthContext';
  * the queue, the people, their files, the checklists you reuse, your account.
  *
  * Calendar and Reports are gone — they pointed at the same documents list with
- * a folder filter, which is not a place. The financial overview is still
- * reachable at /overview until the pilot decides its fate (C5.4).
+ * a folder filter, which is not a place. The financial overview went the same
+ * way in C5.4: it drew a calendar of document due dates, and deadlines have
+ * lived on checklist requests since C3.4.
  */
 const Sidebar: React.FC = () => {
   const navigate = useNavigate();

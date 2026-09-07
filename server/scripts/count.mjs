@@ -15,7 +15,6 @@ export const TABLES = [
   'documents',
   'messages',
   'activities',
-  'presets',
   'sessions',
   'mfa_totp',
   'recovery_codes',
@@ -55,9 +54,18 @@ export async function countAll(url) {
       const r = await client.query(`SELECT COUNT(*)::int AS n FROM "${t}"`);
       tables[t] = r.rows[0].n;
     }
-    const withFile = await client.query(
-      'SELECT COUNT(*)::int AS n FROM documents WHERE storage_path IS NOT NULL'
-    );
+    /* Documents with bytes to serve. This read `storage_path IS NOT NULL` until
+       C5.4 dropped that column; a version is where bytes live now. Tolerated
+       rather than assumed, for the same reason `missingTables` is: this runs
+       against restored older backup sets, whose schema is whatever it was. */
+    let withFile = null;
+    try {
+      withFile = (
+        await client.query('SELECT COUNT(*)::int AS n FROM documents WHERE current_version_id IS NOT NULL')
+      ).rows[0].n;
+    } catch {
+      // Older set: no current_version_id column. Report null, not a crash.
+    }
     let migrations = 0;
     let lastMigrationAt = null;
     try {
@@ -73,7 +81,7 @@ export async function countAll(url) {
       database: dbNameOf(url),
       tables,
       missingTables,
-      documentsWithFile: withFile.rows[0].n,
+      documentsWithFile: withFile,
       migrations,
       lastMigrationAt,
     };

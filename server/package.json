@@ -20,7 +20,6 @@
     "admin": "tsx src/admin.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
-    "db:import-legacy": "tsx src/db/migrate-legacy.ts",
     "db:seed": "tsx src/db/seed.ts",
     "db:demo": "tsx src/db/demo.ts",
     "db:studio": "drizzle-kit studio"

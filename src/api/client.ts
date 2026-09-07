@@ -14,7 +14,6 @@ import type {
   NotificationList,
   OneTimeLink,
   OpsStatus,
-  RequestFrequency,
   RequestItem,
   RequestTemplate,
   Review,
@@ -31,8 +30,8 @@ import type {
 const BASE = '/api';
 
 const DATE_FIELDS = new Set([
-  'createdAt', 'updatedAt', 'uploadedAt', 'requestedAt', 'dueDate',
-  'updateRequestedAt', 'lastActivity', 'readAt', 'lastSeenAt', 'expiresAt', 'enrolledAt',
+  'createdAt', 'updatedAt', 'uploadedAt', 'dueDate',
+  'lastActivity', 'readAt', 'lastSeenAt', 'expiresAt', 'enrolledAt',
   'deactivatedAt', 'invitePendingUntil', 'passwordChangedAt',
   /* Workflow model (C2.1/C2.2). `generatedAt`, `time` and `oldestPendingAt` are
      deliberately absent: those are timestamps *about* a response, not fields of a
@@ -325,46 +324,22 @@ export const api = {
     unshare: (id: string) => request<Document>(`/documents/${id}/unshare`, { method: 'POST' }),
     archive: (id: string) => request<Document>(`/documents/${id}/archive`, { method: 'POST' }),
     unarchive: (id: string) => request<Document>(`/documents/${id}/unarchive`, { method: 'POST' }),
-    create: (input: {
-      clientId: string;
-      name: string;
-      type?: string;
-      folder?: string;
-      isRequested?: boolean;
-      description?: string;
-      requestFrequency?: RequestFrequency;
-      dueDate?: string;
-    }) =>
+    /** An empty document record; the bytes arrive separately through an upload route. */
+    create: (input: { clientId: string; name: string; category?: string; engagementId?: string }) =>
       request<Document>('/documents', {
         method: 'POST',
         body: JSON.stringify(input),
       }),
+    /** Filing only — the review verbs above are what change a document's state. */
     update: (id: string, patch: Partial<{
-      /* Filing (C2.1 workflow columns). */
       displayName: string;
       category: string | null;
       engagementId: string | null;
-      /* Legacy fields, kept until C5.4. */
-      name: string;
-      folder: string;
-      isRequested: boolean;
-      status: 'pending' | 'reviewed' | 'needs_update' | 'in_review';
-      hasUpdateRequest: boolean;
-      updateRequestDescription: string;
-      requestedVersion: string;
-      requestFrequency: RequestFrequency;
-      dueDate: string | null;
     }>) =>
       request<Document>(`/documents/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
       }),
-    /** Upload (or replace) the stored file for a document. */
-    uploadFile: (id: string, file: File) => {
-      const fd = new FormData();
-      fd.append('file', file);
-      return request<Document>(`/documents/${id}/file`, { method: 'POST', body: fd });
-    },
     /** Same-origin URL for the authenticated download endpoint (usable in <a href>). */
     downloadUrl: (id: string, opts?: { attachment?: boolean }) =>
       `${BASE}/documents/${id}/download${opts?.attachment ? '?disposition=attachment' : ''}`,

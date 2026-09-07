@@ -1,8 +1,6 @@
 // Types mirroring the server schema (see server/src/db/schema.ts).
 // Dates are deserialized from ISO strings into Date objects by the API client.
 
-export type RequestFrequency = 'daily' | 'monthly' | 'quarterly' | 'yearly' | 'one-time';
-export type DocumentStatus = 'pending' | 'reviewed' | 'needs_update' | 'in_review';
 export type ActorKind = 'provider' | 'client';
 
 export interface Provider {
@@ -56,10 +54,6 @@ export interface Document {
   clientId: string;
   providerId: string;
   name: string;
-  type?: string | null;
-  size?: string | null;
-  folder?: string | null;
-  url?: string | null;
   /** True when bytes are stored for this document; the storage path itself never leaves the server. */
   hasFile: boolean;
   mimeType?: string | null;
@@ -67,22 +61,11 @@ export interface Document {
   uploadedByKind?: ActorKind | null;
   uploadedById?: string | null;
   uploadedAt: Date;
-  isRequested: boolean;
-  requestedById?: string | null;
-  requestedAt?: Date | null;
-  description?: string | null;
-  requestFrequency?: RequestFrequency | null;
-  dueDate?: Date | null;
-  hasUpdateRequest: boolean;
-  updateRequestedById?: string | null;
-  updateRequestedAt?: Date | null;
-  updateRequestDescription?: string | null;
-  requestedVersion?: string | null;
-  status?: DocumentStatus | null;
   createdAt: Date;
   updatedAt: Date;
 
-  /* ---- Workflow model (C2.1). Null on a row the legacy import has not touched. ---- */
+  /* ---- Workflow model (C2.1); the only model there is, since C5.4 dropped the
+     legacy columns this shape used to mirror. ---- */
   engagementId?: string | null;
   requestId?: string | null;
   kind?: DocumentKind | null;

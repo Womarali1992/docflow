@@ -255,7 +255,7 @@ describe('the legacy download still works', () => {
     fx = await seedFixture();
   });
 
-  it('resolves the current version and keeps Document.url pointing at it', async () => {
+  it('resolves the current version, with no legacy path left to fall back to', async () => {
     const client = await loginAs(fx, 'client1a');
     const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, fx.client1a.upload));
 
@@ -267,7 +267,18 @@ describe('the legacy download still works', () => {
 
     expect(res.status).toBe(200);
     expect(Buffer.from(res.body as Buffer).equals(PDF_BYTES)).toBe(true);
-    // The url column the current frontend follows is unchanged.
-    expect(doc.url).toBe(`/api/documents/${fx.client1a.upload}/download`);
+    // The bytes came from the current version, which is now the only source:
+    // C5.4 dropped `storage_path`, so a document with no version has no file.
+    expect(doc.currentVersionId).toBe(fx.client1a.uploadVersion);
+  });
+
+  it('says "no file attached" for a document that never got a version', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const res = await request(app)
+      .get(`/api/documents/${fx.client1a.request}/download`)
+      .set('Cookie', client);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('No file attached');
   });
 });

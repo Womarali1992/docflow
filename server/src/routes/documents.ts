@@ -1,29 +1,28 @@
 /**
- * Documents — rebuilt around kinds and versions.
+ * Documents — kinds and versions.
  *
  * A document is a named slot in a client's file; its bytes are versions. What
  * the advisor can do to it is explicit: accept, request a correction, share,
  * unshare, archive. PATCH is organization only (title, category, which
  * engagement it belongs to) — never review state, never sharing (invariant 5).
  *
- * Compatibility ledger, kept until C5.4:
- *   - `GET /documents` keeps the legacy list shape (C3.4 replaces the callers);
- *   - `GET /documents/:id/download` still serves the legacy `storagePath` bytes
- *     (C2.4 replaces it with per-version delivery);
- *   - `POST /documents/:id/file` still writes in place (C2.3 makes it a version);
- *   - `DELETE /documents/:id` now ARCHIVES instead of deleting — nothing a
- *     client sent is ever destroyed by a click.
+ * C5.4 closed the last of this file's compatibility ledger: `POST
+ * /documents/:id/file` is gone (no screen had called it since C4.1), the list
+ * answers the contracted shape, and `GET /documents/:id/download` no longer has
+ * a legacy `storagePath` to fall back to — every byte is a version under
+ * DATA_ROOT. The route itself stays: it is a public contract, and it resolves
+ * whichever version is current.
+ *
+ * `DELETE /documents/:id` ARCHIVES rather than deletes — nothing a client sent
+ * is ever destroyed by a click.
  */
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import fs from 'node:fs';
 import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
-import { stageUpload, stagedFrom, discardStaged } from '../files/staging.js';
-import { publishStagedUpload } from '../files/publish.js';
-import { INSTRUCTIONS_MAX, NAME_MAX, uploadLimiter } from '../security/limits.js';
-import { absPathFor, humanSize } from '../storage.js';
+import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
 import { absPathForKey } from '../files/store.js';
 import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
@@ -56,16 +55,9 @@ async function loadForAdvisor(req: Request, res: Response): Promise<Document | n
   return doc;
 }
 
-/** A client may attach bytes to their own open requests and re-upload their own files — never advisor material. */
-function clientMayReplaceFile(doc: Document): boolean {
-  if (doc.kind === 'deliverable' || doc.folder === 'Reports') return false;
-  return Boolean(doc.isRequested) || doc.requestId !== null || doc.uploadedByKind === 'client';
-}
-
 /**
- * The legacy list, still the shape the current frontend reads. Filters now come
- * from the workflow columns; a client never sees an unshared deliverable or an
- * archived row.
+ * The document list. Filters come from the workflow columns; a client never
+ * sees an unshared deliverable or an archived row.
  */
 router.get('/', async (req, res) => {
   const auth = req.auth!;
@@ -77,7 +69,7 @@ router.get('/', async (req, res) => {
       : [
           eq(schema.documents.clientId, auth.sub),
           // Deliverables appear only once shared; everything else is theirs already.
-          or(eq(schema.documents.kind, 'client_upload'), isNull(schema.documents.kind), isNotNull(schema.documents.sharedAt))!,
+          or(eq(schema.documents.kind, 'client_upload'), isNotNull(schema.documents.sharedAt))!,
         ];
 
   if (auth.kind === 'provider' && q.clientId && isId(q.clientId)) conditions.push(eq(schema.documents.clientId, q.clientId));
@@ -151,11 +143,7 @@ async function decide(req: Request, res: Response, decision: 'accepted' | 'needs
     note: parsed.data.note ?? null,
     createdAt: now,
   });
-  // Keep the legacy status column in step so the current UI still reads right.
-  await db
-    .update(schema.documents)
-    .set({ status: decision === 'accepted' ? 'reviewed' : 'needs_update', updatedAt: now })
-    .where(eq(schema.documents.id, doc.id));
+  await db.update(schema.documents).set({ updatedAt: now }).where(eq(schema.documents.id, doc.id));
 
   await auditRequest(req, {
     action: decision === 'accepted' ? 'request.accepted' : 'request.correction_requested',
@@ -262,11 +250,10 @@ router.post('/:id/unarchive', async (req, res) => {
 /* --------------------------------------------------------------- legacy API */
 
 /*
- * Legacy download. Since C2.3 new bytes are versions under DATA_ROOT, so this
- * resolves the current version first and only falls back to the legacy
- * `storagePath` for rows the import left in place. C2.4 adds the per-version
- * routes with the full delivery headers; this keeps the existing link working
- * in the meantime.
+ * Download the document — that is, whichever version is current. A stable,
+ * shareable link that does not name a version is the reason this outlived the
+ * legacy tree it was built for; C2.4's per-version routes sit beside it for
+ * when the caller means one specific version.
  *
  * Only a published, clean version is ever served (invariant 3).
  */
@@ -296,10 +283,10 @@ router.get('/:id/download', async (req, res) => {
     }
   }
 
-  if (!abs && !doc.storagePath) {
-    // No current version and no legacy file. If something was uploaded and is
-    // still being checked, say so — "no file attached" would contradict the
-    // "we received it" the client was just given.
+  if (!abs) {
+    // No servable version. If something was uploaded and is still being
+    // checked, say so — "no file attached" would contradict the "we received
+    // it" the client was just given.
     const [latest] = await db
       .select()
       .from(schema.documentVersions)
@@ -313,14 +300,6 @@ router.get('/:id/download', async (req, res) => {
       return res.status(409).json({ error: 'This file did not pass the virus check.', code: 'infected' });
     }
     return res.status(404).json({ error: 'No file attached' });
-  }
-
-  if (!abs) {
-    try {
-      abs = absPathFor(doc.storagePath!);
-    } catch {
-      return res.status(404).json({ error: 'File missing' });
-    }
   }
 
   const dispType = req.query.disposition === 'attachment' ? 'attachment' : 'inline';
@@ -339,107 +318,22 @@ router.get('/:id/download', async (req, res) => {
 });
 
 /*
- * Legacy upload endpoint. Since C2.3 it no longer writes in place: it runs the
- * same authorize → stage → validate → scan → publish pipeline as the new routes
- * and creates a version, so a caller that has not been updated yet still cannot
- * put unscanned bytes into the system or overwrite history.
+ * An empty document — a named slot with no bytes yet. The upload routes create
+ * their own document, so this is for the caller that wants the slot first.
  *
- * The response keeps the old shape (the serialized document) so the current
- * frontend is unaffected. Compatibility ledger: removed in C5.4.
- *
- * The target is resolved and authorized BEFORE the multipart body is parsed
- * (invariant 1) — `stageUpload` runs inside the callback, never before it.
+ * C5.4 contracted the input to the workflow model. `isRequested`, `description`,
+ * `requestFrequency` and `dueDate` used to make this a second way to ask a
+ * client for something; asking is what a checklist request is for (C2.2), and
+ * two doors onto one idea is how they drift apart.
  */
-router.post('/:id/file', uploadLimiter, async (req: Request, res: Response, next: NextFunction) => {
-  const auth = req.auth!;
-  const doc = await findDocument(auth, req.params.id);
-  if (!doc) return notFound(res);
-  if (auth.kind === 'client' && !clientMayReplaceFile(doc)) return advisorOnly(res);
-
-  stageUpload(req, res, (err?: unknown) => {
-    if (err) return next(err);
-    legacyAttach(req, res, doc).catch((e) => {
-      discardStaged(req.file?.path);
-      next(e);
-    });
-  });
-});
-
-async function legacyAttach(req: Request, res: Response, doc: Document) {
-  const auth = req.auth!;
-  const staged = stagedFrom(req);
-  if (!staged) return res.status(400).json({ error: 'No file provided' });
-
-  const outcome = await publishStagedUpload({
-    document: doc,
-    staged,
-    uploadedByKind: auth.kind,
-    uploadedById: auth.sub,
-    ip: req.ip ?? null,
-  });
-  if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error, code: outcome.code });
-
-  const now = new Date();
-  const wasRequested = doc.isRequested;
-  const hadFile = Boolean(doc.storagePath) || doc.currentVersionId !== null;
-
-  // Keep the legacy columns in step so the current UI still reads correctly
-  // (Compatibility ledger). `storagePath` is deliberately NOT set: the bytes
-  // live under DATA_ROOT now, and nothing new goes into server/uploads.
-  const [updated] = await db
-    .update(schema.documents)
-    .set({
-      mimeType: outcome.result.version.mimeType,
-      sizeBytes: outcome.result.version.sizeBytes,
-      size: humanSize(outcome.result.version.sizeBytes),
-      url: `/api/documents/${doc.id}/download`,
-      uploadedByKind: auth.kind,
-      uploadedById: auth.sub,
-      uploadedAt: now,
-      isRequested: false,
-      hasUpdateRequest: false,
-      updateRequestedById: null,
-      updateRequestedAt: null,
-      updateRequestDescription: null,
-      requestedVersion: null,
-      status: 'pending',
-      updatedAt: now,
-    })
-    .where(eq(schema.documents.id, doc.id))
-    .returning();
-
-  const description = wasRequested
-    ? `fulfilled request: ${updated.name}`
-    : hadFile
-      ? `uploaded new version: ${updated.name}`
-      : `uploaded ${updated.name}`;
-
-  await recordActivity({
-    providerId: updated.providerId,
-    clientId: updated.clientId,
-    type: 'document',
-    description,
-    actorKind: auth.kind,
-    actorId: auth.sub,
-    actorName: auth.name,
-    targetId: updated.id,
-  });
-
-  res.status(outcome.status === 202 ? 202 : 200).json(serializeDocument(updated));
-}
-
-/* Create a document record (legacy shape; C2.3 replaces the upload paths). */
-const createSchema = z.object({
-  clientId: z.string().uuid(),
-  name: z.string().min(1).max(NAME_MAX),
-  type: z.string().max(NAME_MAX).optional(),
-  folder: z.string().max(NAME_MAX).optional(),
-  engagementId: z.string().uuid().optional(),
-  isRequested: z.boolean().optional(),
-  description: z.string().max(INSTRUCTIONS_MAX).optional(),
-  requestFrequency: z.enum(['daily', 'monthly', 'quarterly', 'yearly', 'one-time']).optional(),
-  dueDate: z.string().datetime().optional(),
-});
+const createSchema = z
+  .object({
+    clientId: z.string().uuid(),
+    name: z.string().min(1).max(NAME_MAX),
+    category: z.string().max(NAME_MAX).optional(),
+    engagementId: z.string().uuid().optional(),
+  })
+  .strict();
 
 router.post('/', async (req, res) => {
   const auth = req.auth!;
@@ -461,7 +355,7 @@ router.post('/', async (req, res) => {
     engagementId = engagement.id;
   }
 
-  const folder = data.folder || 'Documents';
+  const category = data.category || 'Documents';
   const [doc] = await db
     .insert(schema.documents)
     .values({
@@ -469,27 +363,22 @@ router.post('/', async (req, res) => {
       providerId: auth.providerId,
       name: data.name,
       displayName: data.name,
-      type: data.type,
-      folder,
-      category: folder,
+      category,
       engagementId,
-      kind: folder === 'Reports' ? 'deliverable' : 'client_upload',
-      isRequested: data.isRequested ?? false,
-      requestedById: data.isRequested ? auth.sub : null,
-      requestedAt: data.isRequested ? new Date() : null,
-      description: data.description,
-      requestFrequency: data.requestFrequency,
-      dueDate: data.dueDate ? new Date(data.dueDate) : null,
-      uploadedByKind: data.isRequested ? null : auth.kind,
-      uploadedById: data.isRequested ? null : auth.sub,
+      /* An advisor's own file is material they are sending; a client's is a
+         submission. The old rule read the folder name, which meant renaming a
+         drawer changed what a document was. */
+      kind: auth.kind === 'provider' ? 'deliverable' : 'client_upload',
+      uploadedByKind: auth.kind,
+      uploadedById: auth.sub,
     })
     .returning();
 
   await recordActivity({
     providerId: auth.providerId,
     clientId: doc.clientId,
-    type: data.isRequested ? 'update' : 'document',
-    description: data.isRequested ? `requested ${doc.name}` : `uploaded ${doc.name}`,
+    type: 'document',
+    description: `added ${doc.name}`,
     actorKind: auth.kind,
     actorId: auth.sub,
     actorName: auth.name,

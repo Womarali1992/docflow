@@ -1,12 +1,11 @@
 <#
 .SYNOPSIS
-    DocFlow backup, v2: pg_dump + DATA_ROOT files + legacy uploads + manifest + backup_runs + prune.
+    DocFlow backup, v3: pg_dump + DATA_ROOT files + manifest + backup_runs + prune.
 
 .DESCRIPTION
     Writes one self-contained backup set per run under <Dest>\<yyyy-MM-dd>:
         db.dump          pg_dump custom-format archive of the DATABASE_URL database
         files\           copy of DATA_ROOT\files - every document version's bytes (immutable, so /XO)
-        uploads\         copy of server\uploads - the legacy tree, until C5.4 removes it
         config\          server.env (contains secrets - Dest must be an encrypted volume) and the migrations journal
         manifest.json    sha256 of the dump and every file, row counts, written by npm run backup:manifest
     Then records the run in backup_runs (npm run backup:record) and removes sets older than -Keep days.
@@ -15,8 +14,9 @@
     manifest is what makes the set checkable: it fails the run if a file the database says is
     servable is missing from the copy. Never writes inside the repository.
 
-    Since C2.3 the bytes live under DATA_ROOT, not in server\uploads. Both are copied while the
-    legacy tree exists; the manifest verifies both against the database.
+    Every byte lives under DATA_ROOT as a document version; the manifest verifies each one against
+    the database. C5.4 removed the legacy server\uploads tree, so there is only the one tree to copy
+    - restore.ps1 still understands an older set that has both.
 
     Reads DATABASE_URL and DATA_ROOT from server\.env. Needs node on PATH and the PostgreSQL client
     tools ($env:PG_BIN, or the newest install under Program Files).
@@ -49,7 +49,6 @@ if (-not $PgBin) { $PgBin = $env:PG_BIN }
 
 $repo = Get-RepoRoot
 $serverDir = Join-Path $repo 'server'
-$uploadsSrc = Join-Path $serverDir 'uploads'
 $envFile = Join-Path $serverDir '.env'
 $destFull = [System.IO.Path]::GetFullPath($Dest)
 if ($destFull.StartsWith($repo, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -115,16 +114,6 @@ try {
         Write-Log "No files directory at $filesSrc yet (nothing uploaded since C2.3)"
     }
 
-    $uploadsDest = Join-Path $set 'uploads'
-    New-Item -ItemType Directory -Path $uploadsDest -Force | Out-Null
-    if (Test-Path $uploadsSrc) {
-        Write-Log "Copying legacy uploads from $uploadsSrc"
-        & robocopy $uploadsSrc $uploadsDest /E /R:2 /W:5 /NFL /NDL /NJH /NJS /NP | Out-Null
-        if ($LASTEXITCODE -ge 8) { throw "robocopy exited with $LASTEXITCODE (uploads)" }
-        Write-Log "  $(@(Get-ChildItem $uploadsDest -File -Recurse).Count) legacy file(s) copied"
-    } else {
-        Write-Log "No legacy uploads directory at $uploadsSrc"
-    }
 
     # 4. Configuration.
     $configDir = Join-Path $set 'config'

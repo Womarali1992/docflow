@@ -33,7 +33,6 @@ const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
 
   const crumbs: { label: string; to?: string; muted?: boolean }[] = (() => {
     if (pathname === '/') return [{ label: 'Overview' }];
-    if (pathname === '/overview') return [{ label: 'Financial overview' }];
     if (pathname.startsWith('/settings')) return [{ label: 'Settings' }];
     if (pathname.startsWith('/templates')) return [{ label: 'Templates' }];
     if (pathname === '/clients') return [{ label: 'Clients' }];

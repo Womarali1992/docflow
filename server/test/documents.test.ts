@@ -41,18 +41,18 @@ describe('documents', () => {
   it('lets a client re-upload their own file but never advisor material', async () => {
     const cookie = await loginAs(fx, 'client1a');
 
+    // C5.4 removed POST /documents/:id/file; a new version is how bytes arrive.
     const own = await attachPdf(
-      request(app).post(`/api/documents/${fx.client1a.upload}/file`).set('Cookie', cookie)
+      request(app).post(`/api/documents/${fx.client1a.upload}/versions`).set('Cookie', cookie)
     );
-    // Since C2.3 this runs the real pipeline: 202 = stored and being checked.
-    // The document keeps serving the version that WAS checked, so it still has a
-    // readable file — the new one simply is not current yet.
+    // 202 = stored and being checked. The document keeps serving the version that
+    // WAS checked, so it still has a readable file — the new one is not current yet.
     expect(own.status).toBe(202);
-    expect(own.body.hasFile).toBe(true);
-    expect(own.body.uploadedByKind).toBe('client');
+    expect(own.body.document.hasFile).toBe(true);
+    expect(own.body.version.versionNo).toBe(2);
 
     const theirs = await attachPdf(
-      request(app).post(`/api/documents/${fx.client1a.deliverable}/file`).set('Cookie', cookie)
+      request(app).post(`/api/documents/${fx.client1a.deliverable}/versions`).set('Cookie', cookie)
     );
     expect(theirs.status).toBe(403);
 
@@ -78,15 +78,19 @@ describe('documents', () => {
 
     const accepted = await request(app).post(`${url}/accept`).set('Cookie', advisor).send({});
     expect(accepted.status).toBe(200);
-    // The legacy column is still kept in step underneath, until C5.4 drops it.
-    expect(accepted.body.status).toBe('reviewed');
+    // C5.4 dropped the legacy `status` column the decision used to mirror; the
+    // decision itself is the record, and it is read from /reviews.
+    expect(accepted.body).not.toHaveProperty('status');
 
     const correction = await request(app)
       .post(`${url}/request-correction`)
       .set('Cookie', advisor)
       .send({ note: 'Need the full statement' });
     expect(correction.status).toBe(200);
-    expect(correction.body.status).toBe('needs_update');
+
+    const history = await request(app).get(`${url}/reviews`).set('Cookie', advisor);
+    expect(history.status).toBe(200);
+    expect(history.body.map((r: { decision: string }) => r.decision)).toEqual(['needs_correction', 'accepted']);
 
     // Filing still patches, and only filing.
     const filed = await request(app).patch(url).set('Cookie', advisor).send({ displayName: 'Bank statement (full year)' });
@@ -100,11 +104,12 @@ describe('documents', () => {
     const clientFiling = await request(app).patch(url).set('Cookie', client).send({ displayName: 'mine now' });
     expect(clientFiling.status).toBe(403);
 
-    // ...but re-uploading resolves the correction and puts the document back in the queue.
-    const again = await attachPdf(request(app).post(`${url}/file`).set('Cookie', client));
+    // ...but re-uploading is theirs to do. C5.4 removed POST /documents/:id/file;
+    // a new version is the only way bytes arrive, and it supersedes the last one.
+    const again = await attachPdf(request(app).post(`${url}/versions`).set('Cookie', client));
     expect(again.status).toBe(202);
-    expect(again.body.hasUpdateRequest).toBe(false);
-    expect(again.body.status).toBe('pending');
+    expect(again.body.version.versionNo).toBe(2);
+    expect(again.body.document).not.toHaveProperty('hasUpdateRequest');
   });
 
   it("gives a provider the same answer for a foreign client and a missing one", async () => {

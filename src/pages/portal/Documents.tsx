@@ -22,6 +22,13 @@ import { I } from '@/components/docflow/icons';
 
 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
+const formatBytes = (n?: number | null) => {
+  if (!n && n !== 0) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 const PortalDocuments: React.FC = () => {
   const work = useClientWork();
   const queue = useUploadQueue();
@@ -125,13 +132,10 @@ const PortalDocuments: React.FC = () => {
           </div>
           <div className="df-list">
             {group.items.map((doc) => (
-              <div key={doc.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+              <div key={doc.id} className="df-row" style={{ gridTemplateColumns: '1fr' }}>
                 <div style={{ minWidth: 0 }}>
                   <div className="df-name">{doc.displayName ?? doc.name}</div>
-                  <div className="df-meta">Sent {formatDate(doc.uploadedAt)}{doc.size ? ` · ${doc.size}` : ''}</div>
-                </div>
-                <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                  {doc.hasUpdateRequest && <span className="df-pill df-danger">Needs another look</span>}
+                  <div className="df-meta">Sent {formatDate(doc.uploadedAt)}{doc.sizeBytes ? ` · ${formatBytes(doc.sizeBytes)}` : ''}</div>
                 </div>
               </div>
             ))}

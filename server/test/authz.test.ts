@@ -53,6 +53,28 @@ const CLIENTS: Actor[] = ['client1a', 'client1b', 'client2a'];
 const attachPdf = (t: Test) =>
   t.attach('file', PDF_BYTES, { filename: 'upload.pdf', contentType: 'application/pdf' });
 
+/**
+ * The newest decision recorded against a document, read back through the API.
+ *
+ * Accept and request-correction used to be provable from their own response:
+ * they overwrote `documents.status`, so the returned document said `reviewed`
+ * or `needs_update`. C5.4 dropped that column — a decision is a row in
+ * `reviews` now, and the document it describes is deliberately unchanged apart
+ * from `updatedAt`. So the proof that the verb did something moved one request
+ * away, to the history the advisor actually reads. Ordered newest-first by the
+ * route, hence `[0]`.
+ */
+async function latestReview(fx: Fixture, actor: Actor, documentId: string) {
+  // `check` only runs on a 2xx, and no anonymous actor has one on these rows —
+  // if that ever changes, an unauthenticated advisor verb succeeded and this
+  // should stop the suite rather than quietly log in as somebody.
+  if (actor === 'anonymous') throw new Error('anonymous reached an advisor verb');
+  const cookie = await loginAs(fx, actor);
+  const res = await request(app).get(`/api/documents/${documentId}/reviews`).set('Cookie', cookie);
+  expect(res.status, JSON.stringify(res.body)).toBe(200);
+  return res.body[0];
+}
+
 const cases: Case[] = [
   /* ---------------------------------------------------------------- auth */
   {
@@ -281,24 +303,21 @@ const cases: Case[] = [
     },
   },
   {
-    // Since C2.3 the legacy route runs the real pipeline, so it answers 202
-    // (stored, being checked) rather than 200 while scanning is switched off.
-    name: 'POST /api/documents/:id/file fulfils an open request',
+    // Removed in C5.4. No screen had called it since C4.1, and it was the last
+    // route that wrote the legacy columns. One row rather than silence, as C3.2
+    // did for /presets: a compatibility route that quietly comes back is how a
+    // legacy surface survives forever. 404 for every actor who got far enough to
+    // be told anything — including the advisor, and including a document they
+    // can otherwise see.
+    //
+    // Anonymous is 401, not the 404 /presets gives: `/api/presets` has no mount
+    // at all so it falls straight to the app's 404, while this path is under
+    // `/api/documents`, whose router authenticates before routing. Every other
+    // document row here ends in 401 for the same reason. Nothing leaks either
+    // way — the answer is identical for a path that never existed.
+    name: 'POST /api/documents/:id/file (removed in C5.4 — uploads create versions)',
     req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.request}/file`)),
-    expect: S(202, 404, 202, 404, 404, 401),
-    check: (res) => {
-      expect(res.body.isRequested).toBe(false);
-      expect(res.body.status).toBe('pending');
-      // hasFile means "there is something readable". With scanning switched off
-      // the version is stored but never published, so there is not — yet.
-      expect(res.body.hasFile).toBe(false);
-      expect(res.body).not.toHaveProperty('storagePath');
-    },
-  },
-  {
-    name: 'POST /api/documents/:id/file cannot overwrite an advisor deliverable as a client',
-    req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.deliverable}/file`)),
-    expect: S(202, 404, 403, 404, 404, 401),
+    expect: S(404, 404, 404, 404, 404, 401),
   },
   {
     name: 'POST /api/documents (create for a client)',
@@ -308,6 +327,10 @@ const cases: Case[] = [
       expect(res.body.clientId).toBe(fx.client1a.id);
       expect(res.body.providerId).toBe(fx.provider1.id);
       expect(res.body.hasFile).toBe(false);
+      // The contracted shape: none of the columns 0008_contract dropped.
+      for (const gone of ['storagePath', 'folder', 'isRequested', 'status', 'type', 'size', 'url']) {
+        expect(res.body).not.toHaveProperty(gone);
+      }
     },
   },
   {
@@ -545,13 +568,23 @@ const cases: Case[] = [
     name: 'POST /api/documents/:id/accept (ad-hoc upload)',
     req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/accept`),
     expect: S(200, 404, 403, 404, 404, 401),
-    check: (res) => expect(res.body.status).toBe('reviewed'),
+    check: async (_res, fx, actor) =>
+      expect(await latestReview(fx, actor, fx.client1a.upload)).toMatchObject({
+        decision: 'accepted',
+        versionId: fx.client1a.uploadVersion,
+      }),
   },
   {
     name: 'POST /api/documents/:id/request-correction (note required)',
     req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/request-correction`).send({ note: 'Page 2 is missing' }),
     expect: S(200, 404, 403, 404, 404, 401),
-    check: (res) => expect(res.body.status).toBe('needs_update'),
+    // The note is the whole point of the verb — the client reads it — so it is
+    // asserted here rather than only its presence.
+    check: async (_res, fx, actor) =>
+      expect(await latestReview(fx, actor, fx.client1a.upload)).toMatchObject({
+        decision: 'needs_correction',
+        note: 'Page 2 is missing',
+      }),
   },
   {
     name: 'POST /api/documents/:id/unshare (deliverable)',
