@@ -17,6 +17,7 @@ import MessagesPanel from '@/components/docflow/MessagesPanel';
 import DocumentPreview from '@/components/docflow/review/DocumentPreview';
 import VersionHistory from '@/components/docflow/review/VersionHistory';
 import ReviewActions from '@/components/docflow/review/ReviewActions';
+import AttachmentSwitcher from '@/components/docflow/review/AttachmentSwitcher';
 import Organization from '@/components/docflow/review/Organization';
 
 /**
@@ -156,6 +157,7 @@ const Review: React.FC = () => {
 
       <div className="df-review">
         <div style={{ minWidth: 0 }}>
+          {request && <AttachmentSwitcher request={request} currentDocumentId={doc.id} />}
           <DocumentPreview documentId={doc.id} version={selected} />
         </div>
 

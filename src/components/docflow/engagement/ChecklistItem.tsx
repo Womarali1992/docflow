@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { EngagementDocument, RequestItem, RequestStatus } from '@/api/types';
+import type { RequestItem, RequestStatus } from '@/api/types';
 import { useAcceptRequest, useReopenRequest, useRequestCorrection, useUpdateRequest, useWaiveRequest } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
@@ -31,15 +31,13 @@ const toDateInput = (d: Date | null) => (d ? new Date(d.getTime() - d.getTimezon
 
 interface Props {
   request: RequestItem;
-  /** The document filed against this line, if the client has sent one. */
-  answer?: EngagementDocument;
   first: boolean;
   last: boolean;
   editable: boolean;
   onMove: (direction: -1 | 1) => void;
 }
 
-const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable, onMove }) => {
+const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove }) => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const updateRequest = useUpdateRequest();
@@ -64,6 +62,20 @@ const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable
   /* The client said "I don't have this" and nobody has decided yet. */
   const needsDecision = Boolean(request.clientResponseKind) && !settled;
   const busy = accept.isPending || requestCorrection.isPending || waive.isPending || reopen.isPending || updateRequest.isPending;
+
+  /**
+   * The files filed against this line (H5), and the decision they permit.
+   *
+   * A decision has to name every attachment's current version (invariant 19),
+   * so it can only be made once all of them have been scanned — and until H5
+   * these two buttons named *no* version at all, which the server has refused
+   * with 400 `version_required` since H2. The review workspace was sending one
+   * and this row was not, so the bug only showed up here.
+   */
+  const attachments = request.attachments;
+  const versionIds = attachments.map((a) => a.currentVersion?.id).filter((id): id is string => Boolean(id));
+  const stillChecking = attachments.some((a) => a.state === 'checking');
+  const decidable = attachments.length > 0 && !stillChecking && versionIds.length === attachments.length;
 
   const startEdit = () => {
     setTitle(request.title);
@@ -161,8 +173,10 @@ const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable
         <div className="df-meta">
           {request.category ? <>{request.category} · </> : null}
           {request.dueDate ? <>due {formatDate(request.dueDate)}</> : 'no due date'}
-          {answer?.currentVersion ? (
-            <> · v{answer.currentVersion.versionNo} {answer.currentVersion.originalFilename}</>
+          {attachments.length === 1 && attachments[0].currentVersion ? (
+            <> · v{attachments[0].currentVersion.versionNo} {attachments[0].currentVersion.originalFilename}</>
+          ) : attachments.length > 1 ? (
+            <> · {attachments.length} files</>
           ) : null}
         </div>
         {request.instructions && <div className="df-small df-muted" style={{ marginTop: 4 }}>{request.instructions}</div>}
@@ -177,9 +191,11 @@ const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable
         {request.status === 'waived' && request.waivedReason && (
           <div className="df-note">Waived: {request.waivedReason}</div>
         )}
-        {answer?.currentVersion && answer.currentVersion.scanStatus !== 'clean' && (
+        {stillChecking && (
           <div className="df-note df-note-warn">
-            This upload is still being checked. It becomes readable once the scan finishes.
+            {attachments.length > 1
+              ? 'Some of these files are still being checked. They become readable once the scan finishes.'
+              : 'This upload is still being checked. It becomes readable once the scan finishes.'}
           </div>
         )}
       </div>
@@ -192,21 +208,30 @@ const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable
         </div>
 
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {answer && (
-            <button className="df-btn df-sm df-ghost" onClick={() => navigate(`/review/${answer.id}`)}>
-              <I.Doc size={12} /> Open
+          {attachments.length > 0 && (
+            <button
+              className="df-btn df-sm df-ghost"
+              onClick={() => navigate(`/review/${attachments[0].documentId}`)}
+            >
+              <I.Doc size={12} /> {attachments.length > 1 ? `Open ${attachments.length}` : 'Open'}
             </button>
           )}
           {answered && (
             <>
               <button
                 className="df-btn df-sm df-primary"
-                disabled={busy}
-                onClick={() => run(() => accept.mutateAsync({ id: request.id }), 'Could not accept')}
+                disabled={busy || !decidable}
+                title={stillChecking ? 'Wait for the security check to finish' : undefined}
+                onClick={() => run(() => accept.mutateAsync({ id: request.id, versionIds }), 'Could not accept')}
               >
                 <I.Check size={12} /> Accept
               </button>
-              <button className="df-btn df-sm" disabled={busy} onClick={() => setCorrectionOpen(true)}>
+              <button
+                className="df-btn df-sm"
+                disabled={busy || !decidable}
+                title={stillChecking ? 'Wait for the security check to finish' : undefined}
+                onClick={() => setCorrectionOpen(true)}
+              >
                 Request correction
               </button>
             </>
@@ -240,7 +265,7 @@ const ChecklistItem: React.FC<Props> = ({ request, answer, first, last, editable
         help="The client sees this note. Say what is wrong and what to send instead."
         placeholder="The statement is missing page 2 — please send the full PDF."
         confirmLabel="Send back for correction"
-        onConfirm={(note) => requestCorrection.mutateAsync({ id: request.id, note })}
+        onConfirm={(note) => requestCorrection.mutateAsync({ id: request.id, note, versionIds })}
       />
 
       <ReasonDialog

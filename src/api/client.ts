@@ -158,6 +158,12 @@ export interface UploadOpts {
    * result instead of recording another version.
    */
   uploadId?: string;
+  /**
+   * The attachment these bytes replace (`X-Replace-Document`, H5). Without it a
+   * request upload is *another* file; with it, it is the next version of the one
+   * it names.
+   */
+  replaceDocumentId?: string;
 }
 
 /**
@@ -179,6 +185,7 @@ function upload(path: string, file: File, opts: UploadOpts = {}): Promise<Upload
     // Same-origin: the session cookie rides along on its own.
     xhr.responseType = 'text';
     if (opts.uploadId) xhr.setRequestHeader('X-Upload-Id', opts.uploadId);
+    if (opts.replaceDocumentId) xhr.setRequestHeader('X-Replace-Document', opts.replaceDocumentId);
 
     const abort = () => xhr.abort();
     opts.signal?.addEventListener('abort', abort, { once: true });
@@ -381,10 +388,15 @@ export const api = {
     get: (id: string) => request<RequestItem>(`/requests/${id}`),
     update: (id: string, patch: Partial<{ title: string; instructions: string | null; category: string | null; required: boolean; dueDate: string | null; sortOrder: number }>) =>
       request<RequestItem>(`/requests/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
-    accept: (id: string, input?: { versionId?: string; note?: string }) =>
+    /**
+     * `versionIds` names every attachment the reviewer had on screen (H5); the
+     * server refuses the decision with 409 `stale_version` if the set has moved.
+     * `versionId` is still the one-attachment spelling.
+     */
+    accept: (id: string, input?: { versionId?: string; versionIds?: string[]; note?: string }) =>
       request<RequestItem>(`/requests/${id}/accept`, { method: 'POST', body: JSON.stringify(input ?? {}) }),
     /** The note is required: the client reads it as the instruction to fix. */
-    requestCorrection: (id: string, input: { note: string; versionId?: string }) =>
+    requestCorrection: (id: string, input: { note: string; versionId?: string; versionIds?: string[] }) =>
       request<RequestItem>(`/requests/${id}/request-correction`, { method: 'POST', body: JSON.stringify(input) }),
     /** A reason is required — the file has to answer "why is this not on the list?". */
     waive: (id: string, reason: string) =>

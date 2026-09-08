@@ -13,6 +13,8 @@ export interface StaleVersion {
   /** The version to read before deciding, or null when nothing is readable yet. */
   currentVersionId: string | null;
   scanStatus: string | null;
+  /** Every attachment's current version, when the request holds more than one (H5). */
+  currentVersionIds?: string[];
 }
 
 /**
@@ -27,5 +29,8 @@ export function staleVersion(err: unknown): StaleVersion | null {
   return {
     currentVersionId: (err.body.currentVersionId as string | null) ?? null,
     scanStatus: (err.body.scanStatus as string | null) ?? null,
+    /* Present when the request holds several attachments (H5): the whole set a
+       Refresh will bring into view, not just the one that moved. */
+    currentVersionIds: (err.body.currentVersionIds as string[] | undefined) ?? undefined,
   };
 }

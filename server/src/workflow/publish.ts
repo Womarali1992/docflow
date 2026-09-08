@@ -13,9 +13,12 @@
  *
  * So: **one publication path under a lock** (invariants 16–18).
  *
- *   - `lockDocument` / `lockRequest` — `SELECT … FOR UPDATE`, taken *first*, in
- *     that order, by everything that publishes or decides. Consistent lock order
- *     is what keeps two paths from deadlocking against each other.
+ *   - `lockDocument` — `SELECT … FOR UPDATE`, taken *first* by everything that
+ *     publishes or decides. Consistent lock order is what keeps two paths from
+ *     deadlocking against each other. (There was a `lockRequest` beside it until
+ *     H5, serializing the first upload against a request so four of them made
+ *     one document rather than four. Each upload now creates its own attachment,
+ *     so there is no first-upload race left to serialize.)
  *   - `allocateVersionNo` — `MAX + 1`, only ever called with the lock held.
  *   - `publishVersion` — the only writer of the three columns, and the only
  *     place that knows the pointer must never move backwards.
@@ -23,13 +26,15 @@
  *   - `decidableVersion` — the read half of the same rule: a review decision
  *     names the version it is about, and that version has to be the current,
  *     clean, published one (invariant 19).
+ *   - `decidableVersions` — the same rule for a request holding several
+ *     attachments (H5): a decision names *all* of them, or it is stale.
  *
  * A test in `hardening.test.ts` greps the tree and fails if any other file
  * writes those three columns.
  */
-import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
-import type { Document, DocumentVersion, Request, ScanStatus } from '../db/schema.js';
+import type { Document, DocumentVersion, ScanStatus } from '../db/schema.js';
 
 /** A drizzle transaction handle, as `db.transaction(async (tx) => …)` hands it out. */
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -57,16 +62,6 @@ export interface PublishOutcome {
  */
 export async function lockDocument(tx: Tx, documentId: string): Promise<Document | null> {
   const [row] = await tx.select().from(schema.documents).where(eq(schema.documents.id, documentId)).for('update');
-  return row ?? null;
-}
-
-/**
- * The request row, locked. Needed for the *first* upload against a request,
- * where there is no document row to lock yet and two concurrent uploads would
- * otherwise both create one.
- */
-export async function lockRequest(tx: Tx, requestId: string): Promise<Request | null> {
-  const [row] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId)).for('update');
   return row ?? null;
 }
 
@@ -268,20 +263,40 @@ export interface StaleVersion {
   error: string;
   currentVersionId: string | null;
   scanStatus: ScanStatus | null;
+  /**
+   * Every attachment's current version, for a request that holds more than one
+   * (H5). `currentVersionId` stays the single-document answer so an older
+   * client keeps working.
+   */
+  currentVersionIds?: string[];
 }
 
 /** Everything a route has to turn into a response when a decision is refused. */
 export type DecisionRefusal =
   | { ok: false; status: 400; code: 'version_required'; error: string }
+  | { ok: false; status: 400; code: 'version_mismatch'; error: string }
   | StaleVersion;
 
 export type DecidableVersion = { ok: true; document: Document; versionId: string } | DecisionRefusal;
 
-/** The refusal, as JSON. `currentVersionId` is what a Refresh will bring into view. */
+/** One decision per attachment: which version of which document was decided. */
+export interface AttachmentDecision {
+  documentId: string;
+  versionId: string;
+}
+
+export type DecidableVersions = { ok: true; decisions: AttachmentDecision[] } | DecisionRefusal;
+
+/** The refusal, as JSON. `currentVersionId(s)` is what a Refresh will bring into view. */
 export function refusalBody(refusal: DecisionRefusal): Record<string, unknown> {
-  return refusal.code === 'stale_version'
-    ? { error: refusal.error, code: refusal.code, currentVersionId: refusal.currentVersionId, scanStatus: refusal.scanStatus }
-    : { error: refusal.error, code: refusal.code };
+  if (refusal.code !== 'stale_version') return { error: refusal.error, code: refusal.code };
+  return {
+    error: refusal.error,
+    code: refusal.code,
+    currentVersionId: refusal.currentVersionId,
+    scanStatus: refusal.scanStatus,
+    ...(refusal.currentVersionIds ? { currentVersionIds: refusal.currentVersionIds } : {}),
+  };
 }
 
 /**
@@ -336,4 +351,99 @@ export async function decidableVersion(
   }
 
   return { ok: true, document, versionId: current.id };
+}
+
+/**
+ * The plural of `decidableVersion`, for a request that holds several
+ * attachments (H5). Invariant 19 widens rather than changes: a decision names
+ * *everything* it decides.
+ *
+ * Six receipts against one checklist line are six documents, and "Accept" means
+ * accepting all six. So the reviewer sends the set of current version ids they
+ * were looking at, and every attachment has to be in it, still current, still
+ * clean. If a seventh file arrived — or one of the six was replaced — while
+ * they were reading, the set no longer describes the request and the honest
+ * answer is 409 with the set they should refresh to, exactly as for one file.
+ *
+ * The documents are decided in a fixed order, and each is locked by
+ * `decidableVersion` as it goes, so two advisors deciding the same request
+ * queue rather than interleave.
+ */
+export async function decidableVersions(
+  tx: Tx,
+  documentIds: string[],
+  named: readonly string[]
+): Promise<DecidableVersions> {
+  if (documentIds.length === 0) return { ok: true, decisions: [] };
+  if (named.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'version_required',
+      error: 'A decision has to say which version it is about.',
+    };
+  }
+
+  /* Which document does each named id belong to? An id naming a version this
+     request does not hold is the caller pointing at something else entirely —
+     a mistake to refuse, not a race to refresh past. */
+  const owners = await tx
+    .select({ id: schema.documentVersions.id, documentId: schema.documentVersions.documentId })
+    .from(schema.documentVersions)
+    .where(inArray(schema.documentVersions.id, [...named]));
+  const ownerOf = new Map(owners.map((row) => [row.id, row.documentId]));
+  const held = new Set(documentIds);
+  for (const versionId of named) {
+    const owner = ownerOf.get(versionId);
+    if (!owner || !held.has(owner)) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'version_mismatch',
+        error: 'That version does not belong to this request.',
+      };
+    }
+  }
+
+  const decisions: AttachmentDecision[] = [];
+  for (const documentId of documentIds) {
+    const namedForDocument = named.find((versionId) => ownerOf.get(versionId) === documentId) ?? null;
+
+    if (namedForDocument === null) {
+      /* An attachment the reviewer never saw. `decidableVersion` would call
+         this "version_required", which is true of one document and misleading
+         of six: nothing is missing from the request, something was *added* to
+         it. Refresh is the way out, so it is the same 409 as any other move. */
+      const current = await currentVersionIdsOf(tx, documentIds);
+      return {
+        ok: false,
+        status: 409,
+        code: 'stale_version',
+        error: 'Another file was attached while you were looking. Refresh and read it before deciding.',
+        currentVersionId: current[0] ?? null,
+        scanStatus: null,
+        currentVersionIds: current,
+      };
+    }
+
+    const outcome = await decidableVersion(tx, documentId, namedForDocument);
+    if (!outcome.ok) {
+      if (outcome.code !== 'stale_version') return outcome;
+      return { ...outcome, currentVersionIds: await currentVersionIdsOf(tx, documentIds) };
+    }
+    decisions.push({ documentId, versionId: outcome.versionId });
+  }
+
+  return { ok: true, decisions };
+}
+
+/** The current version of each document, in the order given; nulls dropped. */
+async function currentVersionIdsOf(tx: Tx, documentIds: string[]): Promise<string[]> {
+  if (documentIds.length === 0) return [];
+  const rows = await tx
+    .select({ id: schema.documents.id, currentVersionId: schema.documents.currentVersionId })
+    .from(schema.documents)
+    .where(inArray(schema.documents.id, documentIds));
+  const byId = new Map(rows.map((row) => [row.id, row.currentVersionId]));
+  return documentIds.map((id) => byId.get(id) ?? null).filter((id): id is string => id !== null);
 }

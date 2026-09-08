@@ -44,12 +44,6 @@ const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, req
     [requests]
   );
 
-  const documentByRequest = useMemo(() => {
-    const map = new Map<string, EngagementDocument>();
-    for (const d of documents) if (d.requestId) map.set(d.requestId, d);
-    return map;
-  }, [documents]);
-
   const counts = useMemo(() => {
     const open = ordered.filter((r) => r.status === 'requested' || r.status === 'needs_correction').length;
     const toReview = ordered.filter((r) => r.status === 'submitted' || r.status === 'in_review').length;
@@ -121,7 +115,6 @@ const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, req
             <ChecklistItem
               key={request.id}
               request={request}
-              answer={documentByRequest.get(request.id)}
               first={index === 0}
               last={index === ordered.length - 1}
               /* Reordering only makes sense against the whole list. */

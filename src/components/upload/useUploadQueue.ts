@@ -24,7 +24,11 @@ import { useScope } from '@/api/queries/auth';
 export type UploadState = 'queued' | 'uploading' | 'scanning' | 'done' | 'failed' | 'cancelled';
 
 export type UploadTarget =
-  | { kind: 'request'; id: string }
+  /**
+   * A checklist line. Without `replaceDocumentId` the file is *another*
+   * attachment; with it, it is a new version of the attachment it names (H5).
+   */
+  | { kind: 'request'; id: string; replaceDocumentId?: string }
   | { kind: 'engagement'; id: string }
   | { kind: 'document'; id: string };
 
@@ -89,6 +93,7 @@ export const UPLOAD_MESSAGE: Record<string, string> = {
   unchanged: 'This is the same file you already sent — nothing more to do.',
   duplicate_upload: 'Already sent — this is the same upload, not a second copy.',
   bad_upload_id: 'That upload could not be identified. Try again.',
+  bad_replace_target: 'That file is no longer one of the ones you sent for this item. Refresh and try again.',
   session_expired: 'Your session ended. Sign in again, then retry.',
 };
 
@@ -208,7 +213,9 @@ function post(
   file: File,
   opts: { onProgress: (f: number) => void; signal: AbortSignal; uploadId: string }
 ) {
-  if (target.kind === 'request') return api.uploads.toRequest(target.id, file, opts);
+  if (target.kind === 'request') {
+    return api.uploads.toRequest(target.id, file, { ...opts, replaceDocumentId: target.replaceDocumentId });
+  }
   if (target.kind === 'engagement') return api.uploads.toEngagement(target.id, file, opts);
   return api.uploads.newVersion(target.id, file, opts);
 }

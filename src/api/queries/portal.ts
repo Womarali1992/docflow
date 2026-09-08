@@ -11,7 +11,7 @@
 import { useQueries } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { api } from '../client';
-import type { Document, EngagementDocument, Engagement, RequestItem } from '../types';
+import type { Document, Engagement, RequestAttachment, RequestItem } from '../types';
 import { keys } from './keys';
 import { useScope, useSignedIn } from './auth';
 import { useEngagements } from './engagements';
@@ -25,13 +25,6 @@ const DUE_SOON_DAYS = 14;
 export interface PortalStep {
   request: RequestItem;
   engagement: Engagement | undefined;
-  /**
-   * The document already filed against this line. Taken from the engagement
-   * tree rather than the flat list, because only the tree carries
-   * `currentVersion` — which is how the portal knows a file is *received and
-   * still being checked* rather than simply sent.
-   */
-  answer: EngagementDocument | undefined;
   bucket: StepBucket;
 }
 
@@ -69,11 +62,8 @@ export function useClientWork() {
 
   return useMemo(() => {
     const documents = documentsQuery.data ?? [];
-    const treeDocuments = trees.flatMap((t) => t.data?.documents ?? []);
     const requests = trees.flatMap((t) => t.data?.requests ?? []).filter((r) => !r.archivedAt);
     const engagementById = new Map(engagements.map((e) => [e.id, e]));
-    const answerByRequest = new Map<string, EngagementDocument>();
-    for (const d of treeDocuments) if (d.requestId) answerByRequest.set(d.requestId, d);
 
     const now = Date.now();
     const done = requests.filter((r) => r.status === 'accepted' || r.status === 'waived');
@@ -84,7 +74,6 @@ export function useClientWork() {
       .map((request) => ({
         request,
         engagement: engagementById.get(request.engagementId),
-        answer: answerByRequest.get(request.id),
         bucket: bucketFor(request, now),
       }))
       .sort((a, b) => {
@@ -107,13 +96,19 @@ export function useClientWork() {
       withAdvisor: withAdvisor.map((request) => ({
         request,
         engagement: engagementById.get(request.engagementId),
-        answer: answerByRequest.get(request.id),
       })),
       uploads: documents.filter((d) => d.kind !== 'deliverable'),
       shared: documents.filter((d) => d.kind === 'deliverable'),
       progress: { done: done.length, total: requests.length },
       isPending: engagementsQuery.isPending || documentsQuery.isPending || trees.some((t) => t.isPending),
-      answerFor: (requestId: string) => answerByRequest.get(requestId),
+      /**
+       * The files filed against one line (H5). They ride on the request itself
+       * now — the portal used to build a `Map<requestId, Document>` from the
+       * tree's documents, which silently kept only the last one when a line had
+       * several.
+       */
+      attachmentsFor: (requestId: string): RequestAttachment[] =>
+        requests.find((r) => r.id === requestId)?.attachments ?? [],
     };
     // `treesKey` stands in for the per-engagement query results, which are new
     // array identities on every render.

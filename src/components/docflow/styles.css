@@ -1312,6 +1312,89 @@
   .df-root .df-step-head { flex-direction: column; }
 }
 
+/* The files already sent for one checklist line (H5). A request holds several
+   attachments now, so the card has to name them one by one — "you sent
+   something" is no longer a sentence that can be true of six receipts. */
+.df-root .df-attachments {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.df-root .df-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--df-border);
+  border-radius: var(--df-radius-sm, 6px);
+  background: var(--df-panel-2, var(--df-panel));
+}
+.df-root .df-attachment .df-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  /* On a phone the pill and the button drop under the name rather than
+     squeezing it to three characters. */
+  .df-root .df-attachment { flex-wrap: wrap; }
+  .df-root .df-attachment > div { flex: 1 1 100%; }
+  .df-root .df-attachment .df-btn { min-height: 40px; }
+}
+
+/* Moving between the files on one checklist line, above the preview (H5). */
+.df-root .df-attachment-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--df-border);
+  border-radius: var(--df-radius-sm, 6px);
+  background: var(--df-panel);
+}
+.df-root .df-attachment-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  /* Six receipts scroll rather than wrap: the bar stays one line tall so the
+     preview below it does not jump as the advisor pages through. */
+  scrollbar-width: thin;
+}
+.df-root .df-attachment-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  max-width: 200px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--df-ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.df-root .df-attachment-tab:hover { background: var(--df-panel-2); }
+.df-root .df-attachment-tab.df-on {
+  background: var(--df-panel-2);
+  border-color: var(--df-border);
+  color: var(--df-ink);
+  font-weight: 600;
+}
+.df-root .df-attachment-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Upload queue (C4.2) ===================================== */
 
 .df-root .df-queue {

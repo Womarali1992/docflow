@@ -22,6 +22,9 @@
  *     through `findDocument`, so someone else's upload id reads as absent.
  *   - **The client's storage quota**, from `Content-Length` first and from the
  *     real size after staging (files/quota.ts).
+ *   - **`X-Replace-Document`** (H5). A request holds several attachments now,
+ *     so an upload without this header is *another* file; with it, the bytes
+ *     become the next version of the attachment it names.
  *
  * Answers: 201 published, 202 stored but still being checked, 200 for the two
  * "nothing new happened" cases (`duplicate_upload`, `unchanged`), and a stable
@@ -39,7 +42,7 @@ import { quotaRefusal } from '../files/quota.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound } from './scope.js';
-import { lockRequest, type Tx } from '../workflow/publish.js';
+import { type Tx } from '../workflow/publish.js';
 import { notify } from '../notify.js';
 import type { Document } from '../db/schema.js';
 
@@ -68,6 +71,33 @@ function uploadIdOf(req: Request): string | null | 'invalid' {
   if (raw === undefined || raw.trim() === '') return null;
   const value = raw.trim();
   return isId(value) ? value : 'invalid';
+}
+
+/**
+ * The attachment a request upload is replacing, when the caller names one (H5).
+ *
+ * `undefined` means "no header, so this is another attachment". `'invalid'`
+ * means the header named something that is not one of this request's own
+ * attachments — a different request's file, a deliverable, an archived one, a
+ * document the caller cannot see, or plain nonsense. All of those get the same
+ * refusal, which is what keeps it from confirming whether the id exists.
+ *
+ * Resolved before staging, so a replacement aimed at the wrong document never
+ * carries its bytes across the network.
+ */
+async function replaceTargetOf(req: Request, requestId: string): Promise<Document | undefined | 'invalid'> {
+  const raw = req.get('X-Replace-Document');
+  if (raw === undefined || raw.trim() === '') return undefined;
+
+  const id = raw.trim();
+  if (!isId(id)) return 'invalid';
+
+  const document = await findDocument(req.auth!, id);
+  if (!document) return 'invalid';
+  if (document.requestId !== requestId) return 'invalid';
+  if (document.kind !== 'client_upload') return 'invalid';
+  if (document.archivedAt) return 'invalid';
+  return document;
 }
 
 /** The answer every upload route gives, in one shape. */
@@ -217,23 +247,40 @@ function withStaging(handler: (req: Request, res: Response) => Promise<unknown>)
 /* --------------------------------------------- the client answers a request */
 
 /**
- * The document behind a request, created on first upload. One document per
- * request, so a re-upload becomes version 2 rather than a second row.
+ * The document this upload belongs to.
  *
- * Select-then-insert with nothing holding the request still is a race: four
- * uploads answering the same empty request all found no document and all
- * created one (audit F3). There is deliberately no unique index on
- * `documents.request_id` — H5 may want several attachments per request — so the
- * serialization has to be a lock, and the request row is the only thing all
- * four have in common. Locking it makes them queue: the first creates the
- * document, the rest find it.
+ * **By default, a new one (H5).** Six receipts answering one checklist line are
+ * six attachments, each with its own version history. Until H5 a second upload
+ * silently became version 2 of the first — the client's second receipt
+ * *replaced* their first one, and neither side was told.
+ *
+ * `X-Replace-Document` is how a client says "this is a better copy of that
+ * one": the named document becomes the parent and the bytes become its next
+ * version, which is `POST /documents/:id/versions` under a different door. The
+ * header is validated before staging, so a replacement aimed at a document the
+ * caller cannot see never reaches the disk (invariant 1).
+ *
+ * Note what stopped being a race. The old shape was select-then-insert with
+ * nothing holding the request still, so four uploads against one empty request
+ * all found no document and all created one (audit F3); H2 serialized them by
+ * locking the request row. Creating a fresh document per upload cannot collide
+ * with itself, so that lock is gone — and the version-number race it also
+ * guarded now only exists on the replace path, where `recordNewVersionTx` holds
+ * the document lock exactly as it does for `POST /documents/:id/versions`.
  */
-async function documentForRequest(tx: Tx, request: typeof schema.requests.$inferSelect): Promise<Document> {
-  await lockRequest(tx, request.id);
+async function documentForRequest(
+  tx: Tx,
+  req: Request,
+  request: typeof schema.requests.$inferSelect,
+  replacing: Document | undefined
+): Promise<Document> {
+  if (replacing) return replacing;
 
-  const [existing] = await tx.select().from(schema.documents).where(eq(schema.documents.requestId, request.id));
-  if (existing) return existing;
-
+  /* Named after the file, not after the checklist line. Six receipts against
+     "2024 receipts" used to be impossible; six attachments all *called* "2024
+     receipts" would be the same problem wearing a different hat. The line's own
+     title is already on screen above them. */
+  const filename = stagedFrom(req)?.originalFilename ?? request.title;
   const now = new Date();
   const [created] = await tx
     .insert(schema.documents)
@@ -243,9 +290,9 @@ async function documentForRequest(tx: Tx, request: typeof schema.requests.$infer
       engagementId: request.engagementId,
       requestId: request.id,
       kind: 'client_upload',
-      displayName: request.title,
+      displayName: filename,
       category: request.category,
-      name: request.title,
+      name: filename,
       uploadedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -272,15 +319,30 @@ router.post(
           return res.status(403).json({ error: 'Only the client uploads against a request.', code: 'client_only' });
         }
         const context = { clientId: request.clientId, providerId: request.providerId };
+        const replacing = await replaceTargetOf(req, request.id);
+        if (replacing === 'invalid') {
+          return badRequest(
+            res,
+            'That file is not one of the ones you sent for this item.',
+            'bad_replace_target'
+          );
+        }
         if (await settledBeforeBytes(req, res, context)) return;
         res.locals.request = request;
         res.locals.context = context;
+        res.locals.replaceDocument = replacing;
         next();
       })
       .catch(next);
   },
   withStaging((req, res) =>
-    finish(req, res, res.locals.context as UploadContext, (tx) => documentForRequest(tx, res.locals.request), 'submitted')
+    finish(
+      req,
+      res,
+      res.locals.context as UploadContext,
+      (tx) => documentForRequest(tx, req, res.locals.request, res.locals.replaceDocument as Document | undefined),
+      'submitted'
+    )
   )
 );
 

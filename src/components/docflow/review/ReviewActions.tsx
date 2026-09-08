@@ -88,6 +88,21 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
     return true;
   };
 
+  /**
+   * What this decision is about (H5).
+   *
+   * A checklist line holds any number of attachments and is accepted as a
+   * whole, so the decision names every attachment's current version. The one
+   * on screen is named by the version the advisor is actually *reading* rather
+   * than by whatever is current — so going back to v1 and pressing A still gets
+   * the 409 it always did, instead of silently accepting v2.
+   */
+  const attachments = request?.attachments ?? [];
+  const versionIds = attachments
+    .map((a) => (a.documentId === doc.id ? version?.id ?? a.currentVersion?.id : a.currentVersion?.id))
+    .filter((id): id is string => Boolean(id));
+  const someChecking = attachments.some((a) => a.state === 'checking');
+
   const settled = request ? request.status === 'accepted' || request.status === 'waived' : false;
   const nothingToDecide = !version && !request;
   const busy =
@@ -97,12 +112,15 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
 
   /* A deliverable is the advisor's own material: there is nothing to review. */
   const reviewable = doc.kind !== 'deliverable' && !nothingToDecide;
-  const canDecide = reviewable && Boolean(version) && !settled;
+  /* Every attachment has to be readable: the server refuses a decision that
+     cannot name one of them, and a button that always fails is worse than a
+     disabled one. */
+  const canDecide = reviewable && Boolean(version) && !settled && !someChecking;
 
   const accept = async () => {
     if (!canDecide) return;
     try {
-      if (request) await acceptRequest.mutateAsync({ id: request.id, versionId: version!.id });
+      if (request) await acceptRequest.mutateAsync({ id: request.id, versionIds });
       else await acceptDocument.mutateAsync({ id: doc.id, versionId: version!.id });
       toast({ title: 'Accepted', description: doc.displayName ?? doc.name });
     } catch (err) {
@@ -112,7 +130,7 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
 
   const correct = async (note: string) => {
     try {
-      if (request) await correctRequest.mutateAsync({ id: request.id, note, versionId: version!.id });
+      if (request) await correctRequest.mutateAsync({ id: request.id, note, versionIds });
       else await correctDocument.mutateAsync({ id: doc.id, note, versionId: version!.id });
     } catch (err) {
       // Rethrown so the dialog stays open with the note still typed in it — the
@@ -155,7 +173,13 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
         <div>
           <div className="df-section-title">Decision</div>
           <div className="df-section-sub">
-            {version ? <>About v{version.versionNo}{version.isCurrent ? '' : ' (not the current version)'}</> : 'Nothing submitted yet'}
+            {!version ? (
+              'Nothing submitted yet'
+            ) : attachments.length > 1 ? (
+              <>About all {attachments.length} files on this item</>
+            ) : (
+              <>About v{version.versionNo}{version.isCurrent ? '' : ' (not the current version)'}</>
+            )}
           </div>
         </div>
       </div>
@@ -171,6 +195,11 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
         {version && !version.available && (
           <div className="df-note df-note-warn">
             You can decide once the virus check has passed — the file cannot be opened before then.
+          </div>
+        )}
+        {version?.available && someChecking && (
+          <div className="df-note df-note-warn">
+            Another file on this item is still being checked. Deciding covers every file, so it has to wait for that one.
           </div>
         )}
 

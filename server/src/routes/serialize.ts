@@ -30,7 +30,51 @@ export function serializeEngagement(e: Engagement) {
   };
 }
 
-export function serializeRequest(r: RequestRow, now = new Date()) {
+/**
+ * One file answering a checklist line (H5).
+ *
+ * A request holds any number of these: six receipts are six attachments, each
+ * with its own version history, each replaceable on its own. The two states are
+ * the two the client is already told apart everywhere else — `ready` means
+ * there is something readable to open, `checking` means the bytes are here and
+ * the virus check has not finished.
+ *
+ * `currentVersion` is the same summary the engagement tree uses, so a screen
+ * that has attachments does not need a second round trip to render them.
+ */
+export interface RequestAttachment {
+  documentId: string;
+  displayName: string;
+  currentVersion: ReturnType<typeof summarizeAttachmentVersion>;
+  state: 'ready' | 'checking';
+}
+
+/** Just enough of a version to name it on a checklist row. */
+function summarizeAttachmentVersion(v: DocumentVersion | undefined) {
+  if (!v) return null;
+  return {
+    id: v.id,
+    versionNo: v.versionNo,
+    originalFilename: v.originalFilename,
+    mimeType: v.mimeType,
+    sizeBytes: v.sizeBytes,
+    scanStatus: v.scanStatus,
+    available: v.scanStatus === 'clean' && v.publishedAt !== null,
+  };
+}
+
+/** The attachment shape for one document plus its current version, if any. */
+export function toAttachment(doc: Document, version: DocumentVersion | undefined): RequestAttachment {
+  const currentVersion = summarizeAttachmentVersion(version);
+  return {
+    documentId: doc.id,
+    displayName: doc.displayName ?? doc.name,
+    currentVersion,
+    state: currentVersion?.available ? 'ready' : 'checking',
+  };
+}
+
+export function serializeRequest(r: RequestRow, now = new Date(), attachments: RequestAttachment[] = []) {
   return {
     id: r.id,
     engagementId: r.engagementId,
@@ -52,6 +96,11 @@ export function serializeRequest(r: RequestRow, now = new Date()) {
     archivedAt: r.archivedAt,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
+    /* Every file filed against this line, oldest first (H5). Empty for a line
+       nobody has answered yet, and — for callers that never load them — simply
+       absent rather than wrong. */
+    attachments,
+    attachmentCount: attachments.length,
   };
 }
 

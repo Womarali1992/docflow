@@ -97,14 +97,19 @@ const PortalHome: React.FC = () => {
             </div>
           </div>
           <div className="df-list">
-            {work.withAdvisor.map(({ request, answer }) => {
-              const state = clientRequestState(request, answer);
+            {work.withAdvisor.map(({ request }) => {
+              const state = clientRequestState(request, request.attachments);
               return (
                 <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
                   <div style={{ minWidth: 0 }}>
                     <div className="df-name">{request.title}</div>
                     <div className="df-meta">
-                      {state.note ?? (answer ? `You sent ${answer.displayName ?? answer.name}` : 'Sent')}
+                      {state.note ??
+                        (request.attachmentCount === 0
+                          ? 'Sent'
+                          : request.attachmentCount === 1
+                            ? `You sent ${request.attachments[0].displayName}`
+                            : `You sent ${request.attachmentCount} files`)}
                     </div>
                   </div>
                   <span className={'df-pill ' + state.cls}>{state.label}</span>

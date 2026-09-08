@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { PortalStep } from '@/api/queries/portal';
+import type { RequestAttachment } from '@/api/types';
 import { useRespondToRequest } from '@/api/queries';
 import { useUploadQueue } from '@/components/upload/useUploadQueue';
 import UploadQueue from '@/components/upload/UploadQueue';
@@ -33,20 +34,44 @@ const BUCKET_PILL: Record<PortalStep['bucket'], { label: string; cls: string } |
 
 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
+/** How big a file is, for a line that has to say which one it means. */
+const formatBytes = (n: number) => {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
-  const { request, engagement, answer } = step;
+  const { request, engagement } = step;
+  const attachments = request.attachments;
   const { toast } = useToast();
   const respond = useRespondToRequest();
   const queue = useUploadQueue();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
 
+  /**
+   * Which attachment the next chosen file replaces (H5). `null` means the next
+   * file is *another* attachment — the default, and the whole point of the
+   * change: sending a second receipt no longer silently overwrites the first.
+   */
+  const [replacing, setReplacing] = useState<RequestAttachment | null>(null);
+
   const [askOpen, setAskOpen] = useState(false);
   const [naOpen, setNaOpen] = useState(false);
   const [naNote, setNaNote] = useState('');
 
   const bucketPill = BUCKET_PILL[step.bucket];
-  const status = clientRequestState(request, answer);
+  const status = clientRequestState(request, attachments);
+
+  /** Opens the picker with (or without) a replacement target set first. */
+  const choose = (target: RequestAttachment | null, ref: React.RefObject<HTMLInputElement>) => {
+    setReplacing(target);
+    ref.current?.click();
+  };
+
+  const send = (files: FileList) =>
+    queue.enqueue(files, { kind: 'request', id: request.id, replaceDocumentId: replacing?.documentId });
   const alreadySaid = Boolean(request.clientResponseKind);
 
   const sayNotApplicable = async () => {
@@ -83,8 +108,42 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
       {request.instructions && <div className="df-step-body">{request.instructions}</div>}
 
       {status.note && <div className={'df-note' + (status.state === 'needs_correction' ? ' df-note-warn' : '')}>{status.note}</div>}
-      {answer && status.state === 'waiting_on_you' && (
-        <div className="df-note">You sent {answer.displayName ?? answer.name}. Sending another replaces it.</div>
+      {attachments.length > 0 && (
+        <div className="df-attachments">
+          <div className="df-meta" style={{ marginBottom: 4 }}>
+            You have sent {attachments.length} {attachments.length === 1 ? 'file' : 'files'} for this item
+          </div>
+          {attachments.map((attachment) => (
+            <div className="df-attachment" key={attachment.documentId}>
+              <I.Doc size={13} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="df-name">{attachment.displayName}</div>
+                <div className="df-meta">
+                  {attachment.currentVersion ? (
+                    <>
+                      {attachment.currentVersion.versionNo > 1
+                        ? `Replaced ${attachment.currentVersion.versionNo - 1}×  · `
+                        : ''}
+                      {formatBytes(attachment.currentVersion.sizeBytes)}
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              {attachment.state === 'checking' ? (
+                <span className="df-pill df-warn">Being checked</span>
+              ) : (
+                <span className="df-pill df-ok">Sent</span>
+              )}
+              <button
+                className="df-btn df-sm df-ghost"
+                onClick={() => choose(attachment, fileRef)}
+                title={`Send a corrected copy of ${attachment.displayName}`}
+              >
+                Replace
+              </button>
+            </div>
+          ))}
+        </div>
       )}
       {alreadySaid && (
         <div className="df-note">
@@ -108,7 +167,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
           multiple
           accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
           style={{ display: 'none' }}
-          onChange={(e) => { if (e.target.files) queue.enqueue(e.target.files, { kind: 'request', id: request.id }); e.currentTarget.value = ''; }}
+          onChange={(e) => { if (e.target.files) send(e.target.files); e.currentTarget.value = ''; setReplacing(null); }}
         />
         {/* On a phone this opens the camera; on a desktop the browser ignores
             `capture` and it behaves like any other file picker. */}
@@ -118,13 +177,14 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
           accept="image/*,application/pdf"
           capture="environment"
           style={{ display: 'none' }}
-          onChange={(e) => { if (e.target.files) queue.enqueue(e.target.files, { kind: 'request', id: request.id }); e.currentTarget.value = ''; }}
+          onChange={(e) => { if (e.target.files) send(e.target.files); e.currentTarget.value = ''; setReplacing(null); }}
         />
 
-        <button className="df-btn df-primary" onClick={() => fileRef.current?.click()}>
-          <I.Upload size={13} /> {queue.busy ? 'Sending…' : 'Upload'}
+        <button className="df-btn df-primary" onClick={() => choose(null, fileRef)}>
+          <I.Upload size={13} />{' '}
+          {queue.busy ? 'Sending…' : attachments.length > 0 ? 'Add another file' : 'Upload'}
         </button>
-        <button className="df-btn df-camera-only" onClick={() => cameraRef.current?.click()}>
+        <button className="df-btn df-camera-only" onClick={() => choose(null, cameraRef)}>
           <I.Doc size={13} /> Take a photo
         </button>
         <button className="df-btn" onClick={() => setAskOpen(true)}>
@@ -137,7 +197,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
         )}
       </div>
 
-      <AskDialog open={askOpen} onClose={() => setAskOpen(false)} about={request.title} documentId={answer?.id} />
+      <AskDialog open={askOpen} onClose={() => setAskOpen(false)} about={request.title} documentId={attachments[0]?.documentId} />
 
       <Modal
         open={naOpen}

@@ -205,6 +205,21 @@ export interface Engagement {
  * One line of a checklist. `overdue` is computed by the server on every read
  * (invariant 15) — never derive it in the browser, the two clocks disagree.
  */
+/**
+ * One file answering a checklist line (H5).
+ *
+ * A request holds any number of these — six receipts are six attachments, each
+ * with its own version history and each replaceable on its own. A request that
+ * has only ever had one file is simply a request with one attachment.
+ */
+export interface RequestAttachment {
+  documentId: string;
+  displayName: string;
+  currentVersion: VersionSummary | null;
+  /** `ready` means there is something to open; `checking` means the scan is still running. */
+  state: 'ready' | 'checking';
+}
+
 export interface RequestItem {
   id: string;
   engagementId: string;
@@ -227,6 +242,9 @@ export interface RequestItem {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Every file filed against this line, oldest first. */
+  attachments: RequestAttachment[];
+  attachmentCount: number;
 }
 
 export interface DocumentVersion {

@@ -12,6 +12,7 @@ import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { NAME_MAX } from '../security/limits.js';
 import { serializeDocument, serializeRequest } from './serialize.js';
+import { attachmentsByRequest } from '../workflow/attachments.js';
 import { isId } from './scope.js';
 
 const router = asyncRouter();
@@ -103,12 +104,14 @@ router.get('/', async (req, res) => {
 
   const now = new Date();
   const truncated = documents.length > LIMIT || requests.length > LIMIT;
+  const hits = requests.slice(0, LIMIT);
+  const attachments = await attachmentsByRequest(hits.map((r) => r.id));
 
   res.json({
     query: q,
     truncated,
     documents: documents.slice(0, LIMIT).map(serializeDocument),
-    requests: requests.slice(0, LIMIT).map((r) => serializeRequest(r, now)),
+    requests: hits.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [])),
   });
 });
 

@@ -63,7 +63,7 @@ const PortalRequests: React.FC = () => {
               const step = stepFor(request);
               // An open item keeps its full card, with the three ways to answer it.
               if (step) return <RequestCard key={request.id} step={step} />;
-              const state = clientRequestState(request, work.answerFor(request.id));
+              const state = clientRequestState(request, request.attachments);
               return (
                 <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
                   <div style={{ minWidth: 0 }}>

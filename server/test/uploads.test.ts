@@ -309,7 +309,11 @@ describe('scanning through the upload route', () => {
     expect(res.body.code).toBe('scanner_unavailable');
     expect(res.body.version.available).toBe(false);
 
-    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, fx.client1a.request));
+    // The upload made its own attachment (H5) — the fixture's empty document row
+    // is a different one, so the version is found through the answer, not the
+    // request id.
+    const documentId = res.body.document.id as string;
+    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, documentId));
     expect(version.scanStatus).toBe('error');
     expect(version.publishedAt).toBeNull();
 
@@ -318,7 +322,7 @@ describe('scanning through the upload route', () => {
     expect(jobs[0].dedupeKey).toBe(`scan_retry:${version.id}`);
 
     // And it cannot be downloaded while it is in that state.
-    const dl = await request(app).get(`/api/documents/${fx.client1a.request}/download`).set('Cookie', client);
+    const dl = await request(app).get(`/api/documents/${documentId}/download`).set('Cookie', client);
     expect(dl.status).toBe(409);
     expect(dl.body.code).toBe('not_available_yet');
   });
@@ -329,9 +333,10 @@ describe('scanning through the upload route', () => {
     process.env.CLAMD_HOST = '127.0.0.1';
     process.env.CLAMD_PORT = '1';
     const client = await loginAs(fx, 'client1a');
-    await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    const sent = await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    const documentId = sent.body.document.id as string;
 
-    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, fx.client1a.request));
+    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, documentId));
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.type, 'scan_retry'));
 
     // 2. The scanner comes back; the retry job runs.
@@ -342,7 +347,7 @@ describe('scanning through the upload route', () => {
     expect(after.scanStatus).toBe('clean');
     expect(after.publishedAt).not.toBeNull();
 
-    const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, fx.client1a.request));
+    const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
     expect(doc.currentVersionId).toBe(version.id);
     const [req] = await db.select().from(schema.requests).where(eq(schema.requests.id, fx.client1a.request));
     expect(req.status).toBe('submitted');
@@ -353,9 +358,10 @@ describe('scanning through the upload route', () => {
     process.env.CLAMD_HOST = '127.0.0.1';
     process.env.CLAMD_PORT = '1';
     const client = await loginAs(fx, 'client1a');
-    await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    const sent = await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    const documentId = sent.body.document.id as string;
 
-    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, fx.client1a.request));
+    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.documentId, documentId));
     const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.type, 'scan_retry'));
 
     await pointAt('infected');
@@ -364,7 +370,7 @@ describe('scanning through the upload route', () => {
     const [after] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.id, version.id));
     expect(after.scanStatus).toBe('infected');
     expect(after.publishedAt).toBeNull();
-    const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, fx.client1a.request));
+    const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
     expect(doc.currentVersionId).toBeNull();
   });
 

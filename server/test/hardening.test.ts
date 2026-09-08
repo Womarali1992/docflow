@@ -106,6 +106,13 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+/**
+ * A *different* PDF. Byte-identical content re-sent against the same current
+ * version is answered 200 `unchanged` (H3), which is the right answer to a
+ * re-send and the wrong shape for a row that means to add a second file.
+ */
+const REVISED_PDF = Buffer.concat([Buffer.from(FIXTURES.pdf.bytes), Buffer.from('\n% revised\n')]);
+
 describe('hardening', () => {
   let fx: Fixture;
   let clamd: ReturnType<typeof fakeClamd> | null = null;
@@ -174,13 +181,21 @@ describe('hardening', () => {
   });
 
   /**
-   * `documentForRequest` is select-then-insert with no lock and no unique index,
-   * so four uploads answering the same empty request race twice over: once for
-   * the document row, and again for the version number. The audit saw two 500s.
+   * `documentForRequest` was select-then-insert with no lock and no unique
+   * index, so four uploads answering the same empty request raced twice over:
+   * once for the document row, and again for the version number. The audit saw
+   * two 500s. H2 (2.3) fixed it by locking the request row for the first upload.
    *
-   * Fixed by H2 (2.3): the request row is locked for the first upload.
+   * **H5 changed the shape this asserts, on purpose.** A request holds several
+   * attachments now, so four uploads are four attachments rather than four
+   * versions of one document — and creating a fresh row per upload cannot race
+   * with itself, which is why the request lock is gone. What F3 was actually
+   * about is unchanged and still asserted here: no upload becomes a 500 because
+   * it lost a race, and no two versions of one document collide on a number.
+   * The deterministic sibling below still holds the document lock and proves the
+   * version-number allocation waits for it.
    */
-  it('F3: four uploads answering one empty request make one document and four versions', async () => {
+  it('F3: four uploads answering one empty request each make their own attachment', async () => {
     const client = await loginAs(fx, 'client1a');
     const [created] = await db
       .insert(schema.requests)
@@ -208,9 +223,20 @@ describe('hardening', () => {
     // 201 published, 202 stored and being checked. Never a 500: the client's
     // file was fine, and losing a race is not their problem.
     expect(results.map((r) => r.status).filter((s) => s !== 201 && s !== 202)).toEqual([]);
+
     const documents = await db.select().from(schema.documents).where(eq(schema.documents.requestId, created.id));
-    expect(documents).toHaveLength(1);
-    expect(await versionsOf(documents[0].id)).toHaveLength(4);
+    expect(documents).toHaveLength(4);
+    // One version each, and every one of them is version 1 — the numbers cannot
+    // collide because no two of these uploads share a document.
+    for (const document of documents) {
+      const versions = await versionsOf(document.id);
+      expect(versions).toHaveLength(1);
+      expect(versions[0].versionNo).toBe(1);
+    }
+    // And the checklist line reads as four attachments, not one file sent four times.
+    const advisor = await loginAs(fx, 'provider1');
+    const seen = await request(app).get(`/api/requests/${created.id}`).set('Cookie', advisor);
+    expect(seen.body.attachmentCount).toBe(4);
   });
 
   /**
@@ -586,6 +612,165 @@ describe('hardening', () => {
    * write form. Reading those columns, and serializing them, is everyone's
    * business.
    */
+
+  /* ------------------------------------------------ H5: several attachments */
+
+  /**
+   * Six receipts are six files. Until H5 the second upload against a checklist
+   * line silently became version 2 of the first — the client's second receipt
+   * *replaced* their first one, and nothing on either screen said so.
+   */
+  it('H5: two files answering one request become two attachments, not two versions', async () => {
+    await scannerSaysClean();
+    const client = await loginAs(fx, 'client1a');
+    const target = fx.client1a.request;
+
+    const first = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: 'january.pdf' });
+    const second = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .attach('file', REVISED_PDF, { filename: 'february.pdf' });
+
+    expect([first.status, second.status]).toEqual([201, 201]);
+    expect(second.body.document.id).not.toBe(first.body.document.id);
+    expect(first.body.version.versionNo).toBe(1);
+    expect(second.body.version.versionNo).toBe(1);
+
+    const advisor = await loginAs(fx, 'provider1');
+    const seen = await request(app).get(`/api/requests/${target}`).set('Cookie', advisor);
+    expect(seen.body.attachmentCount).toBe(2);
+    // Named after the files, in the order they arrived.
+    expect(seen.body.attachments.map((a: { displayName: string }) => a.displayName)).toEqual([
+      'january.pdf',
+      'february.pdf',
+    ]);
+  });
+
+  /**
+   * Replacing is now something the client says rather than something that
+   * happens to them: `X-Replace-Document` names which attachment the new bytes
+   * are a better copy of.
+   */
+  it('H5: X-Replace-Document makes the bytes a new version of the attachment it names', async () => {
+    await scannerSaysClean();
+    const client = await loginAs(fx, 'client1a');
+    const target = fx.client1a.request;
+
+    const first = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: 'january.pdf' });
+    const documentId = first.body.document.id as string;
+
+    const replaced = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .set('X-Replace-Document', documentId)
+      .attach('file', REVISED_PDF, { filename: 'january-corrected.pdf' });
+
+    expect([201, 202]).toContain(replaced.status);
+    expect(replaced.body.document.id).toBe(documentId);
+    expect(replaced.body.version.versionNo).toBe(2);
+
+    const advisor = await loginAs(fx, 'provider1');
+    const seen = await request(app).get(`/api/requests/${target}`).set('Cookie', advisor);
+    expect(seen.body.attachmentCount).toBe(1);
+    expect(seen.body.attachments[0].currentVersion.versionNo).toBe(2);
+  });
+
+  /**
+   * The header is a document id, so it is also a way to point at someone else's
+   * file. It is resolved through `findDocument` before staging: an id the
+   * caller cannot see is refused in the same words as plain nonsense, and the
+   * bytes never reach the disk.
+   */
+  it('H5: a replacement aimed at a document the caller cannot see is refused', async () => {
+    const client = await loginAs(fx, 'client1a');
+
+    for (const bad of [fx.client1b.upload, fx.client1a.deliverable, 'not-a-uuid']) {
+      const res = await request(app)
+        .post(`/api/requests/${fx.client1a.request}/uploads`)
+        .set('Cookie', client)
+        .set('X-Replace-Document', bad)
+        .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: 'january.pdf' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('bad_replace_target');
+    }
+  });
+
+  /**
+   * Invariant 19, widened: a decision names everything it decides. Accepting a
+   * line that holds two attachments while naming one of them is a decision
+   * about a request the advisor has not finished reading.
+   */
+  it('H5: a decision must name every attachment, and gets the current set back when it does not', async () => {
+    await scannerSaysClean();
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const target = fx.client1a.request;
+
+    const first = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: 'january.pdf' });
+    const second = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .attach('file', REVISED_PDF, { filename: 'february.pdf' });
+
+    // Deciding while naming only the first one: the second arrived unread.
+    const partial = await request(app)
+      .post(`/api/requests/${target}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionIds: [first.body.version.id] });
+    expect(partial.status).toBe(409);
+    expect(partial.body.code).toBe('stale_version');
+    expect(partial.body.currentVersionIds).toEqual([first.body.version.id, second.body.version.id]);
+
+    // Naming both is the decision the advisor actually made.
+    const accepted = await request(app)
+      .post(`/api/requests/${target}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionIds: [first.body.version.id, second.body.version.id] });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.status).toBe('accepted');
+
+    // One review per attachment, so each file carries its own decision.
+    const reviews = await db.select().from(schema.reviews).where(eq(schema.reviews.requestId, target));
+    expect(reviews).toHaveLength(2);
+    expect(reviews.map((r) => r.versionId).sort()).toEqual(
+      [first.body.version.id, second.body.version.id].sort()
+    );
+  });
+
+  /**
+   * A request holding exactly one attachment is the shape every request had
+   * before H5, and the single `versionId` spelling still decides it — otherwise
+   * a browser that had not been reloaded would break on the deploy.
+   */
+  it('H5: the one-attachment case still decides with a single versionId', async () => {
+    await scannerSaysClean();
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const target = fx.client1a.request;
+
+    const only = await request(app)
+      .post(`/api/requests/${target}/uploads`)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: 'january.pdf' });
+
+    const accepted = await request(app)
+      .post(`/api/requests/${target}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionId: only.body.version.id });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.status).toBe('accepted');
+    expect(accepted.body.attachmentCount).toBe(1);
+  });
+
   it('nothing outside workflow/publish.ts writes the publication columns', () => {
     const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
     const owner = path.join('workflow', 'publish.ts');

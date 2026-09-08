@@ -17,6 +17,7 @@ import { audit, auditRequest } from '../db/audit.js';
 import { recordActivity } from '../db/activity-log.js';
 import { itemsToRequests, type TemplateItem } from '../workflow/starter-templates.js';
 import { serializeDocument, serializeEngagement, serializeRequest } from './serialize.js';
+import { attachmentsByRequest } from '../workflow/attachments.js';
 import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
 import { notify } from '../notify.js';
 
@@ -180,9 +181,12 @@ router.get('/:id', async (req, res) => {
     : [];
   const versionById = new Map(versions.map((v) => [v.id, v]));
 
+  // The attachments of every line in two queries, not two per line (H5).
+  const attachments = await attachmentsByRequest(requests.map((r) => r.id));
+
   res.json({
     engagement: serializeEngagement(engagement),
-    requests: requests.map((r) => serializeRequest(r, now)),
+    requests: requests.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [])),
     documents: documents.map((d) => ({
       ...serializeDocument(d),
       currentVersion: d.currentVersionId ? summarizeVersion(versionById.get(d.currentVersionId)) : null,

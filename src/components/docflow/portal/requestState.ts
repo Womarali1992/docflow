@@ -1,4 +1,4 @@
-import type { EngagementDocument, RequestItem } from '@/api/types';
+import type { RequestAttachment, RequestItem } from '@/api/types';
 
 /**
  * What a checklist line looks like *to the client* (C4.2).
@@ -26,7 +26,7 @@ export interface ClientStateView {
   note?: string;
 }
 
-export function clientRequestState(request: RequestItem, answer?: EngagementDocument): ClientStateView {
+export function clientRequestState(request: RequestItem, attachments: RequestAttachment[] = []): ClientStateView {
   if (request.status === 'accepted') {
     return { state: 'accepted', label: 'Accepted', cls: 'df-ok' };
   }
@@ -47,13 +47,19 @@ export function clientRequestState(request: RequestItem, answer?: EngagementDocu
     };
   }
   if (request.status === 'submitted' || request.status === 'in_review') {
-    const version = answer?.currentVersion;
-    if (version && !version.available) {
+    /* With several attachments (H5) the line is only fully "submitted" once
+       every one of them has been checked. One file still scanning is the whole
+       line still scanning, because the accountant cannot read it yet either. */
+    const checking = attachments.filter((a) => a.state === 'checking').length;
+    if (checking > 0) {
       return {
         state: 'checking',
         label: 'Received, being checked',
         cls: 'df-warn',
-        note: 'Your file is with your accountant. It becomes readable once the security check finishes — nothing more to do.',
+        note:
+          attachments.length > 1
+            ? `Your files are with your accountant. ${checking} of ${attachments.length} are still being checked — they become readable once that finishes, and there is nothing more to do.`
+            : 'Your file is with your accountant. It becomes readable once the security check finishes — nothing more to do.',
       };
     }
     return { state: 'submitted', label: 'Submitted', cls: 'df-info' };

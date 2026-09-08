@@ -47,17 +47,27 @@ export function useUpdateRequest() {
   );
 }
 
+/**
+ * `versionIds` names every attachment the advisor had on screen (H5); the
+ * server refuses with 409 `stale_version` if the set has moved since. The
+ * single `versionId` is the one-attachment spelling and still works.
+ */
 export function useAcceptRequest() {
-  return useRequestMutation<{ id: string; versionId?: string; note?: string }, RequestItem>(
-    (input) => api.requests.accept(input.id, { versionId: input.versionId, note: input.note }),
+  return useRequestMutation<{ id: string; versionId?: string; versionIds?: string[]; note?: string }, RequestItem>(
+    (input) => api.requests.accept(input.id, { versionId: input.versionId, versionIds: input.versionIds, note: input.note }),
     (input) => input.id
   );
 }
 
 /** The note is required — it is what the client is shown as the thing to fix. */
 export function useRequestCorrection() {
-  return useRequestMutation<{ id: string; note: string; versionId?: string }, RequestItem>(
-    (input) => api.requests.requestCorrection(input.id, { note: input.note, versionId: input.versionId }),
+  return useRequestMutation<{ id: string; note: string; versionId?: string; versionIds?: string[] }, RequestItem>(
+    (input) =>
+      api.requests.requestCorrection(input.id, {
+        note: input.note,
+        versionId: input.versionId,
+        versionIds: input.versionIds,
+      }),
     (input) => input.id
   );
 }
