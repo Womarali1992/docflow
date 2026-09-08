@@ -779,7 +779,26 @@ const cases: Case[] = [
       expect(res.body).toHaveProperty('health.activeSessions');
       expect(res.body).toHaveProperty('scanner.signaturesAt');
       expect(res.body.health.activeSessions).toBeGreaterThan(0);
+      // v3 (H7): is the worker alive, what gave up, and what is running here.
+      expect(res.body).toHaveProperty('worker.note');
+      expect(res.body.jobs.failedList).toEqual([]);
+      expect(res.body.jobs.oldestActionableAgeSeconds).toBeNull();
+      expect(res.body.release.node).toBe(process.version);
+      expect(res.body.release.migrations.pending).toEqual([]);
+      // Still counts and configuration: no client, no document, no secret.
+      expect(JSON.stringify(res.body)).not.toMatch(/smtps?:\/\//i);
     },
+  },
+  {
+    /**
+     * Retrying a failed background job is the firm's own maintenance, so a
+     * client may not do it at all. The advisors get 404 because no such job
+     * exists — which is the answer the matrix is asking about; the 200 and the
+     * 409 `not_failed` paths are in ops.test.ts, where a job can be arranged.
+     */
+    name: 'POST /api/ops/jobs/:id/retry (no such job)',
+    req: () => request(app).post('/api/ops/jobs/00000000-0000-4000-8000-000000000000/retry'),
+    expect: S(404, 404, 403, 403, 403, 401),
   },
 ];
 

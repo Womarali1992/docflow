@@ -553,6 +553,28 @@ export const backupRuns = pgTable('backup_runs', {
 });
 
 /* =========================================================
+   Worker heartbeats: is the thing that runs the queue actually running?
+
+   A stuck or stopped worker is the failure the ops panel could not see. Jobs
+   simply stayed pending, which looks exactly like a quiet morning — so the
+   worker writes its own row every 30 seconds and the panel reads it (H7).
+
+   Keyed by worker id (`<pid>-<uuid8>`, new on every start), so two workers on
+   one box do not overwrite each other. Rows silent for a week are pruned on
+   start; nothing here is worth keeping longer than the question it answers.
+   ========================================================= */
+export const workerHeartbeats = pgTable('worker_heartbeats', {
+  workerId: text('worker_id').primaryKey(),
+  pid: integer('pid'),
+  host: text('host'),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  /* Which build this worker is running — the release commit, so "the API was
+     updated and the worker was not" is visible rather than deduced. */
+  version: text('version'),
+});
+
+/* =========================================================
    Relations
    ========================================================= */
 export const providersRelations = relations(providers, ({ many }) => ({
@@ -608,6 +630,7 @@ export type Notification = typeof notifications.$inferSelect;
 export type AuditLogRow = typeof auditLog.$inferSelect;
 export type NewAuditLogRow = typeof auditLog.$inferInsert;
 export type BackupRun = typeof backupRuns.$inferSelect;
+export type WorkerHeartbeat = typeof workerHeartbeats.$inferSelect;
 export type EngagementStatus = (typeof engagementStatusEnum.enumValues)[number];
 export type RequestStatus = (typeof requestStatusEnum.enumValues)[number];
 export type DocumentKind = (typeof documentKindEnum.enumValues)[number];

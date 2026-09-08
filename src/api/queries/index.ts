@@ -64,4 +64,4 @@ export { useNotifications, useMarkNotificationsRead } from './notifications';
 export { useDashboard } from './dashboard';
 export { useSearch } from './search';
 export { useTemplates, useTemplate, useCreateTemplate, useUpdateTemplate, useArchiveTemplate } from './templates';
-export { useOpsStatus } from './ops';
+export { useOpsStatus, useRetryJob } from './ops';

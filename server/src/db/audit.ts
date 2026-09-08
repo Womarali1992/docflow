@@ -47,6 +47,8 @@ export type AuditAction =
   | 'document.archived'
   | 'admin.action'
   | 'backup.run'
+  /* An advisor put a failed background job back in the queue (H7). */
+  | 'job.retried'
   | 'legacy.import';
 
 export interface AuditEntry {

@@ -71,6 +71,13 @@
       "when": 1788829253812,
       "tag": "0009_upload_id",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788854762190,
+      "tag": "0010_worker_heartbeats",
+      "breakpoints": true
     }
   ]
 }

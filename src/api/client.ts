@@ -7,6 +7,7 @@ import type {
   Engagement,
   EngagementKind,
   EngagementTree,
+  FailedJob,
   InvitationInfo,
   Message,
   MfaEnrollment,
@@ -465,8 +466,10 @@ export const api = {
   },
 
   ops: {
-    /** Advisor only — queue depth, scanner and mail. Grows into the C5.2 panel. */
+    /** Advisor only — queue depth, worker, scanner, disk, backups and the build. */
     status: (opts?: ReadOpts) => request<OpsStatus>('/ops/status', { poll: opts?.poll }),
+    /** Puts one failed job back in the queue. 409 when it has not actually failed. */
+    retryJob: (id: string) => request<{ ok: true; job: FailedJob }>(`/ops/jobs/${id}/retry`, { method: 'POST' }),
   },
 
   messages: {

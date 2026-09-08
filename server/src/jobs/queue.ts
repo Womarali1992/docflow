@@ -11,12 +11,12 @@
  * costs one attempt rather than looping forever. A lock older than
  * `STUCK_LOCK_MS` is considered abandoned and can be re-claimed.
  */
-import { sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { Job } from '../db/schema.js';
 
 /** Job types this build knows about. The worker refuses anything else. */
-export const JOB_TYPES = ['email', 'scan_retry', 'sweeper', 'reminders'] as const;
+export const JOB_TYPES = ['email', 'scan_retry', 'sweeper', 'reminders', 'ops_digest'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 /** A lock this old belonged to a worker that is gone; the job may be claimed again. */
@@ -34,6 +34,9 @@ export interface EnqueueOptions {
 
 /** The shared connection, or a transaction when the job must land with the change. */
 type Executor = Pick<typeof db, 'insert'>;
+
+/** The same, for the reads and writes a retry needs. */
+type RetryExecutor = Pick<typeof db, 'select' | 'update'>;
 
 /**
  * Adds a job. Returns the row, or `null` when `dedupeKey` already exists —
@@ -125,6 +128,17 @@ export interface QueueStats {
   failed: number;
   done: number;
   oldestPendingAt: string | null;
+  /**
+   * How long the oldest job that is *due* has been waiting, in seconds.
+   *
+   * Not the same as `oldestPendingAt`, and the difference is the whole point:
+   * the daily reminder job is scheduled for tomorrow morning and is pending all
+   * day, which made "oldest pending" a number that alarms nobody because it is
+   * always large. This counts only work that could run right now and has not —
+   * which on a healthy box is a second or two, and on a stopped worker grows
+   * without bound (H7).
+   */
+  oldestActionableAgeSeconds: number | null;
 }
 
 /** Counts for `GET /ops/status` and the C5.2 ops panel. */
@@ -141,17 +155,109 @@ export async function queueStats(now = new Date()): Promise<QueueStats> {
       to_char(
         MIN(run_at) FILTER (WHERE done_at IS NULL AND attempts < max_attempts) AT TIME ZONE 'UTC',
         'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
-      ) AS oldest_pending_at
+      ) AS oldest_pending_at,
+      -- Due and still waiting: run_at <= now is what makes it actionable.
+      EXTRACT(EPOCH FROM (${now}::timestamptz - MIN(run_at) FILTER (
+        WHERE done_at IS NULL AND attempts < max_attempts AND run_at <= ${now}
+      )))::int AS oldest_actionable_age
     FROM ${schema.jobs}
   `);
   const row = result.rows[0] as Record<string, unknown> | undefined;
   const oldest = row?.oldest_pending_at;
+  const actionable = row?.oldest_actionable_age;
   return {
     pending: Number(row?.pending ?? 0),
     running: Number(row?.running ?? 0),
     failed: Number(row?.failed ?? 0),
     done: Number(row?.done ?? 0),
     oldestPendingAt: oldest === null || oldest === undefined ? null : String(oldest),
+    oldestActionableAgeSeconds:
+      actionable === null || actionable === undefined ? null : Math.max(0, Number(actionable)),
+  };
+}
+
+export interface FailedJob {
+  id: string;
+  type: string;
+  attempts: number;
+  maxAttempts: number;
+  /** Truncated hard: this is read on a screen, and the full text is in the row. */
+  lastError: string | null;
+  runAt: string;
+}
+
+/** How much of an error message the ops panel shows. The row keeps the rest. */
+export const FAILED_ERROR_CHARS = 200;
+
+/**
+ * The jobs that gave up, newest first (H7).
+ *
+ * Failed jobs were already counted; a count alone tells an operator that
+ * something is wrong and nothing about what. These are the firm's own
+ * background tasks, so the type and the error are the firm's business — but the
+ * message is truncated and no payload is ever included, because a payload can
+ * carry an email address.
+ */
+export async function failedJobs(limit = 20): Promise<FailedJob[]> {
+  const rows = await db
+    .select({
+      id: schema.jobs.id,
+      type: schema.jobs.type,
+      attempts: schema.jobs.attempts,
+      maxAttempts: schema.jobs.maxAttempts,
+      lastError: schema.jobs.lastError,
+      runAt: schema.jobs.runAt,
+    })
+    .from(schema.jobs)
+    .where(sql`${schema.jobs.doneAt} IS NULL AND ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts}`)
+    .orderBy(desc(schema.jobs.runAt))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    attempts: r.attempts,
+    maxAttempts: r.maxAttempts,
+    lastError: r.lastError === null ? null : truncate(r.lastError, FAILED_ERROR_CHARS),
+    runAt: r.runAt.toISOString(),
+  }));
+}
+
+export type RetryOutcome = { ok: true; job: FailedJob } | { ok: false; reason: 'not_found' | 'not_failed' };
+
+/**
+ * Puts a failed job back in the queue (H7).
+ *
+ * Only a job whose attempts are spent can be retried: anything else is either
+ * already going to run again on its own or is running right now, and resetting
+ * it under a worker's feet would double-send whatever it does. `lastError` is
+ * deliberately kept — the reason it failed is still the most useful thing on
+ * the row, and a retry that erases it makes the second failure look like the
+ * first.
+ *
+ * Takes `tx` so the audit line lands with the reset or not at all.
+ */
+export async function retryJob(id: string, tx: RetryExecutor = db, now = new Date()): Promise<RetryOutcome> {
+  const [existing] = await tx.select().from(schema.jobs).where(eq(schema.jobs.id, id)).limit(1);
+  if (!existing) return { ok: false, reason: 'not_found' };
+  if (existing.doneAt !== null || existing.attempts < existing.maxAttempts) return { ok: false, reason: 'not_failed' };
+
+  const [row] = await tx
+    .update(schema.jobs)
+    .set({ attempts: 0, runAt: now, lockedAt: null, lockedBy: null })
+    .where(eq(schema.jobs.id, id))
+    .returning();
+
+  return {
+    ok: true,
+    job: {
+      id: row.id,
+      type: row.type,
+      attempts: row.attempts,
+      maxAttempts: row.maxAttempts,
+      lastError: row.lastError === null ? null : truncate(row.lastError, FAILED_ERROR_CHARS),
+      runAt: row.runAt.toISOString(),
+    },
   };
 }
 

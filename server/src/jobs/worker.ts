@@ -16,7 +16,9 @@ import { sendEmailJob } from './handlers/email.js';
 import { scanRetryJob } from './handlers/scan_retry.js';
 import { sweeperJob } from './handlers/sweeper.js';
 import { remindersJob } from './handlers/reminders.js';
+import { opsDigestJob } from './handlers/ops_digest.js';
 import { ensureScheduledJobs } from './schedule.js';
+import { HEARTBEAT_INTERVAL_MS, beat, pruneHeartbeats } from './heartbeat.js';
 
 export type Handler = (job: Job) => Promise<unknown>;
 
@@ -25,6 +27,7 @@ export const handlers: Record<string, Handler> = {
   scan_retry: scanRetryJob,
   sweeper: sweeperJob,
   reminders: remindersJob,
+  ops_digest: opsDigestJob,
 };
 
 /** How often an idle worker asks for work. Short enough that an invitation email feels immediate. */
@@ -87,11 +90,20 @@ export function startWorker(workerId = `${process.pid}-${randomUUID().slice(0, 8
     });
 
   let lastScheduleCheck = 0;
+  let lastBeat = 0;
 
   const loop = async (): Promise<void> => {
     while (!stopped) {
       let processed = 0;
       try {
+        /* Proof of life, before the work rather than after it: a worker that is
+           up but wedged on one slow job should still look alive, because it is
+           — and the thing an operator needs to tell apart from that is a worker
+           that is not running at all (H7). */
+        if (Date.now() - lastBeat >= HEARTBEAT_INTERVAL_MS) {
+          lastBeat = Date.now();
+          await beat(workerId);
+        }
         // Recurring work is scheduled from here rather than from cron: the
         // dedupe keys make it idempotent, and a worker that was down all
         // morning still runs the day's reminders when it comes back.
@@ -110,7 +122,20 @@ export function startWorker(workerId = `${process.pid}-${randomUUID().slice(0, 8
     }
   };
 
-  const inFlight = loop();
+  /* One beat before the first poll, and a sweep of workers that stopped a week
+     ago. Both are best-effort: a worker that cannot write its heartbeat should
+     still run jobs, because the jobs are the point and the row is the report. */
+  const announced = (async () => {
+    try {
+      await pruneHeartbeats();
+      await beat(workerId);
+      lastBeat = Date.now();
+    } catch (err) {
+      console.error('[worker] could not record the first heartbeat:', err instanceof Error ? err.message : err);
+    }
+  })();
+
+  const inFlight = announced.then(loop);
 
   return {
     workerId,
@@ -118,6 +143,15 @@ export function startWorker(workerId = `${process.pid}-${randomUUID().slice(0, 8
       stopped = true;
       wake?.();
       await inFlight;
+      /* A last beat on the way out. It does not mark the worker stopped — the
+         panel judges by silence, and a worker that has stopped is silent from
+         here on — but it makes "up until 14:02" true rather than "up until the
+         last 30-second tick before 14:02". */
+      try {
+        await beat(workerId);
+      } catch {
+        // Shutting down; a missed final beat costs nothing.
+      }
     },
   };
 }

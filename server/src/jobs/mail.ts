@@ -8,13 +8,18 @@
  * (`emailQueued: false`), so onboarding works before the firm mailbox exists.
  */
 import { enqueue } from './queue.js';
+import type { Job } from '../db/schema.js';
 
 /**
- * The four notices the pilot sends. Deliberately generic: an inbox is not a
+ * The notices the pilot sends. Deliberately generic: an inbox is not a
  * confidential channel, so no filenames, amounts, categories or message text —
  * the notice says something is waiting and links to the portal.
+ *
+ * `ops_digest` is the one that goes the other way — to the firm, about the
+ * firm's own machine (H7). It carries sentences rather than a link, and the
+ * same rule still applies: counts and states, never a client.
  */
-export const MAIL_TEMPLATES = ['invitation', 'password_reset', 'new_item', 'needs_attention'] as const;
+export const MAIL_TEMPLATES = ['invitation', 'password_reset', 'new_item', 'needs_attention', 'ops_digest'] as const;
 export type MailTemplate = (typeof MAIL_TEMPLATES)[number];
 
 export interface MailJobPayload extends Record<string, unknown> {
@@ -24,6 +29,8 @@ export interface MailJobPayload extends Record<string, unknown> {
   link?: string;
   /** Who it is from, for the body's sign-off. Never a client's name. */
   firmName?: string;
+  /** What is wrong, for `ops_digest`. Sentences about the system, never about a client. */
+  items?: string[];
 }
 
 /** True when a mail server is configured; drives `emailQueued` in the API answers. */
@@ -37,12 +44,30 @@ export function mailFrom(): string {
 }
 
 /**
+ * Queues a notice and hands back the row, or null when SMTP is not configured,
+ * the address is unusable, or the same `dedupeKey` is already on the queue.
+ *
+ * The third case is why this exists beside `enqueueEmail`. A caller that wants
+ * to report "the notice is on its way" cannot tell an already-queued duplicate
+ * from a new job and does not need to; a caller that is *counting* what it sent
+ * — the daily digest, which must not double-send after a retry — very much does
+ * (H7).
+ */
+export async function queueEmail(payload: MailJobPayload, opts: { dedupeKey?: string; runAt?: Date } = {}): Promise<Job | null> {
+  if (!isMailConfigured()) return null;
+  if (!payload.to || !payload.to.includes('@')) return null;
+  return enqueue('email', { ...payload }, opts);
+}
+
+/**
  * Queues a notice, or does nothing when SMTP is not configured or the address
- * is empty. Returns whether a job was created so the route can answer honestly.
+ * is empty. Returns whether the notice is on the queue — which is true whether
+ * this call put it there or an earlier one with the same key did, because to
+ * the route answering `emailQueued` those are the same fact.
  */
 export async function enqueueEmail(payload: MailJobPayload, opts: { dedupeKey?: string; runAt?: Date } = {}): Promise<boolean> {
   if (!isMailConfigured()) return false;
   if (!payload.to || !payload.to.includes('@')) return false;
-  await enqueue('email', { ...payload }, opts);
+  await queueEmail(payload, opts);
   return true;
 }

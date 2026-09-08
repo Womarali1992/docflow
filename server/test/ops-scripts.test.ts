@@ -57,6 +57,7 @@ describe('ops scripts', () => {
       notifications: 0,
       audit_log: 0,
       backup_runs: 0,
+      worker_heartbeats: 0,
     });
     expect(c.documentsWithFile).toBe(6);
     expect(c.migrations).toBeGreaterThanOrEqual(3);

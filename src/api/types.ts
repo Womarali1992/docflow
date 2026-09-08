@@ -389,6 +389,16 @@ export interface NotificationList {
  * Counts and timestamps, never a document or a client name: the system panel
  * can be left open on a screen in a shared office.
  */
+/** One background job that gave up. The payload never travels with it. */
+export interface FailedJob {
+  id: string;
+  type: string;
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  runAt: string;
+}
+
 export interface OpsStatus {
   time: string;
   firmTimezone: string;
@@ -398,6 +408,24 @@ export interface OpsStatus {
     failed: number;
     done: number;
     oldestPendingAt: string | null;
+    /**
+     * How long the oldest job that is *due* has waited. Not `oldestPendingAt`:
+     * tomorrow's reminder is pending all day and alarms nobody, whereas work
+     * that could run now and has not is exactly what a stopped worker looks like.
+     */
+    oldestActionableAgeSeconds: number | null;
+    failedList: FailedJob[];
+  };
+  /** The queue is only real while something is draining it (H7). */
+  worker: {
+    workerId: string | null;
+    lastSeenAt: string | null;
+    startedAt: string | null;
+    pid: number | null;
+    host: string | null;
+    version: string | null;
+    silentSeconds: number | null;
+    note: string | null;
   };
   scanner: {
     required: boolean;
@@ -412,6 +440,10 @@ export interface OpsStatus {
     freeBytes: number | null;
     totalBytes: number | null;
     note: string | null;
+    perClientQuotaBytes: number;
+    topClients: { clientId: string; bytes: number; percentOfQuota: number }[];
+    /** How many clients are near their ceiling — a count, never who. */
+    clientsNearQuota: number;
   };
   backups: {
     lastRunAt: string | null;
@@ -431,6 +463,19 @@ export interface OpsStatus {
   mail: {
     configured: boolean;
     note: string | null;
+  };
+  /** What is actually running here: the build, the runtime, the schema. */
+  release: {
+    commit: string | null;
+    short: string | null;
+    branch: string | null;
+    /** Null when git could not be asked at build time; true when the tree was dirty. */
+    dirty: boolean | null;
+    builtAt: string | null;
+    node: string;
+    note: string | null;
+    migrations: { applied: number; lastAppliedAt: string | null; pending: string[] };
+    scanner: string | null;
   };
 }
 

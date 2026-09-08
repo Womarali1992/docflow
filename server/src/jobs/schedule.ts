@@ -22,6 +22,14 @@ export function firmTimezone(): string {
 /** The hour reminders go out, in the firm's day. */
 export const REMINDER_HOUR = 8;
 
+/**
+ * When the ops digest goes out: half an hour before the reminders, so the
+ * person who reads "the worker has not reported in for 14 hours" still has time
+ * to do something about it before the day's client mail was due to be sent.
+ */
+export const DIGEST_HOUR = 7;
+export const DIGEST_MINUTE = 30;
+
 /** How often the staging sweeper runs. */
 export const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -58,10 +66,10 @@ function offsetMs(instant: Date, timeZone: string): number {
   return asIfUtc - instant.getTime();
 }
 
-/** The instant at which it is `hour:00` on `date` in the firm's timezone. */
-export function firmInstant(date: string, hour: number, timeZone = firmTimezone()): Date {
+/** The instant at which it is `hour:minute` on `date` in the firm's timezone. */
+export function firmInstant(date: string, hour: number, timeZone = firmTimezone(), minute = 0): Date {
   const [y, m, d] = date.split('-').map(Number);
-  const naive = Date.UTC(y, m - 1, d, hour, 0, 0);
+  const naive = Date.UTC(y, m - 1, d, hour, minute, 0);
   // The offset at roughly the right instant is close enough to invert with.
   const offset = offsetMs(new Date(naive), timeZone);
   return new Date(naive - offset);
@@ -101,6 +109,15 @@ export async function ensureScheduledJobs(now = new Date(), timeZone = firmTimez
     'reminders',
     { date: today, timeZone },
     { dedupeKey: `reminders:${today}`, runAt: firmInstant(today, REMINDER_HOUR, timeZone) }
+  );
+
+  /* The digest, once per firm-local day. It sends nothing on a day when
+     nothing is wrong, so this is a job that usually costs one query and no
+     email at all (H7). */
+  await enqueue(
+    'ops_digest',
+    { date: today, timeZone },
+    { dedupeKey: `ops_digest:${today}`, runAt: firmInstant(today, DIGEST_HOUR, timeZone, DIGEST_MINUTE) }
   );
 
   // The sweeper is hourly and cares about no calendar at all.

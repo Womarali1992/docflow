@@ -67,6 +67,38 @@ export async function quotaRefusal(clientId: string, incomingBytes: number): Pro
   };
 }
 
+/** At what share of the ceiling a client counts as "close to it". */
+export const NEAR_QUOTA_RATIO = 0.8;
+
+/**
+ * How many clients are within reach of their ceiling (H7).
+ *
+ * A count, never who: this feeds the daily digest, which goes to an inbox. The
+ * useful moment is before the first refusal, not after — a client whose upload
+ * is rejected mid-tax-season phones the firm, and by then the fix (archive what
+ * has been dealt with) takes longer than the call.
+ *
+ * `providerId` scopes it to one advisor's clients; the digest asks about the
+ * whole box and passes none.
+ */
+export async function clientsNearQuota(providerId: string | null = null, ratio = NEAR_QUOTA_RATIO): Promise<number> {
+  /* Whole bytes: the SUM is a bigint, and Postgres refuses to compare it with
+     the fraction 0.8 of a quota produces. */
+  const threshold = Math.floor(maxClientStorageBytes() * ratio);
+  const rows = await db
+    .select({ clientId: schema.documents.clientId })
+    .from(schema.documentVersions)
+    .innerJoin(schema.documents, eq(schema.documents.id, schema.documentVersions.documentId))
+    .where(
+      providerId
+        ? and(eq(schema.documents.providerId, providerId), ne(schema.documentVersions.scanStatus, 'infected'))
+        : ne(schema.documentVersions.scanStatus, 'infected')
+    )
+    .groupBy(schema.documents.clientId)
+    .having(sql`COALESCE(SUM(${schema.documentVersions.sizeBytes}), 0) >= ${threshold}`);
+  return rows.length;
+}
+
 /** The clients using the most space, for the ops panel. Ids and bytes only. */
 export async function topClientsByStorage(providerId: string, limit = 3) {
   const rows = await db

@@ -29,6 +29,7 @@ export const TABLES = [
   'notifications',
   'audit_log',
   'backup_runs',
+  'worker_heartbeats',
 ];
 
 /**

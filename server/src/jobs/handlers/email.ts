@@ -1,6 +1,6 @@
 /**
- * The email job handler: renders one of the four generic notices and hands it
- * to nodemailer.
+ * The email job handler: renders one of the generic notices and hands it to
+ * nodemailer.
  *
  * Two rules the templates exist to enforce:
  *   - nothing confidential in the body (no filenames, amounts, categories,
@@ -59,6 +59,9 @@ export function parsePayload(payload: unknown): MailJobPayload {
     to: p.to,
     link: typeof p.link === 'string' ? p.link : undefined,
     firmName: typeof p.firmName === 'string' ? p.firmName : undefined,
+    /* Filtered, not trusted: a payload is a database row, and a digest with a
+       number where a sentence should be must not render as "undefined". */
+    items: Array.isArray(p.items) ? p.items.filter((i): i is string => typeof i === 'string') : undefined,
   };
 }
 
@@ -104,6 +107,24 @@ export function render(payload: MailJobPayload): { subject: string; text: string
           `Sign in to your secure portal for the details:\n${payload.link ?? portal}` +
           signoff,
       };
+    /* The one notice that goes to the firm rather than to a client, so it says
+       what is wrong outright — these are facts about the machine, and an
+       accountant who has to sign in to find out what the email meant will stop
+       reading the email. The count is in the subject because that is all a
+       phone lock screen shows (H7). */
+    case 'ops_digest': {
+      const items = payload.items ?? [];
+      return {
+        subject: `DocFlow needs attention (${items.length} item${items.length === 1 ? '' : 's'})`,
+        text:
+          `The DocFlow system check found ${items.length} thing${items.length === 1 ? '' : 's'} to look at:\n\n` +
+          items.map((i) => `  - ${i}`).join('\n') +
+          `\n\nThe full picture is on the System status page:\n${portal}/settings/system\n\n` +
+          `Nothing here names a client or a document. This notice is only sent on a day when ` +
+          `something needs attention.` +
+          signoff,
+      };
+    }
   }
 }
 

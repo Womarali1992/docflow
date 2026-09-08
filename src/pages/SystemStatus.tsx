@@ -1,5 +1,6 @@
 import React from 'react';
-import { useOpsStatus } from '@/api/queries';
+import { useOpsStatus, useRetryJob } from '@/api/queries';
+import type { FailedJob } from '@/api/types';
 import { I } from '@/components/docflow/icons';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
 import LoadError from '@/components/docflow/LoadError';
@@ -9,10 +10,15 @@ import LoadError from '@/components/docflow/LoadError';
  * the one they should glance at on a Monday.
  *
  * Ordered by what cannot be recovered from later: the backup first, then the
- * scanner (while it is down, uploads arrive but stay closed), then the disk,
- * then anything stuck. Every row that is not fine says what to do about it in
- * a sentence, because the person reading this is a CPA, not an administrator,
- * and the runbook is in a different window.
+ * worker (while it is down, nothing queued happens at all), then the scanner
+ * (while it is down, uploads arrive but stay closed), then the disk, then
+ * anything stuck. Every row that is not fine says what to do about it in a
+ * sentence, because the person reading this is a CPA, not an administrator, and
+ * the runbook is in a different window.
+ *
+ * The failed-job list is the one place the panel does something rather than
+ * reporting: most failures are one email sent while the mail password was
+ * wrong, and Retry should not mean opening a database client (H7).
  */
 
 const formatBytes = (n: number | null) => {
@@ -34,6 +40,16 @@ const ago = (iso: string | null) => {
   return `${Math.floor(hours / 24)} days ago`;
 };
 
+/** A waiting time, said the way somebody would say it out loud. */
+const duration = (seconds: number) => {
+  if (seconds < 90) return `${Math.max(0, Math.round(seconds))} seconds`;
+  const minutes = seconds / 60;
+  if (minutes < 90) return `${Math.round(minutes)} minutes`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${Math.round(hours)} hours`;
+  return `${Math.round(hours / 24)} days`;
+};
+
 /** One line of the panel: a state, a fact, and — when it is not fine — advice. */
 const Row: React.FC<{ label: string; ok: boolean | null; value: React.ReactNode; note?: string | null }> = ({
   label,
@@ -52,6 +68,61 @@ const Row: React.FC<{ label: string; ok: boolean | null; value: React.ReactNode;
     </span>
   </div>
 );
+
+/**
+ * The jobs that gave up, with the one button that does something about them.
+ *
+ * The error text is shown as the server truncated it. It is the firm's own
+ * background task failing — usually SMTP saying no — and hiding it behind
+ * "an error occurred" would leave the only actionable thing on the page unsaid.
+ */
+const FailedJobs: React.FC<{ jobs: FailedJob[] }> = ({ jobs }) => {
+  const retry = useRetryJob();
+  const [retried, setRetried] = React.useState<string[]>([]);
+
+  if (jobs.length === 0) return null;
+  return (
+    <div className="df-section">
+      <div className="df-section-head">
+        <div>
+          <div className="df-section-title">Failed jobs</div>
+          <div className="df-section-sub">
+            {jobs.length} job{jobs.length === 1 ? '' : 's'} used up every attempt and stopped
+          </div>
+        </div>
+      </div>
+      <div className="df-list">
+        {jobs.map((job) => (
+          <div key={job.id} className="df-row" style={{ gridTemplateColumns: '1fr auto', alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0 }}>
+              <div>
+                <span className="df-mono">{job.type}</span>
+                <span className="df-muted">
+                  {' '}· gave up after {job.attempts} attempt{job.attempts === 1 ? '' : 's'} · {formatWhen(job.runAt)}
+                </span>
+              </div>
+              {job.lastError && <div className="df-note df-note-warn">{job.lastError}</div>}
+            </div>
+            <button
+              className="df-btn"
+              disabled={retry.isPending || retried.includes(job.id)}
+              onClick={() => retry.mutate(job.id, { onSuccess: () => setRetried((ids) => [...ids, job.id]) })}
+            >
+              {retried.includes(job.id) ? 'Queued' : 'Retry'}
+            </button>
+          </div>
+        ))}
+      </div>
+      {retry.isError && (
+        <div className="df-section-body">
+          <div className="df-note df-note-warn">
+            That job could not be retried — refresh the page; it may have started running on its own.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const SystemStatus: React.FC = () => {
   const { data, isPending, error, refetch, isFetching } = useOpsStatus();
@@ -106,6 +177,33 @@ const SystemStatus: React.FC = () => {
             )}
 
             <Row
+              label="Background worker"
+              ok={data.worker.lastSeenAt !== null && !data.worker.note}
+              value={
+                data.worker.lastSeenAt === null ? (
+                  'Never started'
+                ) : (
+                  <>
+                    {data.worker.note ? 'Not answering' : 'Running'}
+                    <span className="df-muted">
+                      {' '}· last heard from{' '}
+                      {data.worker.silentSeconds !== null && data.worker.silentSeconds < 90
+                        ? 'just now'
+                        : `${duration(data.worker.silentSeconds ?? 0)} ago`}
+                    </span>
+                    <div className="df-meta">
+                      <span className="df-mono">{data.worker.workerId}</span>
+                      {data.worker.host && <span className="df-muted"> on {data.worker.host}</span>}
+                      {data.worker.version && <span className="df-muted"> · build {data.worker.version}</span>}
+                      {data.worker.startedAt && <span className="df-muted"> · up since {formatWhen(data.worker.startedAt)}</span>}
+                    </div>
+                  </>
+                )
+              }
+              note={data.worker.note}
+            />
+
+            <Row
               label="Virus scanner"
               ok={data.scanner.required ? data.scanner.reachable && !data.scanner.note : null}
               value={
@@ -144,11 +242,16 @@ const SystemStatus: React.FC = () => {
                   <span className="df-mono">{data.jobs.pending}</span> pending ·{' '}
                   <span className="df-mono">{data.jobs.failed}</span> failed ·{' '}
                   <span className="df-mono">{data.jobs.done}</span> done
+                  {data.jobs.oldestActionableAgeSeconds !== null && (
+                    <div className="df-meta df-muted">
+                      Oldest job that is due has been waiting {duration(data.jobs.oldestActionableAgeSeconds)}
+                    </div>
+                  )}
                 </>
               }
               note={
                 data.jobs.failed > 0
-                  ? 'Failed jobs are kept, never retried and never deleted. They are usually email with the wrong credentials.'
+                  ? 'A failed job has used up its attempts and will not run again on its own. Fix the cause, then Retry it below.'
                   : null
               }
             />
@@ -187,9 +290,43 @@ const SystemStatus: React.FC = () => {
               value={data.mail.configured ? 'Configured' : 'Not configured — invitations are copy-link only'}
               note={data.mail.note}
             />
+
+            <Row
+              label="This build"
+              // A migration this build expects that the database has not taken
+              // is the one thing here that is a real problem rather than a fact.
+              ok={data.release.migrations.pending.length === 0 ? (data.release.dirty === true ? null : true) : false}
+              value={
+                <>
+                  {data.release.short ? (
+                    <>
+                      <span className="df-mono">{data.release.short}</span>
+                      {data.release.branch && <span className="df-muted"> on {data.release.branch}</span>}
+                      {data.release.dirty && <span className="df-muted"> · built from an edited working tree</span>}
+                    </>
+                  ) : (
+                    <span className="df-muted">Running from source, not from a build</span>
+                  )}
+                  <div className="df-meta df-muted">
+                    node {data.release.node}
+                    {data.release.builtAt && <> · built {formatWhen(data.release.builtAt)}</>}
+                    {' '}· <span className="df-mono">{data.release.migrations.applied}</span> migration
+                    {data.release.migrations.applied === 1 ? '' : 's'} applied
+                    {data.release.scanner && <> · {data.release.scanner}</>}
+                  </div>
+                </>
+              }
+              note={
+                data.release.migrations.pending.length > 0
+                  ? `This build expects ${data.release.migrations.pending.length} migration(s) the database has not taken: ${data.release.migrations.pending.join(', ')}.`
+                  : data.release.note
+              }
+            />
           </div>
         )}
       </div>
+
+      {data && <FailedJobs jobs={data.jobs.failedList} />}
     </div>
   );
 };
