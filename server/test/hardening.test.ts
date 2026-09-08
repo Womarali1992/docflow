@@ -374,7 +374,7 @@ describe('hardening', () => {
    * Fixed by H3 (2.4): validate and scan first, then create; the version row,
    * its scan job and its audit line commit together or not at all.
    */
-  it.fails('F11: a refused upload leaves no document row behind', async () => {
+  it('F11: a refused upload leaves no document row behind', async () => {
     const client = await loginAs(fx, 'client1a');
     const before = (await db.select().from(schema.documents)).length;
 
@@ -388,6 +388,192 @@ describe('hardening', () => {
     expect(res.body.code).toBe('type_mismatch');
     expect((await db.select().from(schema.documents)).length).toBe(before);
   });
+  /* -------------------------------------------------- H3: idempotency */
+
+  /**
+   * A phone on a train sends 20 MB, the connection drops between the server's
+   * commit and the client's `onload`, and the app sends it again. Without an id
+   * for the send that is a second version, and the advisor ends up reviewing
+   * the client's signal strength.
+   */
+  it('H3: a retry with the same X-Upload-Id answers the original send', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const uploadId = randomUUID();
+    const send = () =>
+      request(app)
+        .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+        .set('Cookie', client)
+        .set('X-Upload-Id', uploadId)
+        .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+
+    const first = await send();
+    expect([201, 202]).toContain(first.status);
+
+    const retry = await send();
+    expect(retry.status).toBe(200);
+    expect(retry.body.code).toBe('duplicate_upload');
+    expect(retry.body.version.id).toBe(first.body.version.id);
+
+    // One version, and one document - not two of either.
+    expect(await versionsOf(first.body.document.id)).toHaveLength(1);
+  });
+
+  /**
+   * Two identical retries in flight at once: one of them loses the partial
+   * unique index on `upload_id` and has to read the winner's answer rather than
+   * turning a 23505 into a 500.
+   */
+  it('H3: two concurrent retries of one send still make one version', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const uploadId = randomUUID();
+    const send = () =>
+      request(app)
+        .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+        .set('Cookie', client)
+        .set('X-Upload-Id', uploadId)
+        .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+
+    const results = await Promise.all([send(), send()]);
+
+    expect(results.map((r) => r.status).filter((status) => status >= 400)).toEqual([]);
+    expect(new Set(results.map((r) => r.body.version.id as string)).size).toBe(1);
+    const rows = await db
+      .select()
+      .from(schema.documentVersions)
+      .where(eq(schema.documentVersions.uploadId, uploadId));
+    expect(rows).toHaveLength(1);
+  });
+
+  /**
+   * The header must not become a way to ask "does this upload id exist?" - a
+   * version belonging to someone else reads exactly as if there were none, and
+   * the upload proceeds normally.
+   */
+  it('H3: an upload id belonging to another client behaves as if it were absent', async () => {
+    const mine = await loginAs(fx, 'client1a');
+    const theirs = await loginAs(fx, 'client2a');
+    const uploadId = randomUUID();
+
+    const first = await request(app)
+      .post(`/api/engagements/${fx.client2a.engagement}/uploads`)
+      .set('Cookie', theirs)
+      .set('X-Upload-Id', uploadId)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+    expect([201, 202]).toContain(first.status);
+
+    const second = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+      .set('Cookie', mine)
+      .set('X-Upload-Id', uploadId)
+      .attach('file', Buffer.from(FIXTURES.png.bytes), { filename: FIXTURES.png.name });
+
+    // Not a replay of someone else's answer, and not a refusal confirming it exists.
+    expect([201, 202]).toContain(second.status);
+    expect(second.body.code).not.toBe('duplicate_upload');
+    expect(second.body.document.id).not.toBe(first.body.document.id);
+  });
+
+  /* ------------------------------------------------ H3: unchanged bytes */
+
+  /**
+   * Re-sending the identical file - a client who is not sure the first one went
+   * through, and has no upload id because the page was reloaded - should not
+   * reopen a review the advisor has already finished.
+   */
+  it('H3: the same bytes against the current version answer unchanged', async () => {
+    await scannerSaysClean();
+    const client = await loginAs(fx, 'client1a');
+    const url = `/api/documents/${fx.client1a.upload}/versions`;
+
+    const first = await request(app)
+      .post(url)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+    expect(first.status).toBe(201);
+    const before = (await versionsOf(fx.client1a.upload)).length;
+
+    const again = await request(app)
+      .post(url)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+
+    expect(again.status).toBe(200);
+    expect(again.body.code).toBe('unchanged');
+    expect(again.body.version.id).toBe(first.body.version.id);
+    expect(await versionsOf(fx.client1a.upload)).toHaveLength(before);
+  });
+
+  /* -------------------------------------------------------- H3: quota */
+
+  /**
+   * One client's phone must not be able to fill the volume that holds
+   * everyone's documents, the database and the backups. The refusal happens
+   * before a byte is staged, and says what the limit is.
+   */
+  it('H3: a client over their storage quota is refused before anything is stored', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const original = process.env.MAX_CLIENT_STORAGE_BYTES;
+    process.env.MAX_CLIENT_STORAGE_BYTES = '1';
+    try {
+      const res = await request(app)
+        .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+        .set('Cookie', client)
+        .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('quota_exceeded');
+      expect(res.body.error).toMatch(/storage/i);
+    } finally {
+      if (original === undefined) delete process.env.MAX_CLIENT_STORAGE_BYTES;
+      else process.env.MAX_CLIENT_STORAGE_BYTES = original;
+    }
+  });
+
+  /** The advisor is the one who would have to clear the space; the ceiling is not theirs. */
+  it('H3: an advisor is not held to a client storage quota', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const original = process.env.MAX_CLIENT_STORAGE_BYTES;
+    process.env.MAX_CLIENT_STORAGE_BYTES = '1';
+    try {
+      const res = await request(app)
+        .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+        .set('Cookie', advisor)
+        .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+
+      expect([201, 202]).toContain(res.status);
+    } finally {
+      if (original === undefined) delete process.env.MAX_CLIENT_STORAGE_BYTES;
+      else process.env.MAX_CLIENT_STORAGE_BYTES = original;
+    }
+  });
+
+  /* ------------------------------------------------- H3: one transaction */
+
+  /**
+   * A version nobody has scanned, the job that will scan it and the line that
+   * records it are one fact. Before H3 they were three statements with two gaps
+   * in between, and a crash in either gap left a stored file that nothing would
+   * ever look at again.
+   */
+  it('H3: an unscanned version, its retry job and its audit line arrive together', async () => {
+    const client = await loginAs(fx, 'client1a');
+
+    const res = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+      .set('Cookie', client)
+      .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name });
+
+    // No scanner is configured for this row, so it is the 202 path.
+    expect(res.status).toBe(202);
+    const versionId = res.body.version.id as string;
+
+    const jobs = await db.select().from(schema.jobs).where(eq(schema.jobs.dedupeKey, `scan_retry:${versionId}`));
+    expect(jobs).toHaveLength(1);
+
+    const lines = await db.select().from(schema.auditLog).where(eq(schema.auditLog.targetId, versionId));
+    expect(lines.map((l) => l.action)).toContain('document.received');
+  });
+
   /* ------------------------------------------------- invariant 16 (H2) */
 
   /**

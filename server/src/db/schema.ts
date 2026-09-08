@@ -422,11 +422,20 @@ export const documentVersions = pgTable(
     uploadedById: uuid('uploaded_by_id').notNull(),
     publishedAt: timestamp('published_at', { withTimezone: true }),
     supersededAt: timestamp('superseded_at', { withTimezone: true }),
+    /* The client's own id for one send (`X-Upload-Id`), so a retry after a lost
+       response answers the original result instead of making a second version
+       (H3). Null for anything uploaded without one — hence the partial index. */
+    uploadId: uuid('upload_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     documentIdx: index('document_versions_document_idx').on(t.documentId, t.versionNo),
     versionUnique: uniqueIndex('document_versions_document_version_unique').on(t.documentId, t.versionNo),
+    /* The race two identical retries lose on: one of them gets 23505 and reads
+       the winner's answer rather than both creating a version. */
+    uploadUnique: uniqueIndex('document_versions_upload_id_unique')
+      .on(t.uploadId)
+      .where(sql`${t.uploadId} IS NOT NULL`),
   })
 );
 

@@ -24,10 +24,24 @@ const file = (name: string, size = 1024) => new File([new Uint8Array(size)], nam
 const enqueue = (state: QueueState, ...names: string[]): QueueState =>
   queueReducer(state, {
     type: 'enqueue',
-    items: names.map((name, i) => ({ id: `i${i}-${name}`, file: file(name), target })),
+    items: names.map((name, i) => ({ id: `i${i}-${name}`, uploadId: `upload-${i}`, file: file(name), target })),
   });
 
 describe('queueReducer', () => {
+  it('treats "nothing new happened" as done, with its own sentence', () => {
+    let state = enqueue(initialQueue, 'a.pdf', 'b.pdf');
+    const [same, retried] = state.items;
+
+    // 200 + unchanged: the client sent the file they had already sent.
+    state = queueReducer(state, { type: 'settled', id: same.id, status: 200, code: 'unchanged' });
+    // 200 + duplicate_upload: the same send, retried after a lost response.
+    state = queueReducer(state, { type: 'settled', id: retried.id, status: 200, code: 'duplicate_upload' });
+
+    expect(state.items.map((i) => i.state)).toEqual(['done', 'done']);
+    expect(state.items[0].message).toBe(UPLOAD_MESSAGE.unchanged);
+    expect(state.items[1].message).toBe(UPLOAD_MESSAGE.duplicate_upload);
+  });
+
   it('keeps the whole batch, in order, and starts nothing on its own', () => {
     const state = enqueue(initialQueue, 'a.pdf', 'b.pdf', 'c.pdf');
     expect(state.items.map((i) => i.name)).toEqual(['a.pdf', 'b.pdf', 'c.pdf']);

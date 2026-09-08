@@ -5,6 +5,16 @@ import { PDF_BYTES, app, binaryParser, loginAs, request, seedFixture, type Fixtu
 const attachPdf = (t: Test) =>
   t.attach('file', PDF_BYTES, { filename: 'again.pdf', contentType: 'application/pdf' });
 
+/**
+ * The same PDF with one more line in it — a *replacement*, which is what these
+ * tests are about. Re-sending byte-identical content is a different case
+ * entirely: H3 answers it 200 `unchanged` rather than recording a second
+ * version of a file nobody changed (hardening.test.ts covers that one).
+ */
+const REVISED_PDF = Buffer.concat([PDF_BYTES, Buffer.from('\n% revised\n')]);
+const attachRevisedPdf = (t: Test) =>
+  t.attach('file', REVISED_PDF, { filename: 'again.pdf', contentType: 'application/pdf' });
+
 describe('documents', () => {
   let fx: Fixture;
 
@@ -42,7 +52,7 @@ describe('documents', () => {
     const cookie = await loginAs(fx, 'client1a');
 
     // C5.4 removed POST /documents/:id/file; a new version is how bytes arrive.
-    const own = await attachPdf(
+    const own = await attachRevisedPdf(
       request(app).post(`/api/documents/${fx.client1a.upload}/versions`).set('Cookie', cookie)
     );
     // 202 = stored and being checked. The document keeps serving the version that
@@ -106,7 +116,7 @@ describe('documents', () => {
 
     // ...but re-uploading is theirs to do. C5.4 removed POST /documents/:id/file;
     // a new version is the only way bytes arrive, and it supersedes the last one.
-    const again = await attachPdf(request(app).post(`${url}/versions`).set('Cookie', client));
+    const again = await attachRevisedPdf(request(app).post(`${url}/versions`).set('Cookie', client));
     expect(again.status).toBe(202);
     expect(again.body.version.versionNo).toBe(2);
     expect(again.body.document).not.toHaveProperty('hasUpdateRequest');

@@ -11,8 +11,21 @@
  * staging directory stays empty for an unauthorized attempt — if that test ever
  * fails, this ordering has been broken.
  *
- * Answers are the same across all three: 201 published, 202 stored but still
- * being checked, and a stable `code` on every refusal.
+ * Two more things happen in that same pre-staging window (H3), for the same
+ * reason — they are cheap, and they mean bytes that cannot be accepted are
+ * never carried across the network at all:
+ *
+ *   - **`X-Upload-Id`.** A phone that loses the response to a 20 MB upload
+ *     retries it. Without an id that is a second version of the same file, and
+ *     the advisor reviews the client's flaky connection. With one, the retry is
+ *     recognised and answered with the original result. The lookup is scoped
+ *     through `findDocument`, so someone else's upload id reads as absent.
+ *   - **The client's storage quota**, from `Content-Length` first and from the
+ *     real size after staging (files/quota.ts).
+ *
+ * Answers: 201 published, 202 stored but still being checked, 200 for the two
+ * "nothing new happened" cases (`duplicate_upload`, `unchanged`), and a stable
+ * `code` on every refusal.
  */
 import { type NextFunction, type Request, type Response } from 'express';
 import { asyncRouter } from './async-router.js';
@@ -21,11 +34,12 @@ import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { uploadLimiter } from '../security/limits.js';
 import { discardStaged, stageUpload, stagedFrom } from '../files/staging.js';
-import { publishStagedUpload } from '../files/publish.js';
+import { duplicateAnswer, publishStagedUpload, versionByUploadId, type PublishSuccess } from '../files/publish.js';
+import { quotaRefusal } from '../files/quota.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
-import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, notFound } from './scope.js';
-import { lockRequest } from '../workflow/publish.js';
+import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound } from './scope.js';
+import { lockRequest, type Tx } from '../workflow/publish.js';
 import { notify } from '../notify.js';
 import type { Document } from '../db/schema.js';
 
@@ -38,29 +52,127 @@ const router = asyncRouter();
  * not match one of the three below.
  */
 
+/** Who this upload is for, known before any document row exists. */
+interface UploadContext {
+  clientId: string;
+  providerId: string;
+}
+
+/**
+ * The client's id for one send. Absent means no idempotency — an old build, or
+ * a curl — which is allowed; a malformed one is refused rather than ignored,
+ * because silently dropping it would turn a retry into a duplicate version.
+ */
+function uploadIdOf(req: Request): string | null | 'invalid' {
+  const raw = req.get('X-Upload-Id');
+  if (raw === undefined || raw.trim() === '') return null;
+  const value = raw.trim();
+  return isId(value) ? value : 'invalid';
+}
+
+/** The answer every upload route gives, in one shape. */
+function answerBody(outcome: PublishSuccess, document: Document) {
+  return {
+    document: serializeDocument(document),
+    version: serializeVersion(outcome.result.version),
+    scanStatus: outcome.scanStatus,
+    ...(outcome.code ? { code: outcome.code } : {}),
+    ...(outcome.status === 202
+      ? { message: 'Received. We are checking this file — it will appear once the check finishes.' }
+      : {}),
+  };
+}
+
+/**
+ * Everything that can be settled before a byte is staged: a malformed upload
+ * id, a retry of a send that already landed, and a body that would obviously
+ * put the client over their quota.
+ *
+ * Returns true when it has answered the request.
+ */
+async function settledBeforeBytes(req: Request, res: Response, context: UploadContext): Promise<boolean> {
+  const uploadId = uploadIdOf(req);
+  if (uploadId === 'invalid') {
+    badRequest(res, 'X-Upload-Id must be a UUID.', 'bad_upload_id');
+    return true;
+  }
+
+  if (uploadId) {
+    const existing = await versionByUploadId(uploadId);
+    const visible = existing ? await findDocument(req.auth!, existing.documentId) : null;
+    if (existing && visible) {
+      res.status(200).json(answerBody(duplicateAnswer(existing, visible), visible));
+      return true;
+    }
+    // Scoped: an id on a version the caller cannot see behaves exactly as if it
+    // did not exist — no replay, and no refusal either, because a refusal would
+    // confirm that someone else's upload has that id. It is dropped rather than
+    // carried into the insert: the column is globally unique, so keeping it
+    // would turn a probe into a collision.
+    res.locals.uploadId = existing ? null : uploadId;
+  }
+
+  if (req.auth!.kind === 'client') {
+    // The client's claim about the body size. An over-estimate by a few hundred
+    // bytes of multipart overhead, which is nothing against a 2 GiB ceiling —
+    // and refusing here means a phone on cellular never sends the file at all.
+    const declared = Number.parseInt(req.get('Content-Length') ?? '', 10);
+    if (Number.isFinite(declared) && declared > 0) {
+      const refusal = await quotaRefusal(context.clientId, declared);
+      if (refusal) {
+        res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * Shapes the pipeline's answer into the response every upload route gives.
  *
- * `resolveDocument` runs only once bytes have actually arrived, so a request
- * with no file attached does not leave an empty document row behind.
+ * `resolveDocument` is handed to the pipeline rather than called here: it runs
+ * only once the bytes have been validated and scanned, so a refused upload does
+ * not leave an empty document row behind (invariant 20).
  */
-async function finish(req: Request, res: Response, resolveDocument: () => Promise<Document>, label: string) {
+async function finish(
+  req: Request,
+  res: Response,
+  context: UploadContext,
+  resolveDocument: (tx: Tx) => Promise<Document>,
+  label: string
+) {
   const auth = req.auth!;
   const staged = stagedFrom(req);
   if (!staged) return res.status(400).json({ error: 'No file was sent.', code: 'no_file' });
 
-  const document = await resolveDocument();
-
   const outcome = await publishStagedUpload({
-    document,
+    resolveDocument,
+    visibleDocument: (id) => findDocument(auth, id),
+    context,
     staged,
     uploadedByKind: auth.kind,
     uploadedById: auth.sub,
+    uploadId: (res.locals.uploadId as string | undefined) ?? null,
     ip: req.ip ?? null,
   });
 
   if (!outcome.ok) {
     return res.status(outcome.status).json({ error: outcome.error, code: outcome.code });
+  }
+
+  const [fresh] = await db
+    .select()
+    .from(schema.documents)
+    .where(eq(schema.documents.id, outcome.result.document.id));
+  const document = fresh ?? outcome.result.document;
+
+  // Nothing arrived that anyone has to look at: a retry of a send that already
+  // landed, or the same bytes that are already on screen. Announcing either
+  // would be telling the advisor about something that did not happen.
+  if (outcome.code === 'duplicate_upload' || outcome.code === 'unchanged') {
+    return res.status(outcome.status).json(answerBody(outcome, document));
   }
 
   // The advisor hears about a client's upload; their own deliverable is not news.
@@ -85,16 +197,7 @@ async function finish(req: Request, res: Response, resolveDocument: () => Promis
     targetId: document.id,
   });
 
-  const [fresh] = await db.select().from(schema.documents).where(eq(schema.documents.id, document.id));
-  return res.status(outcome.status).json({
-    document: serializeDocument(fresh),
-    version: serializeVersion(outcome.result.version),
-    scanStatus: outcome.scanStatus,
-    ...(outcome.code ? { code: outcome.code } : {}),
-    ...(outcome.status === 202
-      ? { message: 'Received. We are checking this file — it will appear once the check finishes.' }
-      : {}),
-  });
+  return res.status(outcome.status).json(answerBody(outcome, document));
 }
 
 /** Any handler that stages bytes must have authorized its target first. */
@@ -125,32 +228,30 @@ function withStaging(handler: (req: Request, res: Response) => Promise<unknown>)
  * four have in common. Locking it makes them queue: the first creates the
  * document, the rest find it.
  */
-async function documentForRequest(request: typeof schema.requests.$inferSelect): Promise<Document> {
-  return db.transaction(async (tx) => {
-    await lockRequest(tx, request.id);
+async function documentForRequest(tx: Tx, request: typeof schema.requests.$inferSelect): Promise<Document> {
+  await lockRequest(tx, request.id);
 
-    const [existing] = await tx.select().from(schema.documents).where(eq(schema.documents.requestId, request.id));
-    if (existing) return existing;
+  const [existing] = await tx.select().from(schema.documents).where(eq(schema.documents.requestId, request.id));
+  if (existing) return existing;
 
-    const now = new Date();
-    const [created] = await tx
-      .insert(schema.documents)
-      .values({
-        clientId: request.clientId,
-        providerId: request.providerId,
-        engagementId: request.engagementId,
-        requestId: request.id,
-        kind: 'client_upload',
-        displayName: request.title,
-        category: request.category,
-        name: request.title,
-        uploadedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning();
-    return created;
-  });
+  const now = new Date();
+  const [created] = await tx
+    .insert(schema.documents)
+    .values({
+      clientId: request.clientId,
+      providerId: request.providerId,
+      engagementId: request.engagementId,
+      requestId: request.id,
+      kind: 'client_upload',
+      displayName: request.title,
+      category: request.category,
+      name: request.title,
+      uploadedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+  return created;
 }
 
 router.post(
@@ -170,12 +271,17 @@ router.post(
         if (req.auth!.kind !== 'client') {
           return res.status(403).json({ error: 'Only the client uploads against a request.', code: 'client_only' });
         }
+        const context = { clientId: request.clientId, providerId: request.providerId };
+        if (await settledBeforeBytes(req, res, context)) return;
         res.locals.request = request;
+        res.locals.context = context;
         next();
       })
       .catch(next);
   },
-  withStaging((req, res) => finish(req, res, () => documentForRequest(res.locals.request), 'submitted'))
+  withStaging((req, res) =>
+    finish(req, res, res.locals.context as UploadContext, (tx) => documentForRequest(tx, res.locals.request), 'submitted')
+  )
 );
 
 /* ------------------------------------------------------- ad-hoc, either side */
@@ -185,7 +291,11 @@ router.post(
  * producing a deliverable (private until shared); a client is sending something
  * in. That one decision is what later decides who may see it.
  */
-async function documentForEngagement(req: Request, engagement: typeof schema.engagements.$inferSelect): Promise<Document> {
+async function documentForEngagement(
+  tx: Tx,
+  req: Request,
+  engagement: typeof schema.engagements.$inferSelect
+): Promise<Document> {
   const auth = req.auth!;
   const staged = stagedFrom(req);
   const filename = staged?.originalFilename ?? 'Upload';
@@ -193,7 +303,7 @@ async function documentForEngagement(req: Request, engagement: typeof schema.eng
   const category = kind === 'deliverable' ? 'Reports' : 'Uploads';
   const now = new Date();
 
-  const [created] = await db
+  const [created] = await tx
     .insert(schema.documents)
     .values({
       clientId: engagement.clientId,
@@ -225,12 +335,23 @@ router.post(
           return badRequest(res, 'This engagement is closed. Ask your accountant to reopen it.', 'engagement_closed');
         }
 
+        const context = { clientId: engagement.clientId, providerId: engagement.providerId };
+        if (await settledBeforeBytes(req, res, context)) return;
         res.locals.engagement = engagement;
+        res.locals.context = context;
         next();
       })
       .catch(next);
   },
-  withStaging((req, res) => finish(req, res, () => documentForEngagement(req, res.locals.engagement), 'uploaded'))
+  withStaging((req, res) =>
+    finish(
+      req,
+      res,
+      res.locals.context as UploadContext,
+      (tx) => documentForEngagement(tx, req, res.locals.engagement),
+      'uploaded'
+    )
+  )
 );
 
 /* ------------------------------------------------ a new version of a document */
@@ -248,16 +369,27 @@ router.post(
   uploadLimiter,
   (req: Request, res: Response, next: NextFunction) => {
     findDocument(req.auth!, req.params.id)
-      .then((doc) => {
+      .then(async (doc) => {
         if (!doc) return notFound(res);
         if (!mayAddVersion(doc, req.auth!.kind)) return advisorOnly(res);
         if (doc.archivedAt) return badRequest(res, 'This document is archived.', 'archived');
+        const context = { clientId: doc.clientId, providerId: doc.providerId };
+        if (await settledBeforeBytes(req, res, context)) return;
         res.locals.document = doc;
+        res.locals.context = context;
         next();
       })
       .catch(next);
   },
-  withStaging((req, res) => finish(req, res, async () => res.locals.document as Document, 'uploaded a new version of'))
+  withStaging((req, res) =>
+    finish(
+      req,
+      res,
+      res.locals.context as UploadContext,
+      async () => res.locals.document as Document,
+      'uploaded a new version of'
+    )
+  )
 );
 
 export default router;

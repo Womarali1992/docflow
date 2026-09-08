@@ -16,6 +16,7 @@ import { buildManifest } from '../scripts/manifest.mjs';
 import { recordBackup } from '../scripts/record-backup.mjs';
 import { ensureDatabase } from '../scripts/create-db.mjs';
 import { collectStatus, journalEntries } from '../scripts/status.mjs';
+import { deleteOrphans, findOrphans, parseDuration } from '../scripts/orphans.mjs';
 import { seedFixture, type Fixture } from './helpers.js';
 
 const url = () => process.env.DATABASE_URL!;
@@ -204,6 +205,71 @@ describe('ops scripts', () => {
     expect(result.ok).toBe(false);
     expect(result.fatal).toHaveLength(1);
     expect(result.fatal[0].storageKey).toBe(version.storageKey);
+  });
+
+  /* --------------------------------------------------------- H3: orphans */
+
+  /**
+   * The mirror image of the integrity check. That one asks whether every row's
+   * file exists; this asks whether every file has a row. Debris under `files/`
+   * is what a transaction that failed after the rename leaves behind, and until
+   * H3 nothing looked for it — the hourly sweeper only covers `staging/`.
+   */
+  it('lists files under files/ that no version row points at, and nothing else', async () => {
+    const [version] = await db
+      .select()
+      .from(schema.documentVersions)
+      .where(eq(schema.documentVersions.documentId, fx.client1a.upload));
+
+    // Debris beside a real file, backdated so it is old enough to judge.
+    const orphanKey = 'files/2026/01/orphan-abandoned.pdf';
+    const orphanAbs = path.join(dataRoot(), orphanKey);
+    fs.mkdirSync(path.dirname(orphanAbs), { recursive: true });
+    fs.writeFileSync(orphanAbs, 'abandoned bytes');
+    const old = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    fs.utimesSync(orphanAbs, old, old);
+
+    const report = await findOrphans({ url: url(), dataRoot: dataRoot() });
+
+    expect(report.orphans.map((o) => o.key)).toEqual([orphanKey]);
+    expect(report.orphans[0].sizeBytes).toBe('abandoned bytes'.length);
+    // The referenced file is not in the list, whatever else is on the volume.
+    expect(report.orphans.map((o) => o.key)).not.toContain(version.storageKey);
+    expect(report.referencedRows).toBeGreaterThanOrEqual(6);
+
+    const removal = deleteOrphans(report.orphans);
+    expect(removal.failed).toEqual([]);
+    expect(fs.existsSync(orphanAbs)).toBe(false);
+    // The document everyone else is still using is exactly where it was.
+    expect(fs.existsSync(path.join(dataRoot(), version.storageKey))).toBe(true);
+  });
+
+  /**
+   * A file written seconds ago may be a transaction still open on another
+   * connection. Counting it is honest; offering to delete it is not.
+   */
+  it('will not call a file written seconds ago an orphan', async () => {
+    const freshKey = 'files/2026/01/just-now.pdf';
+    const freshAbs = path.join(dataRoot(), freshKey);
+    fs.mkdirSync(path.dirname(freshAbs), { recursive: true });
+    fs.writeFileSync(freshAbs, 'mid-transaction, possibly');
+
+    const report = await findOrphans({ url: url(), dataRoot: dataRoot() });
+
+    // Counted so the operator knows the volume has more on it than the report
+    // lists, but never offered for deletion. (Earlier tests in this file leave
+    // their own fixture bytes behind, which land in the same bucket — DATA_ROOT
+    // is wiped once per file, not once per test.)
+    expect(report.orphans.map((o) => o.key)).not.toContain(freshKey);
+    expect(report.tooRecent).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reads --older-than the way an operator would write it', () => {
+    expect(parseDuration('7d')).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(parseDuration('90m')).toBe(90 * 60 * 1000);
+    expect(parseDuration('12')).toBe(12 * 60 * 60 * 1000);
+    expect(parseDuration('soon')).toBeNull();
+    expect(parseDuration('')).toBeNull();
   });
 
   it('refuses to create anything but a docflow_test / docflow_restore* database', async () => {

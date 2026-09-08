@@ -23,6 +23,7 @@ import { queueStats } from '../jobs/queue.js';
 import { isMailConfigured } from '../jobs/mail.js';
 import { clamdHost, clamdPort, ping, scanRequired, signatureDate, version } from '../files/scan.js';
 import { dataRoot } from '../files/store.js';
+import { maxClientStorageBytes, topClientsByStorage } from '../files/quota.js';
 import { firmTimezone } from '../jobs/schedule.js';
 
 const router = asyncRouter();
@@ -129,15 +130,25 @@ async function health() {
   };
 }
 
-router.get('/status', requireProvider, async (_req, res) => {
-  const [jobs, scan, disk, backup, live] = await Promise.all([queueStats(), scanner(), storage(), backups(), health()]);
+router.get('/status', requireProvider, async (req, res) => {
+  const [jobs, scan, disk, backup, live, heaviest] = await Promise.all([
+    queueStats(),
+    scanner(),
+    storage(),
+    backups(),
+    health(),
+    // Which clients are using the space, before the volume is the thing that
+    // tells you. Ids and byte counts of this advisor's own clients — the panel
+    // stays safe to leave open on a screen in a shared office.
+    topClientsByStorage(req.auth!.sub),
+  ]);
 
   res.json({
     time: new Date().toISOString(),
     firmTimezone: firmTimezone(),
     jobs,
     scanner: scan,
-    storage: disk,
+    storage: { ...disk, perClientQuotaBytes: maxClientStorageBytes(), topClients: heaviest },
     backups: backup,
     health: live,
     mail: {

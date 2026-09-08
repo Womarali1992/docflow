@@ -54,6 +54,16 @@ const attachPdf = (t: Test) =>
   t.attach('file', PDF_BYTES, { filename: 'upload.pdf', contentType: 'application/pdf' });
 
 /**
+ * A *different* PDF, for the routes that add a version to a document that
+ * already has one. Byte-identical content is answered 200 `unchanged` from H3,
+ * which is the right answer to a re-send and the wrong shape for a matrix row
+ * asking whether this actor may add a version at all.
+ */
+const REVISED_PDF = Buffer.concat([PDF_BYTES, Buffer.from('\n% revised\n')]);
+const attachRevisedPdf = (t: Test) =>
+  t.attach('file', REVISED_PDF, { filename: 'upload.pdf', contentType: 'application/pdf' });
+
+/**
  * The newest decision recorded against a document, read back through the API.
  *
  * Accept and request-correction used to be provable from their own response:
@@ -681,13 +691,13 @@ const cases: Case[] = [
   },
   {
     name: 'POST /api/documents/:id/versions (own upload)',
-    req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.upload}/versions`)),
+    req: (fx) => attachRevisedPdf(request(app).post(`/api/documents/${fx.client1a.upload}/versions`)),
     expect: S(202, 404, 202, 404, 404, 401),
     check: (res) => expect(res.body.version.versionNo).toBe(2),
   },
   {
     name: 'POST /api/documents/:id/versions (client cannot revise a deliverable)',
-    req: (fx) => attachPdf(request(app).post(`/api/documents/${fx.client1a.deliverable}/versions`)),
+    req: (fx) => attachRevisedPdf(request(app).post(`/api/documents/${fx.client1a.deliverable}/versions`)),
     expect: S(202, 404, 403, 404, 404, 401),
   },
 

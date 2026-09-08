@@ -1,0 +1,2 @@
+ALTER TABLE "document_versions" ADD COLUMN "upload_id" uuid;--> statement-breakpoint
+CREATE UNIQUE INDEX "document_versions_upload_id_unique" ON "document_versions" USING btree ("upload_id") WHERE "document_versions"."upload_id" IS NOT NULL;

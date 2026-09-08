@@ -34,6 +34,12 @@ export interface UploadItem {
   size: number;
   file: File;
   target: UploadTarget;
+  /**
+   * This send's id, sent as `X-Upload-Id` and deliberately unchanged by Retry:
+   * retrying is the same send, and the server answers the original result
+   * rather than recording a second version of the same file (H3).
+   */
+  uploadId: string;
   /** 0…1 while uploading; 1 once the bytes are with the server. */
   progress: number;
   state: UploadState;
@@ -48,7 +54,7 @@ export interface QueueState {
 }
 
 export type QueueAction =
-  | { type: 'enqueue'; items: { id: string; file: File; target: UploadTarget }[] }
+  | { type: 'enqueue'; items: { id: string; uploadId: string; file: File; target: UploadTarget }[] }
   | { type: 'start'; id: string }
   | { type: 'progress'; id: string; fraction: number }
   /** Bytes are with the server: 201 = published, 202 = still being checked. */
@@ -79,7 +85,14 @@ export const UPLOAD_MESSAGE: Record<string, string> = {
   engagement_closed: 'That work has been closed. Ask your accountant to reopen it.',
   archived: 'That document has been archived.',
   cancelled: 'Cancelled.',
+  quota_exceeded: 'There is no room left for your documents. Ask your accountant to archive what has been dealt with.',
+  unchanged: 'This is the same file you already sent — nothing more to do.',
+  duplicate_upload: 'Already sent — this is the same upload, not a second copy.',
+  bad_upload_id: 'That upload could not be identified. Try again.',
 };
+
+/** 200 answers that mean "nothing new happened", which is a success, not a failure. */
+const NOTHING_NEW = new Set(['unchanged', 'duplicate_upload']);
 
 /** The 202 case: stored, readable once the scan finishes. Not a failure. */
 export const CHECKING_MESSAGE = 'Received. It appears once the security check finishes — nothing more to do.';
@@ -100,8 +113,9 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return {
         items: [
           ...state.items,
-          ...action.items.map(({ id, file, target }) => ({
+          ...action.items.map(({ id, uploadId, file, target }) => ({
             id,
+            uploadId,
             name: file.name,
             size: file.size,
             file,
@@ -126,11 +140,12 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       const item = state.items.find((it) => it.id === action.id);
       if (!item || item.state === 'cancelled') return state;
       const checking = action.status === 202;
+      const nothingNew = action.code !== undefined && NOTHING_NEW.has(action.code);
       return patch(action.id, {
         state: checking ? 'scanning' : 'done',
         progress: 1,
         code: action.code,
-        message: checking ? CHECKING_MESSAGE : undefined,
+        message: checking ? CHECKING_MESSAGE : nothingNew ? UPLOAD_MESSAGE[action.code!] : undefined,
       });
     }
 
@@ -174,7 +189,24 @@ export function nextQueued(state: QueueState): UploadItem | undefined {
 let counter = 0;
 const nextId = () => `upl-${Date.now().toString(36)}-${(counter += 1)}`;
 
-function post(target: UploadTarget, file: File, opts: { onProgress: (f: number) => void; signal: AbortSignal }) {
+/**
+ * A UUID for one send. `crypto.randomUUID` needs a secure context, which the
+ * portal always is; the fallback keeps a plain-http development host working
+ * rather than throwing where a retry would otherwise be safe.
+ */
+function newUploadId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+function post(
+  target: UploadTarget,
+  file: File,
+  opts: { onProgress: (f: number) => void; signal: AbortSignal; uploadId: string }
+) {
   if (target.kind === 'request') return api.uploads.toRequest(target.id, file, opts);
   if (target.kind === 'engagement') return api.uploads.toEngagement(target.id, file, opts);
   return api.uploads.newVersion(target.id, file, opts);
@@ -209,6 +241,7 @@ export function useUploadQueue() {
             const result = await post(item.target, item.file, {
               onProgress: (fraction) => dispatch({ type: 'progress', id: item.id, fraction }),
               signal: controller.signal,
+              uploadId: item.uploadId,
             });
             current = queueReducer(current, { type: 'settled', id: item.id, status: result.status, code: result.code });
             dispatch({ type: 'settled', id: item.id, status: result.status, code: result.code });
@@ -244,7 +277,7 @@ export function useUploadQueue() {
     (files: File[] | FileList, target: UploadTarget) => {
       const list = Array.from(files);
       if (list.length === 0) return;
-      const items = list.map((file) => ({ id: nextId(), file, target }));
+      const items = list.map((file) => ({ id: nextId(), uploadId: newUploadId(), file, target }));
       dispatch({ type: 'enqueue', items });
       // Pump from a state that already includes them: dispatch has not landed yet.
       void pump(queueReducer(state, { type: 'enqueue', items }));

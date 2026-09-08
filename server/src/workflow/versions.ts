@@ -21,7 +21,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { Document, DocumentVersion, ScanStatus } from '../db/schema.js';
-import { allocateVersionNo, lockDocument, publishVersion } from './publish.js';
+import { allocateVersionNo, lockDocument, publishVersion, type Tx } from './publish.js';
 
 export interface NewVersionInput {
   document: Document;
@@ -35,6 +35,8 @@ export interface NewVersionInput {
   /** Only a clean version is published; anything else waits (invariant 3). */
   scanStatus?: ScanStatus;
   scanDetail?: string | null;
+  /** The caller's `X-Upload-Id`, when they sent one (H3 idempotency). */
+  uploadId?: string | null;
   now?: Date;
 }
 
@@ -51,45 +53,57 @@ export interface NewVersionResult {
  * and — if a scanner has already said the file is clean — publish it.
  */
 export async function recordNewVersion(input: NewVersionInput): Promise<NewVersionResult> {
+  return db.transaction((tx) => recordNewVersionTx(tx, input));
+}
+
+/**
+ * The same, inside a transaction the caller already owns.
+ *
+ * H3's upload pipeline needs this: the version row, the scan-retry job that
+ * will finish checking it, and the audit line that records it have to commit
+ * together. Three separate transactions cannot promise that, and the gap
+ * between them is where a stored file that nothing will ever look at again
+ * comes from.
+ */
+export async function recordNewVersionTx(tx: Tx, input: NewVersionInput): Promise<NewVersionResult> {
   const now = input.now ?? new Date();
   const scanStatus = input.scanStatus ?? 'clean';
 
-  return db.transaction(async (tx) => {
-    // Lock first, allocate second (invariant 17). Without this, two uploads
-    // landing together both read the same MAX and one of them dies on the
-    // unique index — a 500 for a client whose file was perfectly fine.
-    const document = await lockDocument(tx, input.document.id);
-    if (!document) throw new Error(`recordNewVersion: document ${input.document.id} does not exist`);
-    const versionNo = await allocateVersionNo(tx, document.id);
+  // Lock first, allocate second (invariant 17). Without this, two uploads
+  // landing together both read the same MAX and one of them dies on the
+  // unique index — a 500 for a client whose file was perfectly fine.
+  const document = await lockDocument(tx, input.document.id);
+  if (!document) throw new Error(`recordNewVersion: document ${input.document.id} does not exist`);
+  const versionNo = await allocateVersionNo(tx, document.id);
 
-    const [version] = await tx
-      .insert(schema.documentVersions)
-      .values({
-        documentId: document.id,
-        versionNo,
-        originalFilename: input.originalFilename,
-        mimeType: input.mimeType,
-        sizeBytes: input.sizeBytes,
-        sha256: input.sha256,
-        storageKey: input.storageKey,
-        scanStatus,
-        scanDetail: input.scanDetail ?? null,
-        scannedAt: scanStatus === 'pending' ? null : now,
-        uploadedByKind: input.uploadedByKind,
-        uploadedById: input.uploadedById,
-        createdAt: now,
-      })
-      .returning();
+  const [version] = await tx
+    .insert(schema.documentVersions)
+    .values({
+      documentId: document.id,
+      versionNo,
+      originalFilename: input.originalFilename,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      storageKey: input.storageKey,
+      scanStatus,
+      scanDetail: input.scanDetail ?? null,
+      scannedAt: scanStatus === 'pending' ? null : now,
+      uploadedByKind: input.uploadedByKind,
+      uploadedById: input.uploadedById,
+      uploadId: input.uploadId ?? null,
+      createdAt: now,
+    })
+    .returning();
 
-    // A quarantined or still-being-checked version is recorded but changes
-    // nothing the reader can see. `publishVersion` owns the rest.
-    if (scanStatus !== 'clean') {
-      return { version, document, reopenedRequest: false };
-    }
+  // A quarantined or still-being-checked version is recorded but changes
+  // nothing the reader can see. `publishVersion` owns the rest.
+  if (scanStatus !== 'clean') {
+    return { version, document, reopenedRequest: false };
+  }
 
-    const outcome = await publishVersion(tx, { versionId: version.id, now, reason: 'upload' });
-    return { version: outcome.version, document: outcome.document, reopenedRequest: outcome.reopened };
-  });
+  const outcome = await publishVersion(tx, { versionId: version.id, now, reason: 'upload' });
+  return { version: outcome.version, document: outcome.document, reopenedRequest: outcome.reopened };
 }
 
 /** The versions of a document, newest first. */

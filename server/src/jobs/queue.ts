@@ -32,12 +32,25 @@ export interface EnqueueOptions {
   maxAttempts?: number;
 }
 
+/** The shared connection, or a transaction when the job must land with the change. */
+type Executor = Pick<typeof db, 'insert'>;
+
 /**
  * Adds a job. Returns the row, or `null` when `dedupeKey` already exists —
  * callers treat that as success (the work is already scheduled).
+ *
+ * Pass `tx` when the job is part of what a transaction promises. The upload
+ * pipeline does: a version that needs re-scanning and the job that will re-scan
+ * it commit together, so a crash between them cannot leave a stored file that
+ * nothing will ever look at again (H3).
  */
-export async function enqueue(type: JobType, payload: Record<string, unknown>, opts: EnqueueOptions = {}): Promise<Job | null> {
-  const [row] = await db
+export async function enqueue(
+  type: JobType,
+  payload: Record<string, unknown>,
+  opts: EnqueueOptions = {},
+  tx?: Executor
+): Promise<Job | null> {
+  const [row] = await (tx ?? db)
     .insert(schema.jobs)
     .values({
       type,

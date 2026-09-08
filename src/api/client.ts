@@ -151,6 +151,13 @@ export interface UploadOpts {
   onProgress?: (fraction: number) => void;
   /** Aborting is a real answer: the client changed their mind mid-upload. */
   signal?: AbortSignal;
+  /**
+   * This send's own id, stable across retries (`X-Upload-Id`). A phone that
+   * loses the response to a 20 MB upload and sends it again is making the same
+   * request, not a second one — with this the server answers the original
+   * result instead of recording another version.
+   */
+  uploadId?: string;
 }
 
 /**
@@ -171,6 +178,7 @@ function upload(path: string, file: File, opts: UploadOpts = {}): Promise<Upload
     xhr.open('POST', `${BASE}${path}`);
     // Same-origin: the session cookie rides along on its own.
     xhr.responseType = 'text';
+    if (opts.uploadId) xhr.setRequestHeader('X-Upload-Id', opts.uploadId);
 
     const abort = () => xhr.abort();
     opts.signal?.addEventListener('abort', abort, { once: true });

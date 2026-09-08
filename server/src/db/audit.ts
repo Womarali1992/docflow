@@ -36,6 +36,9 @@ export type AuditAction =
   | 'request.correction_requested'
   | 'request.waived'
   | 'document.published'
+  /* Stored and queued for a re-scan: the honest name for a 202, and the row a
+     later `document.published` from the scan-retry job pairs with (H3). */
+  | 'document.received'
   | 'document.quarantined'
   | 'document.downloaded'
   | 'document.previewed'

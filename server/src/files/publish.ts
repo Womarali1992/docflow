@@ -11,16 +11,35 @@
  * make the firm's outage the client's problem. The file is stored, the version
  * is `error`, a retry job is queued, and the client is told it is being checked
  * (202). Nobody can read it until a scan succeeds.
+ *
+ * **H3 moved the document row to the end of that sentence.** The pipeline used
+ * to be handed a document that the route had already created, so every refused
+ * upload — wrong type, spoofed extension, encrypted, infected — left an empty
+ * document behind: the client saw a rejection and the advisor saw a document
+ * with no file in it (audit F11). Now the caller passes `resolveDocument`, a
+ * thunk this module calls only once the bytes have earned a row (invariant 20),
+ * and the version, its scan-retry job and its audit line commit in one
+ * transaction rather than three.
+ *
+ * Two answers that are not new versions, both 200:
+ *   - `duplicate_upload` — the same `X-Upload-Id` already produced a version.
+ *     A retry after a lost response is the same send, not a second one.
+ *   - `unchanged` — byte-identical to the version already current. Re-sending
+ *     the same file should not reopen a review the advisor has finished.
  */
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import type { Document } from '../db/schema.js';
+import { and, eq } from 'drizzle-orm';
+import { db, schema } from '../db/client.js';
+import type { Document, DocumentVersion } from '../db/schema.js';
 import { audit } from '../db/audit.js';
 import { enqueue } from '../jobs/queue.js';
-import { recordNewVersion, type NewVersionResult } from '../workflow/versions.js';
-import { commitStaged, discardStaged, newStorageKey } from './store.js';
+import { recordNewVersionTx, type NewVersionResult } from '../workflow/versions.js';
+import type { Tx } from '../workflow/publish.js';
+import { absPathForKey, commitStaged, discardStaged, newStorageKey } from './store.js';
 import { validateStagedFile } from './validate.js';
 import { scanForPipeline } from './scan.js';
+import { quotaRefusal } from './quota.js';
 import type { StagedUpload } from './staging.js';
 
 /** Stable codes the frontend can branch on; the message is what a person reads. */
@@ -30,6 +49,7 @@ export type PublishFailureCode =
   | 'encrypted'
   | 'empty_file'
   | 'infected'
+  | 'quota_exceeded'
   | 'storage_failed';
 
 export interface PublishFailure {
@@ -41,21 +61,37 @@ export interface PublishFailure {
 
 export interface PublishSuccess {
   ok: true;
-  /** 201 when it is published and readable, 202 when it is stored but still being checked. */
-  status: 201 | 202;
+  /** 201 published, 202 stored and still being checked, 200 nothing new happened. */
+  status: 200 | 201 | 202;
   result: NewVersionResult;
   scanStatus: 'clean' | 'error' | 'pending';
-  /** Set when the scanner could not be reached, so the caller can say so. */
-  code?: 'scanner_unavailable';
+  /** Set when the scanner could not be reached, or when this was not a new version. */
+  code?: 'scanner_unavailable' | 'duplicate_upload' | 'unchanged';
 }
 
 export type PublishResult = PublishSuccess | PublishFailure;
 
 export interface PublishInput {
-  document: Document;
+  /**
+   * The document these bytes belong to — called only after validation and the
+   * virus check have passed, so a refused upload never creates one, and called
+   * *inside* the version transaction, so a document created for an upload that
+   * then fails rolls back with it.
+   */
+  resolveDocument: (tx: Tx) => Promise<Document>;
+  /**
+   * The same scoping the route uses, for the one case that needs it after the
+   * fact: a retry that lost the idempotency race has to be answered with the
+   * winner's document, and only if the caller may see it.
+   */
+  visibleDocument?: (documentId: string) => Promise<Document | null>;
+  /** Who the file is for, known before the document exists (for the audit line). */
+  context: { clientId: string; providerId: string };
   staged: StagedUpload;
   uploadedByKind: 'provider' | 'client';
   uploadedById: string;
+  /** The caller's `X-Upload-Id`, already validated as a UUID. */
+  uploadId?: string | null;
   /** Who to attribute the audit line to; defaults to the uploader. */
   ip?: string | null;
   now?: Date;
@@ -72,12 +108,15 @@ const RETRY_EVERY_MS = 5 * 60 * 1000;
  */
 export const SCAN_RETRY_ATTEMPTS = 30;
 
+/** Postgres' unique-violation SQLSTATE, which is how a lost idempotency race ends. */
+const UNIQUE_VIOLATION = '23505';
+
 /**
  * Runs validate → scan → publish for one staged file. Always consumes the
  * staged file: on every path it is either renamed into place or deleted.
  */
 export async function publishStagedUpload(input: PublishInput): Promise<PublishResult> {
-  const { staged, document } = input;
+  const { staged, context } = input;
   const now = input.now ?? new Date();
 
   /* 1. Validate: is this the kind of file it claims to be? */
@@ -87,15 +126,28 @@ export async function publishStagedUpload(input: PublishInput): Promise<PublishR
     return { ok: false, status: 400, code: validation.code, error: validation.message };
   }
 
-  /* 2. Scan: a verdict before anything reaches files/. */
+  /* 2. Quota, now that the real size is known rather than claimed. The route
+     already refused an obviously-oversized send before staging; this is the
+     measurement. Advisors are exempt — see quota.ts. */
+  if (input.uploadedByKind === 'client') {
+    const refusal = await quotaRefusal(context.clientId, staged.sizeBytes);
+    if (refusal) {
+      discardStaged(staged.absPath);
+      return { ok: false, ...refusal };
+    }
+  }
+
+  /* 3. Scan: a verdict before anything reaches files/. */
   const scan = await scanForPipeline(staged.absPath);
   if (scan.status === 'infected') {
     discardStaged(staged.absPath);
+    // No document row to point at — that is the F11 fix — so the audit line
+    // names the client whose upload it was and the filename it arrived under.
     await audit({
       action: 'document.quarantined',
-      targetType: 'document',
-      targetId: document.id,
-      clientId: document.clientId,
+      targetType: 'upload',
+      targetId: null,
+      clientId: context.clientId,
       actorKind: input.uploadedByKind,
       actorId: input.uploadedById,
       ip: input.ip ?? null,
@@ -110,73 +162,155 @@ export async function publishStagedUpload(input: PublishInput): Promise<PublishR
     };
   }
 
-  /* 3. Publish: hash, move into place, then one transaction for the model. */
+  /* 4. The bytes have earned a row. Everything from here is one transaction:
+     the document (created now, if this is the first file against a request),
+     the version, the scan-retry job that will finish checking it, and the line
+     that records all of it. A crash anywhere in here leaves an unreferenced
+     file for `npm run files:orphans` and nothing else — no empty document, no
+     version with no job, no change with no audit line (invariant 20). */
   const sha256 = await hashFile(staged.absPath);
   const storageKey = newStorageKey(now, validation.ext);
+  const scanStatus = scan.status === 'clean' ? 'clean' : scan.status === 'error' ? 'error' : 'pending';
 
+  let committed = false;
+  let settled: PublishSuccess;
   try {
-    commitStaged(staged.absPath, storageKey);
-  } catch (err) {
-    discardStaged(staged.absPath);
-    console.error('[files] could not store an upload:', err);
-    return { ok: false, status: 500, code: 'storage_failed', error: 'The file could not be stored. Please try again.' };
-  }
+    settled = await db.transaction(async (tx): Promise<PublishSuccess> => {
+      const document = await input.resolveDocument(tx);
 
-  let result: NewVersionResult;
-  try {
-    result = await recordNewVersion({
-      document,
-      originalFilename: staged.originalFilename,
-      mimeType: validation.mimeType,
-      sizeBytes: staged.sizeBytes,
-      sha256,
-      storageKey,
-      uploadedByKind: input.uploadedByKind,
-      uploadedById: input.uploadedById,
-      scanStatus: scan.status === 'clean' ? 'clean' : scan.status === 'error' ? 'error' : 'pending',
-      scanDetail: scan.detail,
-      now,
+      /* The same bytes as what is already on screen: nothing to record, and no
+         review to reopen. (Impossible on a first upload — there is no current
+         version to match — so this never discards a document it just made.) */
+      const current = await currentVersionOf(tx, document);
+      if (current && current.sha256 === sha256 && current.sizeBytes === staged.sizeBytes) {
+        return {
+          ok: true,
+          status: 200,
+          code: 'unchanged',
+          scanStatus: 'clean',
+          result: { version: current, document, reopenedRequest: false },
+        };
+      }
+
+      // The rename is the one thing here that a rollback cannot undo; it happens
+      // as late as possible, and what it leaves behind is an orphan the report
+      // knows how to find.
+      commitStaged(staged.absPath, storageKey);
+      committed = true;
+
+      const recorded = await recordNewVersionTx(tx, {
+        document,
+        originalFilename: staged.originalFilename,
+        mimeType: validation.mimeType,
+        sizeBytes: staged.sizeBytes,
+        sha256,
+        storageKey,
+        uploadedByKind: input.uploadedByKind,
+        uploadedById: input.uploadedById,
+        uploadId: input.uploadId ?? null,
+        scanStatus,
+        scanDetail: scan.detail,
+        now,
+      });
+
+      if (scanStatus !== 'clean') {
+        await enqueue(
+          'scan_retry',
+          { versionId: recorded.version.id, documentId: recorded.document.id, storageKey },
+          {
+            runAt: new Date(now.getTime() + RETRY_EVERY_MS),
+            // One retry chain per version, however many times the upload is retried.
+            dedupeKey: `scan_retry:${recorded.version.id}`,
+            maxAttempts: SCAN_RETRY_ATTEMPTS,
+          },
+          tx
+        );
+      }
+
+      await audit(
+        {
+          action: scanStatus === 'clean' ? 'document.published' : 'document.received',
+          targetType: 'document_version',
+          targetId: recorded.version.id,
+          clientId: recorded.document.clientId,
+          actorKind: input.uploadedByKind,
+          actorId: input.uploadedById,
+          ip: input.ip ?? null,
+          meta: {
+            documentId: recorded.document.id,
+            versionNo: recorded.version.versionNo,
+            sizeBytes: staged.sizeBytes,
+            scanStatus,
+          },
+        },
+        tx
+      );
+
+      return {
+        ok: true,
+        status: scanStatus === 'clean' ? 201 : 202,
+        result: recorded,
+        scanStatus,
+        ...(scanStatus === 'error' ? { code: 'scanner_unavailable' as const } : {}),
+      };
     });
   } catch (err) {
-    // The bytes are on disk but the row is not: leave the file for the sweeper
-    // rather than deleting something a concurrent write may already reference.
-    console.error('[files] version row failed after the file was stored:', err);
+    /* Two identical retries raced and this one lost the partial unique index on
+       `upload_id`. The winner's version is the answer to both — provided the
+       caller may see the document it landed on, which is the same scoping the
+       pre-staging check uses. Everything this transaction did, including any
+       document it created, has already rolled back. */
+    const found = input.uploadId && isUniqueViolation(err) ? await versionByUploadId(input.uploadId) : null;
+    const owner = found ? await input.visibleDocument?.(found.documentId) : null;
+    if (committed) {
+      // We generated this key moments ago and the transaction rolled back, so
+      // nothing else can reference it. Unlike a general failure, this is safe to
+      // clean up rather than leave for the orphan report.
+      if (found && owner) discardStaged(absPathForKey(storageKey));
+    }
+    if (found && owner) return duplicateAnswer(found, owner);
+
+    console.error('[files] the upload transaction failed:', err);
+    if (!committed) discardStaged(staged.absPath);
     return { ok: false, status: 500, code: 'storage_failed', error: 'The file could not be recorded. Please try again.' };
   }
 
-  /* 4. A version nobody has scanned needs a retry queued and an honest answer. */
-  if (scan.status !== 'clean') {
-    await enqueue(
-      'scan_retry',
-      { versionId: result.version.id, documentId: document.id, storageKey },
-      {
-        runAt: new Date(now.getTime() + RETRY_EVERY_MS),
-        // One retry chain per version, however many times the upload is retried.
-        dedupeKey: `scan_retry:${result.version.id}`,
-        maxAttempts: SCAN_RETRY_ATTEMPTS,
-      }
+  // An answer that recorded nothing still has to consume the staged file.
+  if (settled.code === 'unchanged') discardStaged(staged.absPath);
+  return settled;
+}
+
+/** The version a document is serving, if any. */
+async function currentVersionOf(tx: Tx, document: Document): Promise<DocumentVersion | null> {
+  if (!document.currentVersionId) return null;
+  const [row] = await tx
+    .select()
+    .from(schema.documentVersions)
+    .where(
+      and(eq(schema.documentVersions.id, document.currentVersionId), eq(schema.documentVersions.documentId, document.id))
     );
-    return {
-      ok: true,
-      status: 202,
-      result,
-      scanStatus: scan.status === 'error' ? 'error' : 'pending',
-      ...(scan.status === 'error' ? { code: 'scanner_unavailable' as const } : {}),
-    };
-  }
+  return row ?? null;
+}
 
-  await audit({
-    action: 'document.published',
-    targetType: 'document_version',
-    targetId: result.version.id,
-    clientId: document.clientId,
-    actorKind: input.uploadedByKind,
-    actorId: input.uploadedById,
-    ip: input.ip ?? null,
-    meta: { documentId: document.id, versionNo: result.version.versionNo, sizeBytes: staged.sizeBytes },
-  });
+/** A version already recorded under this `X-Upload-Id`, whoever sent it. */
+export async function versionByUploadId(uploadId: string): Promise<DocumentVersion | null> {
+  const [row] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.uploadId, uploadId));
+  return row ?? null;
+}
 
-  return { ok: true, status: 201, result, scanStatus: 'clean' };
+/** The original send's answer, replayed. */
+export function duplicateAnswer(version: DocumentVersion, document: Document): PublishSuccess {
+  return {
+    ok: true,
+    status: 200,
+    code: 'duplicate_upload',
+    scanStatus: version.scanStatus === 'clean' ? 'clean' : version.scanStatus === 'error' ? 'error' : 'pending',
+    result: { version, document, reopenedRequest: false },
+  };
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION;
 }
 
 /** sha256 of the file, streamed so a 25 MB upload never sits in memory twice. */
