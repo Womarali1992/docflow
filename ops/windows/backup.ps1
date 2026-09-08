@@ -5,6 +5,7 @@
 .DESCRIPTION
     Writes one self-contained backup set per run under <Dest>\<yyyy-MM-dd>:
         db.dump          pg_dump custom-format archive of the DATABASE_URL database
+        snapshot.json    the version list and row counts read from the SAME exported snapshot
         files\           copy of DATA_ROOT\files - every document version's bytes (immutable, so /XO)
         uploads\         copy of server\uploads, only while that pre-C5.4 tree still exists
         config\          server.env (contains secrets - Dest must be an encrypted volume) and the migrations journal
@@ -12,8 +13,14 @@
     Then records the run in backup_runs (npm run backup:record) and removes sets older than -Keep days.
 
     Order is dump -> files -> manifest, so the manifest only ever describes a complete set, and the
-    manifest is what makes the set checkable: it fails the run if a file the database says is
-    servable is missing from the copy. Never writes inside the repository.
+    manifest is what makes the set checkable: it fails the run if a file the database expects is
+    missing from the copy. Never writes inside the repository.
+
+    Since H6 the dump is taken by scripts\backup-dump.mjs, which opens one REPEATABLE READ
+    transaction, exports its snapshot for pg_dump to adopt, and writes the version list and row
+    counts it read inside that transaction to snapshot.json. The manifest then describes exactly
+    the database the dump contains rather than the database as it is a minute later - no writer is
+    paused to achieve it.
 
     Every byte lives under DATA_ROOT as a document version; the manifest verifies each one against
     the database. C5.4 stops the application reading server\uploads, but the tree is deleted by hand
@@ -76,7 +83,7 @@ if ($dotenv.ContainsKey('DATA_ROOT') -and $dotenv['DATA_ROOT']) {
 }
 $filesSrc = Join-Path $dataRoot 'files'
 
-Write-Log "DocFlow backup v2 -> $destFull"
+Write-Log "DocFlow backup v3 (snapshot-consistent) -> $destFull"
 Write-Log "Database '$($conn.Database)' on $($conn.Host):$($conn.Port) as $($conn.User); $pgDumpVersion"
 
 New-Item -ItemType Directory -Force -Path $destFull | Out-Null
@@ -86,25 +93,22 @@ $set = Join-Path $destFull $stamp
 New-Item -ItemType Directory -Path $set | Out-Null
 
 try {
-    # 1. Row counts first: proves the database is reachable and records what the dump should contain.
-    Write-Log 'Counting rows'
-    $counts = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\count.mjs')
-
-    # 2. Dump.
+    # 1. Dump and snapshot, from one instant. backup-dump.mjs exports the snapshot,
+    #    hands it to pg_dump, and records the version list and row counts it read
+    #    inside the same transaction - which is what makes the manifest describe
+    #    the database the dump actually contains. It also proves the database is
+    #    reachable, which is why the separate count that used to run first is gone.
     $dumpPath = Join-Path $set 'db.dump'
-    Write-Log "pg_dump -Fc -> $dumpPath"
-    $env:PGPASSWORD = $conn.Password
-    try {
-        & $pgDump -Fc -h $conn.Host -p $conn.Port -U $conn.User -d $conn.Database -f $dumpPath
-        if ($LASTEXITCODE -ne 0) { throw "pg_dump exited with $LASTEXITCODE" }
-    } finally {
-        Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
-    }
+    Write-Log "pg_dump -Fc --snapshot -> $dumpPath"
+    $dumpResult = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\backup-dump.mjs') `
+        -Arguments @('--set', $set, '--started', $startedAt.ToUniversalTime().ToString('o'), '--pg-dump', $pgDump)
+    $counts = $dumpResult.counts
     $dumpBytes = (Get-Item $dumpPath).Length
     $dumpSha = Get-Sha256 $dumpPath
     Write-Log "  dump $(Format-Bytes $dumpBytes), sha256 $($dumpSha.Substring(0, 12))..."
+    Write-Log "  snapshot $($dumpResult.snapshotId): $($dumpResult.versions) version(s), $($dumpResult.legacy) legacy row(s)"
 
-    # 3. Document bytes. Two trees while the legacy one still exists.
+    # 2. Document bytes. Two trees while the legacy one still exists.
     #    Versions are immutable, so /XO copies only what is new - a season's
     #    worth of scans is not re-copied every night.
     $filesDest = Join-Path $set 'files'
@@ -135,7 +139,7 @@ try {
         Write-Log "  $(@(Get-ChildItem $uploadsDest -File -Recurse).Count) legacy file(s) copied"
     }
 
-    # 4. Configuration.
+    # 3. Configuration.
     $configDir = Join-Path $set 'config'
     New-Item -ItemType Directory -Path $configDir | Out-Null
     Copy-Item $envFile (Join-Path $configDir 'server.env')
@@ -146,20 +150,22 @@ try {
         $config += 'config/migrations-journal.json'
     }
 
-    # 5. Manifest, written last so it only ever describes a complete set. Node
-    #    builds it because it has to ask the database which files should exist
-    #    and hash each one - and it FAILS the backup if a servable file is not
-    #    in the copy, which is the whole point of having a manifest.
+    # 4. Manifest, written last so it only ever describes a complete set. Node
+    #    builds it because it has to read snapshot.json and hash every file - and
+    #    it FAILS the backup if a file the snapshot expects is not in the copy,
+    #    which is the whole point of having a manifest. The only absence it
+    #    forgives is a version quarantined after the snapshot was taken: those
+    #    bytes were deleted on purpose, between the two steps.
     Write-Log 'Building the manifest (npm run backup:manifest)'
     $manifestResult = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\manifest.mjs') `
         -Arguments @('--set', $set, '--started', $startedAt.ToUniversalTime().ToString('o'), '--pg-dump-version', $pgDumpVersion) -IgnoreExitCode
     $manifestPath = Join-Path $set 'manifest.json'
     if (-not $manifestResult.ok) {
-        throw "Manifest verification failed: $($manifestResult.fatal.Count) servable file(s) missing or altered - this set could NOT restore the system"
+        throw "Manifest verification failed: $($manifestResult.fatal.Count) expected file(s) missing or altered - this set could NOT restore the system"
     }
-    Write-Log "  $($manifestResult.fileCount) version file(s), $(Format-Bytes $manifestResult.fileBytes), all hashes recorded"
+    Write-Log "  $($manifestResult.fileCount) version file(s), $(Format-Bytes $manifestResult.fileBytes), all hashes recorded ($($manifestResult.consistency))"
 
-    # 6. Prune old sets (by the date in the folder name).
+    # 5. Prune old sets (by the date in the folder name).
     $cutoff = (Get-Date).Date.AddDays(-$Keep)
     $invariant = [System.Globalization.CultureInfo]::InvariantCulture
     foreach ($dir in @(Get-ChildItem $destFull -Directory)) {
@@ -172,7 +178,7 @@ try {
         }
     }
 
-    # 7. Record the run, so /settings/system can answer "did the backup work?"
+    # 6. Record the run, so /settings/system can answer "did the backup work?"
     #    without anyone opening a drive. Bookkeeping never fails the backup.
     try {
         Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\record-backup.mjs') `

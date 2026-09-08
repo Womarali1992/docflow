@@ -23,6 +23,7 @@ const attachment = (n: number, state: 'ready' | 'checking'): RequestAttachment =
     sizeBytes: 1024,
     scanStatus: state === 'ready' ? 'clean' : 'pending',
     available: state === 'ready',
+    createdAt: new Date('2026-09-01T10:00:00Z'),
   },
 });
 

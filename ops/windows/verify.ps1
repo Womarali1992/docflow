@@ -125,6 +125,10 @@ try {
     if (-not $connect.AsyncWaitHandle.WaitOne(3000)) { throw 'timed out' }
     $client.EndConnect($connect)
     $stream = $client.GetStream()
+    # A clamd that accepts the connection and then says nothing would otherwise
+    # hang this check for ever - and a health check that can hang is not one.
+    $stream.ReadTimeout = 3000
+    $stream.WriteTimeout = 3000
     $ping = [System.Text.Encoding]::ASCII.GetBytes("zVERSION`0")
     $stream.Write($ping, 0, $ping.Length)
     $buffer = New-Object byte[] 256

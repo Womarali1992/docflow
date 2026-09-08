@@ -8,8 +8,10 @@
        script never restores over the live database; see docs\PILOT-RUNBOOK.md for promotion).
     3. pg_restore of db.dump, then mirrors the set's files\ into -RestoreTo (the restored
        DATA_ROOT). A pre-C5.4 set also has uploads\, mirrored into -RestoreTo\uploads.
-    4. Compares row counts with the manifest and runs scripts\integrity.mjs, which checks every
-       document version's bytes against the database's sha256 and the manifest's.
+    4. Compares row counts with the manifest and runs scripts\integrity.mjs --check-key, which
+       checks every document version's bytes against the database's sha256 and the manifest's, and
+       decrypts one MFA secret to prove APP_ENCRYPTION_KEY still opens the restored database. A
+       restore with the wrong key is a firm locked out of its own second factor.
     Prints PASS or FAIL and exits 0 / 1.
 
     A drill is the only thing that turns a backup into a restore. Run it monthly, and after any
@@ -84,7 +86,13 @@ $failures = @()
 Write-Log "Verifying backup set $set"
 $writtenBy = 'pg_dump version not recorded'
 if ($manifest.PSObject.Properties.Name -contains 'pgDumpVersion' -and $manifest.pgDumpVersion) { $writtenBy = $manifest.pgDumpVersion }
+$consistency = 'consistency not recorded (pre-H6 set: the dump and its file list came from two different instants)'
+if ($manifest.PSObject.Properties.Name -contains 'consistency' -and $manifest.consistency) {
+    $consistency = "consistency=$($manifest.consistency)"
+    if ($manifest.PSObject.Properties.Name -contains 'snapshotId' -and $manifest.snapshotId) { $consistency += " ($($manifest.snapshotId))" }
+}
 Write-Log "  created $($manifest.createdAt) on $($manifest.host), database '$($manifest.database)', $writtenBy"
+Write-Log "  $consistency"
 $dumpPath = Join-Path $set $manifest.dump.file
 if (-not (Test-Path $dumpPath)) { throw "Dump file missing: $dumpPath" }
 if ((Get-Sha256 $dumpPath) -ne $manifest.dump.sha256) { throw 'db.dump sha256 does not match the manifest - the backup set is damaged' }
@@ -162,11 +170,23 @@ if ($restored.migrations -ne $manifest.counts.migrations) { $failures += 'migrat
 # 6. File integrity against the restored database and the manifest.
 Write-Log 'Checking every stored file against the restored database and the manifest'
 $integrity = Invoke-NodeJson -Script (Join-Path $serverDir 'scripts\integrity.mjs') `
-    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--uploads', $uploadsFull, '--manifest', $manifestPath) -IgnoreExitCode
-$rows += [pscustomobject]@{ item = 'versions verified'; manifest = $manifestFiles.Count; restored = $integrity.checkedVersions; ok = [bool]$integrity.ok }
+    -Arguments @('--url', $restoreUrl, '--data-root', $restoreRoot, '--uploads', $uploadsFull, '--manifest', $manifestPath, '--check-key') -IgnoreExitCode
+# filesOk, not ok: a wrong encryption key fails the drill without saying anything
+# about whether the bytes came back, and the table should not blur the two.
+$rows += [pscustomobject]@{ item = 'versions verified'; manifest = $manifestFiles.Count; restored = $integrity.checkedVersions; ok = [bool]$integrity.filesOk }
 # Zero on a contracted set, and the row still prints - "0 of 0 verified" is a
 # fact about the set, whereas a missing row looks like a check nobody ran.
-$rows += [pscustomobject]@{ item = 'legacy files verified'; manifest = $manifestUploads.Count; restored = $integrity.checkedUploads; ok = [bool]$integrity.ok }
+$rows += [pscustomobject]@{ item = 'legacy files verified'; manifest = $manifestUploads.Count; restored = $integrity.checkedUploads; ok = [bool]$integrity.filesOk }
+# Rows and bytes can all be present and the system still be unusable: the MFA
+# secrets are sealed with APP_ENCRYPTION_KEY, and a restore onto a machine with a
+# different key locks every user out of their second factor. Check it here, while
+# there is still time to find the old key.
+$keyText = 'not checked'
+if ($integrity.mfaKeyOk -eq $true) { $keyText = 'decrypts' }
+elseif ($integrity.mfaKeyOk -eq $false) { $keyText = 'WRONG KEY' }
+elseif ($integrity.mfaKeyNote) { $keyText = $integrity.mfaKeyNote }
+$rows += [pscustomobject]@{ item = 'MFA secrets readable'; manifest = 'APP_ENCRYPTION_KEY'; restored = $keyText; ok = ($integrity.mfaKeyOk -ne $false) }
+if ($integrity.mfaKeyOk -eq $false) { $failures += $integrity.mfaKeyNote }
 if (-not $integrity.ok) {
     foreach ($m in @($integrity.missing)) { $failures += "missing $($m.kind) file $($m.path) ($($m.id))" }
     foreach ($m in @($integrity.mismatched)) { $failures += "$($m.path): $($m.reason)" }

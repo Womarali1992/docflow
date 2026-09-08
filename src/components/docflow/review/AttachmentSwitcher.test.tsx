@@ -35,6 +35,7 @@ const attachment = (n: number, state: 'ready' | 'checking' = 'ready'): RequestAt
     sizeBytes: 1024,
     scanStatus: 'clean',
     available: state === 'ready',
+    createdAt: new Date('2026-09-01T10:00:00Z'),
   },
 });
 

@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
@@ -13,6 +14,7 @@ import { countAll, TABLES } from '../scripts/count.mjs';
 import { checkIntegrity } from '../scripts/integrity.mjs';
 import { checkRedundancy } from '../scripts/legacy-redundancy.mjs';
 import { buildManifest } from '../scripts/manifest.mjs';
+import { backupDump, readSnapshotData, resolvePgDump, withExportedSnapshot } from '../scripts/backup-dump.mjs';
 import { recordBackup } from '../scripts/record-backup.mjs';
 import { ensureDatabase } from '../scripts/create-db.mjs';
 import { collectStatus, journalEntries } from '../scripts/status.mjs';
@@ -158,7 +160,12 @@ describe('ops scripts', () => {
     expect(result.fileCount).toBe(6);
 
     const manifest = JSON.parse(fs.readFileSync(result.manifestPath, 'utf8'));
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
+    // No snapshot.json beside the dump: this set was assembled by hand, so the
+    // list and the dump come from two different instants and the manifest says
+    // so rather than letting a later reader assume otherwise.
+    expect(manifest.consistency).toBe('live');
+    expect(manifest.snapshotId).toBeNull();
     expect(manifest.counts.tables.document_versions).toBe(6);
     expect(manifest.files.entries).toHaveLength(6);
     expect(manifest.files.entries.every((e: { sha256: string }) => /^[0-9a-f]{64}$/.test(e.sha256))).toBe(true);
@@ -363,5 +370,220 @@ describe('npm run status', () => {
     expect(stdout).not.toContain(dbPassword);
     expect(stdout).not.toContain(smtpPassword);
     expect(report.database.url).toContain(':***@');
+  });
+});
+
+/**
+ * H6 — a backup set is one instant.
+ *
+ * The audit's F8: `backup.ps1` dumped, then copied files, then `manifest.mjs`
+ * asked the *live* database what the set should contain. Three instants, so an
+ * upload that landed between them was in the manifest but not in the copy, and
+ * the backup failed its own check for no reason at all. Postgres can settle it
+ * without pausing a single writer: one REPEATABLE READ transaction exports its
+ * snapshot, `pg_dump --snapshot` adopts it, and the same transaction writes down
+ * what it saw.
+ */
+describe('backups from one snapshot (H6)', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  const BYTES = Buffer.from('%PDF-1.4 a later version of the same document');
+
+  /** A version row of the caller's choosing, with or without its bytes on disk. */
+  async function addVersion(opts: {
+    documentId: string;
+    versionNo: number;
+    scanStatus: 'pending' | 'clean' | 'infected';
+    withBytes: boolean;
+  }) {
+    const storageKey = `files/2026/09/${randomUUID()}.pdf`;
+    const abs = path.join(dataRoot(), storageKey);
+    if (opts.withBytes) {
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, BYTES);
+    }
+    const [v] = await db
+      .insert(schema.documentVersions)
+      .values({
+        documentId: opts.documentId,
+        versionNo: opts.versionNo,
+        originalFilename: 'later.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: BYTES.length,
+        sha256: createHash('sha256').update(BYTES).digest('hex'),
+        storageKey,
+        scanStatus: opts.scanStatus,
+        uploadedByKind: 'client',
+        uploadedById: fx.client1a.id,
+      })
+      .returning({ id: schema.documentVersions.id });
+    return { id: v.id, storageKey, abs };
+  }
+
+  /**
+   * A backup set the way backup.ps1 assembles one, minus the real dump: the
+   * snapshot's list beside a copy of every file it names. `skip` leaves one
+   * version's bytes out, which is what a set that cannot restore looks like.
+   */
+  async function snapshotSet(name: string, skip: string[] = []) {
+    const setDir = path.join(dataRoot(), name);
+    fs.mkdirSync(setDir, { recursive: true });
+    fs.writeFileSync(path.join(setDir, 'db.dump'), `not a real dump (${name}), but it hashes`);
+    const snapshot = await withExportedSnapshot(url(), async ({ client, snapshotId }: { client: unknown; snapshotId: string }) => ({
+      version: 1,
+      snapshotId,
+      exportedAt: new Date().toISOString(),
+      database: 'docflow_test',
+      pgDumpVersion: null,
+      ...(await readSnapshotData(client)),
+    }));
+    fs.writeFileSync(path.join(setDir, 'snapshot.json'), JSON.stringify(snapshot, null, 2), 'utf8');
+    for (const v of snapshot.versions as { id: string; storageKey: string }[]) {
+      if (skip.includes(v.id)) continue;
+      const src = path.join(dataRoot(), v.storageKey);
+      if (!fs.existsSync(src)) continue;
+      const dest = path.join(setDir, v.storageKey);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(src, dest);
+    }
+    return { setDir, snapshot };
+  }
+
+  it('reads the database as it was when the snapshot opened, not as it is now', async () => {
+    const seen = await withExportedSnapshot(url(), async ({ client, snapshotId }: { client: unknown; snapshotId: string }) => {
+      expect(snapshotId).toMatch(/\S/);
+      // Another connection commits a version while the snapshot is held — the
+      // upload that used to land between the dump and the manifest.
+      const added = await addVersion({ documentId: fx.client1a.upload, versionNo: 2, scanStatus: 'clean', withBytes: true });
+      return { data: await readSnapshotData(client), addedId: added.id };
+    });
+
+    expect(seen.data.versions.map((v: { id: string }) => v.id)).not.toContain(seen.addedId);
+    expect(seen.data.versions).toHaveLength(6);
+    // The counts come from the same transaction, so they agree with the list.
+    expect(seen.data.counts.tables.document_versions).toBe(6);
+    expect(await db.select().from(schema.documentVersions)).toHaveLength(7);
+  });
+
+  it('fails a set that is missing the bytes of a version still waiting to be scanned', async () => {
+    // Not servable — nobody can download a pending version — but its bytes are
+    // real data, and a restore that loses them loses the last hour of uploads.
+    const pending = await addVersion({ documentId: fx.client1a.upload, versionNo: 2, scanStatus: 'pending', withBytes: true });
+    const { setDir } = await snapshotSet('set-pending-missing', [pending.id]);
+
+    const result = await buildManifest({ setDir, url: url() });
+    expect(result.ok).toBe(false);
+    expect(result.consistency).toBe('snapshot');
+    expect(result.fatal).toHaveLength(1);
+    expect(result.fatal[0]).toMatchObject({ kind: 'missing', versionId: pending.id, scanStatus: 'pending' });
+  });
+
+  it('forgives the bytes of a version that was already infected', async () => {
+    // Quarantine deletes the file on purpose. A set without it is complete.
+    const infected = await addVersion({ documentId: fx.client1a.upload, versionNo: 2, scanStatus: 'infected', withBytes: false });
+    const { setDir } = await snapshotSet('set-infected');
+
+    const result = await buildManifest({ setDir, url: url() });
+    expect(result.ok).toBe(true);
+    expect(result.problems).toContainEqual(
+      expect.objectContaining({ kind: 'missing', versionId: infected.id, fatal: false })
+    );
+  });
+
+  it('forgives a version quarantined between the snapshot and the copy', async () => {
+    // Pending when the snapshot opened, infected by the time the files were
+    // copied: the scanner deleted the bytes in that window. That is the one
+    // legitimate reason for a file the snapshot names to be absent.
+    const racing = await addVersion({ documentId: fx.client1a.upload, versionNo: 2, scanStatus: 'pending', withBytes: true });
+    const { setDir } = await snapshotSet('set-quarantined-after', [racing.id]);
+    await db
+      .update(schema.documentVersions)
+      .set({ scanStatus: 'infected', scannedAt: new Date() })
+      .where(eq(schema.documentVersions.id, racing.id));
+
+    const result = await buildManifest({ setDir, url: url() });
+    expect(result.ok).toBe(true);
+    expect(result.problems).toContainEqual(
+      expect.objectContaining({ kind: 'quarantined_after_snapshot', versionId: racing.id, fatal: false })
+    );
+  });
+
+  it('takes the dump and the list from one snapshot, for real', async () => {
+    // The only test that proves `pg_dump --snapshot=<id>` is accepted at all;
+    // everything else drives the two halves separately. Skipped where the
+    // client tools are not installed rather than failing on someone's laptop.
+    let pgDump: string;
+    try {
+      pgDump = resolvePgDump();
+      execFileSync(pgDump, ['--version'], { stdio: 'ignore' });
+    } catch {
+      console.warn('[ops] pg_dump not available — skipping the real dump');
+      return;
+    }
+
+    const setDir = path.join(dataRoot(), 'real-set');
+    const result = await backupDump({ setDir, url: url(), pgDump });
+    expect(result.ok).toBe(true);
+    expect(result.snapshotId).toMatch(/\S/);
+    expect(fs.statSync(result.dumpPath).size).toBeGreaterThan(0);
+
+    const snapshot = JSON.parse(fs.readFileSync(path.join(setDir, 'snapshot.json'), 'utf8'));
+    expect(snapshot.versions).toHaveLength(6);
+    expect(snapshot.counts.tables.documents).toBe(9);
+    expect(snapshot.snapshotId).toBe(result.snapshotId);
+    expect(snapshot.pgDumpVersion).toMatch(/pg_dump/);
+  });
+
+  it('calls a missing pending version fatal in the integrity check too', async () => {
+    const pending = await addVersion({ documentId: fx.client1a.upload, versionNo: 2, scanStatus: 'pending', withBytes: true });
+    fs.unlinkSync(pending.abs);
+
+    const r = await checkIntegrity({ url: url(), dataRoot: dataRoot() });
+    expect(r.ok).toBe(false);
+    expect(r.fatal.map((f: { id: string }) => f.id)).toContain(pending.id);
+  });
+
+  /**
+   * A restore can put every row and every byte back and still leave the firm
+   * locked out: the TOTP secrets are sealed with APP_ENCRYPTION_KEY, and only
+   * the key on the machine doing the restoring can open them. This is also what
+   * pins scripts/lib.mjs's copy of the wire format to src/auth/crypto.ts — the
+   * secret it reads here was written by the server's own encryptSecret.
+   */
+  it('reports whether APP_ENCRYPTION_KEY still opens the database', async () => {
+    const ok = await checkIntegrity({ url: url(), dataRoot: dataRoot(), checkKey: true });
+    expect(ok.mfaKeyOk).toBe(true);
+    expect(ok.ok).toBe(true);
+
+    const previous = process.env.APP_ENCRYPTION_KEY;
+    process.env.APP_ENCRYPTION_KEY = 'a'.repeat(64);
+    try {
+      const wrong = await checkIntegrity({ url: url(), dataRoot: dataRoot(), checkKey: true });
+      expect(wrong.mfaKeyOk).toBe(false);
+      expect(wrong.mfaKeyNote).toMatch(/APP_ENCRYPTION_KEY/);
+      // Every file is where it should be, and the restore still failed. That is
+      // the point: bytes are not the only thing a restore has to get right —
+      // and the drill's table reports the two as the separate facts they are.
+      expect(wrong.fatal).toEqual([]);
+      expect(wrong.filesOk).toBe(true);
+      expect(wrong.ok).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.APP_ENCRYPTION_KEY;
+      else process.env.APP_ENCRYPTION_KEY = previous;
+    }
+  });
+
+  it('says so when there is no enrolment to check the key against', async () => {
+    await db.delete(schema.mfaTotp);
+    const r = await checkIntegrity({ url: url(), dataRoot: dataRoot(), checkKey: true });
+    // "Nothing to check" is not "the key is right", and the drill should not
+    // read one as the other.
+    expect(r.mfaKeyOk).toBeNull();
+    expect(r.mfaKeyNote).toMatch(/no enrolled TOTP secret/);
+    expect(r.ok).toBe(true);
   });
 });
