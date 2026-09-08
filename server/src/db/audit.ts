@@ -99,15 +99,23 @@ export async function audit(entry: AuditEntry, tx?: Executor): Promise<void> {
   }
 }
 
-/** Convenience for routes: pulls actor and IP off the request. */
+/**
+ * Convenience for routes: pulls actor and IP off the request. Pass `tx` when
+ * the log line has to land with the change it describes — a decision that moved
+ * a request and no record of who made it is worse than no decision at all.
+ */
 export async function auditRequest(
   req: Pick<Request, 'ip'> & { auth?: { sub: string; kind: 'provider' | 'client' } },
-  entry: Omit<AuditEntry, 'actorKind' | 'actorId' | 'ip'>
+  entry: Omit<AuditEntry, 'actorKind' | 'actorId' | 'ip'>,
+  tx?: Executor
 ): Promise<void> {
-  await audit({
-    ...entry,
-    actorKind: req.auth?.kind ?? null,
-    actorId: req.auth?.sub ?? null,
-    ip: ipOf(req),
-  });
+  await audit(
+    {
+      ...entry,
+      actorKind: req.auth?.kind ?? null,
+      actorId: req.auth?.sub ?? null,
+      ip: ipOf(req),
+    },
+    tx
+  );
 }

@@ -25,6 +25,7 @@ import { publishStagedUpload } from '../files/publish.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, notFound } from './scope.js';
+import { lockRequest } from '../workflow/publish.js';
 import { notify } from '../notify.js';
 import type { Document } from '../db/schema.js';
 
@@ -115,29 +116,41 @@ function withStaging(handler: (req: Request, res: Response) => Promise<unknown>)
 /**
  * The document behind a request, created on first upload. One document per
  * request, so a re-upload becomes version 2 rather than a second row.
+ *
+ * Select-then-insert with nothing holding the request still is a race: four
+ * uploads answering the same empty request all found no document and all
+ * created one (audit F3). There is deliberately no unique index on
+ * `documents.request_id` — H5 may want several attachments per request — so the
+ * serialization has to be a lock, and the request row is the only thing all
+ * four have in common. Locking it makes them queue: the first creates the
+ * document, the rest find it.
  */
 async function documentForRequest(request: typeof schema.requests.$inferSelect): Promise<Document> {
-  const [existing] = await db.select().from(schema.documents).where(eq(schema.documents.requestId, request.id));
-  if (existing) return existing;
+  return db.transaction(async (tx) => {
+    await lockRequest(tx, request.id);
 
-  const now = new Date();
-  const [created] = await db
-    .insert(schema.documents)
-    .values({
-      clientId: request.clientId,
-      providerId: request.providerId,
-      engagementId: request.engagementId,
-      requestId: request.id,
-      kind: 'client_upload',
-      displayName: request.title,
-      category: request.category,
-      name: request.title,
-      uploadedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning();
-  return created;
+    const [existing] = await tx.select().from(schema.documents).where(eq(schema.documents.requestId, request.id));
+    if (existing) return existing;
+
+    const now = new Date();
+    const [created] = await tx
+      .insert(schema.documents)
+      .values({
+        clientId: request.clientId,
+        providerId: request.providerId,
+        engagementId: request.engagementId,
+        requestId: request.id,
+        kind: 'client_upload',
+        displayName: request.title,
+        category: request.category,
+        name: request.title,
+        uploadedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    return created;
+  });
 }
 
 router.post(

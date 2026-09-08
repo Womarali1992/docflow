@@ -22,10 +22,12 @@
  * ordinary fixtures, the ordinary app and the ordinary test database.
  */
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { asc, eq } from 'drizzle-orm';
-import { db, schema } from '../src/db/client.js';
+import { db, pool, schema } from '../src/db/client.js';
 import type { Document, Job, ScanStatus } from '../src/db/schema.js';
 import { consumeTotp, getMfa } from '../src/auth/mfa.js';
 import { recordNewVersion, type NewVersionResult } from '../src/workflow/versions.js';
@@ -74,6 +76,9 @@ function versionsOf(documentId: string) {
     .orderBy(asc(schema.documentVersions.versionNo));
 }
 
+/** Long enough that "still running" means blocked rather than merely slow. */
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /** Enough of a job row for a handler that only reads `id` and `payload`. */
 function retryJob(versionId: string): Job {
   return {
@@ -90,6 +95,15 @@ function retryJob(versionId: string): Job {
     dedupeKey: null,
     createdAt: new Date(),
   };
+}
+
+/** Every `.ts` file under `server/src`, for the invariant-16 sweep. */
+function sourceFiles(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return sourceFiles(full);
+    return entry.isFile() && entry.name.endsWith('.ts') ? [full] : [];
+  });
 }
 
 describe('hardening', () => {
@@ -149,7 +163,7 @@ describe('hardening', () => {
    *
    * Fixed by H2 (2.3): lock the document, then allocate.
    */
-  it.fails('F3: eight versions recorded at once each get their own number', async () => {
+  it('F3: eight versions recorded at once each get their own number', async () => {
     const document = await documentRow(fx.client1a.upload);
 
     const results = await Promise.allSettled(Array.from({ length: 8 }, () => addVersion(document, 'pending')));
@@ -166,7 +180,7 @@ describe('hardening', () => {
    *
    * Fixed by H2 (2.3): the request row is locked for the first upload.
    */
-  it.fails('F3: four uploads answering one empty request make one document and four versions', async () => {
+  it('F3: four uploads answering one empty request make one document and four versions', async () => {
     const client = await loginAs(fx, 'client1a');
     const [created] = await db
       .insert(schema.requests)
@@ -199,6 +213,33 @@ describe('hardening', () => {
     expect(await versionsOf(documents[0].id)).toHaveLength(4);
   });
 
+  /**
+   * The same defect, proved deterministically rather than by racing: with the
+   * document held by another connection, a version insert must *wait* for the
+   * lock instead of computing its number beside it. This is the pattern every
+   * other overlap test in this program follows — hold, prove it blocks,
+   * release, prove the order.
+   */
+  it('F3: a version insert waits for the document lock rather than racing it', async () => {
+    const document = await documentRow(fx.client1a.upload);
+    const holder = await pool.connect();
+
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM documents WHERE id = $1 FOR UPDATE', [document.id]);
+
+      const pending = addVersion(document, 'pending');
+      const raced = await Promise.race([pending.then(() => 'finished' as const), sleep(300).then(() => 'blocked' as const)]);
+      expect(raced).toBe('blocked');
+
+      await holder.query('COMMIT');
+      // The fixture already carries version 1, so the one that waited is 2.
+      expect((await pending).version.versionNo).toBe(2);
+    } finally {
+      holder.release();
+    }
+  });
+
   /* ------------------------------------------------------------------ F4 */
 
   /**
@@ -209,7 +250,7 @@ describe('hardening', () => {
    * Fixed by H2 (2.3): `publishVersion` never moves the pointer backwards; a
    * late arrival that is not the newest is superseded on the spot.
    */
-  it.fails('F4: an older version scanning clean late does not become current again', async () => {
+  it('F4: an older version scanning clean late does not become current again', async () => {
     await scannerSaysClean();
     const document = await documentRow(fx.client1a.upload);
     const older = await addVersion(document, 'pending');
@@ -233,7 +274,7 @@ describe('hardening', () => {
    *
    * Fixed by H2 (2.3): publication reopens acceptance wherever it happens.
    */
-  it.fails('F4: a replacement that scans clean puts an accepted request back in front of the advisor', async () => {
+  it('F4: a replacement that scans clean puts an accepted request back in front of the advisor', async () => {
     await scannerSaysClean();
     const document = await documentRow(fx.client1a.request);
     await addVersion(document, 'clean');
@@ -259,7 +300,7 @@ describe('hardening', () => {
    * Fixed by H2 (2.3): the decision must name the current clean version, or it
    * is 409 `stale_version` and the workspace offers Refresh.
    */
-  it.fails('F5: accepting a version that is no longer current is refused', async () => {
+  it('F5: accepting a version that is no longer current is refused', async () => {
     const document = await documentRow(fx.client1a.request);
     const first = await addVersion(document, 'clean');
     await addVersion(await documentRow(document.id), 'clean');
@@ -283,7 +324,7 @@ describe('hardening', () => {
    *
    * Fixed by H2 (2.3): the version must be the current, clean, published one.
    */
-  it.fails('F5: accepting a version that has not been scanned is refused', async () => {
+  it('F5: accepting a version that has not been scanned is refused', async () => {
     const document = await documentRow(fx.client1a.request);
     await addVersion(document, 'clean');
     const pending = await addVersion(await documentRow(document.id), 'pending');
@@ -296,6 +337,30 @@ describe('hardening', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('stale_version');
+  });
+
+  /**
+   * And the case the audit did not write a probe for, which the fix implies: a
+   * decision that names nothing at all used to fall back to whatever was
+   * current at the moment the request reached the server. That is the same bug
+   * wearing a default — the advisor still never said which file they read.
+   *
+   * Fixed by H2 (2.3): `versionId` is required whenever a document exists.
+   */
+  it('F5: a decision that names no version at all is refused', async () => {
+    const document = await documentRow(fx.client1a.request);
+    await addVersion(document, 'clean');
+    const advisor = await loginAs(fx, 'provider1');
+
+    const res = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/accept`)
+      .set('Cookie', advisor)
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('version_required');
+    const [after] = await db.select().from(schema.requests).where(eq(schema.requests.id, fx.client1a.request));
+    expect(after.status).toBe('submitted');
   });
 
   /* ----------------------------------------------------------------- F11 */
@@ -322,5 +387,39 @@ describe('hardening', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('type_mismatch');
     expect((await db.select().from(schema.documents)).length).toBe(before);
+  });
+  /* ------------------------------------------------- invariant 16 (H2) */
+
+  /**
+   * The fix is only a fix while it stays the only path. `publishVersion` and
+   * `quarantineVersion` own `published_at`, `superseded_at` and
+   * `current_version_id`; a second writer anywhere else is how F4 happened in
+   * the first place, so the tree is swept rather than trusted.
+   *
+   * This looks at the object handed to `.set(...)` or `.values(...)` — the
+   * write form. Reading those columns, and serializing them, is everyone's
+   * business.
+   */
+  it('nothing outside workflow/publish.ts writes the publication columns', () => {
+    const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const owner = path.join('workflow', 'publish.ts');
+    const columns = /\b(publishedAt|supersededAt|currentVersionId)\s*:/;
+    const writes = /\.(?:set|values)\(\s*\{/g;
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles(srcDir)) {
+      const relative = path.relative(srcDir, file);
+      if (relative === owner) continue;
+      const source = fs.readFileSync(file, 'utf8');
+      for (const match of source.matchAll(writes)) {
+        const from = match.index ?? 0;
+        const window = source.slice(from, from + 800);
+        const end = window.indexOf('})');
+        const body = end === -1 ? window : window.slice(0, end);
+        if (columns.test(body)) offenders.push(`${relative} @ char ${from}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 });

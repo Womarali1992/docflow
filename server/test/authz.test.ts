@@ -566,7 +566,7 @@ const cases: Case[] = [
   },
   {
     name: 'POST /api/documents/:id/accept (ad-hoc upload)',
-    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/accept`),
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/accept`).send({ versionId: fx.client1a.uploadVersion }),
     expect: S(200, 404, 403, 404, 404, 401),
     check: async (_res, fx, actor) =>
       expect(await latestReview(fx, actor, fx.client1a.upload)).toMatchObject({
@@ -576,7 +576,10 @@ const cases: Case[] = [
   },
   {
     name: 'POST /api/documents/:id/request-correction (note required)',
-    req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/request-correction`).send({ note: 'Page 2 is missing' }),
+    req: (fx) =>
+      request(app)
+        .post(`/api/documents/${fx.client1a.upload}/request-correction`)
+        .send({ versionId: fx.client1a.uploadVersion, note: 'Page 2 is missing' }),
     expect: S(200, 404, 403, 404, 404, 401),
     // The note is the whole point of the verb — the client reads it — so it is
     // asserted here rather than only its presence.

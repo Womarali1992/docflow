@@ -31,6 +31,7 @@ import { contentDisposition } from '../files/filename.js';
 import { serializeDocument, serializeReview } from './serialize.js';
 import { notify } from '../notify.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, isId, notFound } from './scope.js';
+import { decidableVersion, refusalBody } from '../workflow/publish.js';
 import type { Document } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -125,34 +126,46 @@ async function decide(req: Request, res: Response, decision: 'accepted' | 'needs
     return res.status(400).json({ error: 'Say what needs correcting — the client sees this note.', code: 'note_required' });
   }
 
-  let versionId = parsed.data.versionId ?? doc.currentVersionId;
-  if (versionId) {
-    if (!isId(versionId)) return badRequest(res, 'That version does not belong to this document.', 'version_mismatch');
-    const [v] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.id, versionId));
+  const named = parsed.data.versionId ?? null;
+  if (named) {
+    if (!isId(named)) return badRequest(res, 'That version does not belong to this document.', 'version_mismatch');
+    const [v] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.id, named));
     if (!v || v.documentId !== doc.id) return badRequest(res, 'That version does not belong to this document.', 'version_mismatch');
-  } else {
-    versionId = null;
   }
 
   const now = new Date();
-  await db.insert(schema.reviews).values({
-    documentId: doc.id,
-    versionId,
-    requestId: doc.requestId,
-    reviewerId: auth.sub,
-    decision,
-    note: parsed.data.note ?? null,
-    createdAt: now,
-  });
-  await db.update(schema.documents).set({ updatedAt: now }).where(eq(schema.documents.id, doc.id));
+  /* The same rule as a checklist decision (invariant 19): the decision names
+     the version it is about, that version is the current clean one, and the
+     document is locked while both are true. */
+  const outcome = await db.transaction(async (tx) => {
+    const decidable = await decidableVersion(tx, doc.id, named);
+    if (!decidable.ok) return decidable;
 
-  await auditRequest(req, {
-    action: decision === 'accepted' ? 'request.accepted' : 'request.correction_requested',
-    targetType: 'document',
-    targetId: doc.id,
-    clientId: doc.clientId,
-    meta: { versionId },
+    await tx.insert(schema.reviews).values({
+      documentId: doc.id,
+      versionId: decidable.versionId,
+      requestId: doc.requestId,
+      reviewerId: auth.sub,
+      decision,
+      note: parsed.data.note ?? null,
+      createdAt: now,
+    });
+    await tx.update(schema.documents).set({ updatedAt: now }).where(eq(schema.documents.id, doc.id));
+
+    await auditRequest(
+      req,
+      {
+        action: decision === 'accepted' ? 'request.accepted' : 'request.correction_requested',
+        targetType: 'document',
+        targetId: doc.id,
+        clientId: doc.clientId,
+        meta: { versionId: decidable.versionId },
+      },
+      tx
+    );
+    return decidable;
   });
+  if (!outcome.ok) return res.status(outcome.status).json(refusalBody(outcome));
 
   const [updated] = await db.select().from(schema.documents).where(eq(schema.documents.id, doc.id));
   res.json(serializeDocument(updated));

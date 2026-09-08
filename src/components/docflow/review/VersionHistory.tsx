@@ -22,12 +22,27 @@ const formatBytes = (n: number) => {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const SCAN_PILL: Record<string, { label: string; cls: string }> = {
-  pending: { label: 'Checking', cls: 'df-warn' },
-  error: { label: 'Check failed', cls: 'df-warn' },
+/**
+ * One chip per version, saying what can be done with it rather than what the
+ * scanner said. "Check failed" read like the *file* had failed; what it means
+ * is that the scanner did not answer yet and the file is still on its way in,
+ * which is the same thing a client sees as "received, checking".
+ *
+ * The four states a reader has to tell apart (H2): still arriving, the one to
+ * decide about, an older one kept for the record, and one that will never be
+ * served.
+ */
+const VERSION_PILL: Record<string, { label: string; cls: string }> = {
+  pending: { label: 'Received, checking', cls: 'df-warn' },
+  error: { label: 'Received, checking', cls: 'df-warn' },
   encrypted: { label: 'Encrypted', cls: 'df-danger' },
-  infected: { label: 'Infected', cls: 'df-danger' },
+  infected: { label: 'Quarantined', cls: 'df-danger' },
 };
+
+function pillFor(v: VersionWithReviews): { label: string; cls: string } {
+  if (v.scanStatus !== 'clean') return VERSION_PILL[v.scanStatus] ?? VERSION_PILL.pending;
+  return v.isCurrent ? { label: 'Ready for review', cls: 'df-ok' } : { label: 'Superseded', cls: 'df-plain' };
+}
 
 interface Props {
   documentId: string;
@@ -47,7 +62,7 @@ const VersionHistory: React.FC<Props> = ({ documentId, versions, selectedId, onS
     <div className="df-list">
       {versions.length === 0 && <div className="df-empty">No file has been uploaded yet.</div>}
       {versions.map((v) => {
-        const scan = v.scanStatus === 'clean' ? null : SCAN_PILL[v.scanStatus];
+        const pill = pillFor(v);
         // The server does not promise an order, and a version can carry more
         // than one decision (corrected, then accepted after a talk).
         const decision = [...v.reviews].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
@@ -64,7 +79,6 @@ const VersionHistory: React.FC<Props> = ({ documentId, versions, selectedId, onS
             <div style={{ minWidth: 0 }}>
               <div className="df-name">
                 v{v.versionNo} · {v.originalFilename}
-                {v.isCurrent && <span className="df-pill df-plain" style={{ marginLeft: 8 }}>Current</span>}
               </div>
               <div className="df-meta">
                 {formatBytes(v.sizeBytes)} · {v.uploadedByKind === 'client' ? 'from the client' : 'from you'} · {formatWhen(v.createdAt)}
@@ -77,7 +91,7 @@ const VersionHistory: React.FC<Props> = ({ documentId, versions, selectedId, onS
               )}
             </div>
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
-              {scan && <span className={'df-pill ' + scan.cls}>{scan.label}</span>}
+              <span className={'df-pill ' + pill.cls}>{pill.label}</span>
               {v.available && (
                 <a
                   className="df-btn df-sm df-ghost"

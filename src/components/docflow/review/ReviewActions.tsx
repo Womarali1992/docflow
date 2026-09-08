@@ -3,12 +3,14 @@ import type { Document, RequestItem, VersionWithReviews } from '@/api/types';
 import {
   useAcceptDocument,
   useAcceptRequest,
+  useRefreshDocument,
   useRequestCorrection,
   useRequestDocumentCorrection,
   useWaiveRequest,
 } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
-import { getErrorMessage } from '@/utils/errors';
+import { ToastAction } from '@/components/ui/toast';
+import { getErrorMessage, staleVersion } from '@/utils/errors';
 import { I } from '../icons';
 import ReasonDialog from '../ReasonDialog';
 
@@ -24,6 +26,13 @@ import ReasonDialog from '../ReasonDialog';
  * Where the decision is recorded depends on what is being reviewed: a checklist
  * answer moves its *request* (which is what the client sees), while an ad-hoc
  * upload with no request behind it is decided on the document itself.
+ *
+ * H2 made that promise the server's rather than this component's. A decision
+ * about a version that is no longer the current one comes back 409
+ * `stale_version` — a newer file landed while the advisor was reading — and the
+ * only useful answer is to go and get it. Hence Refresh, and buttons that stay
+ * disabled until the refetch has landed: deciding twice in a row about a screen
+ * that is still catching up is exactly the mistake being prevented.
  */
 interface Props {
   document: Document;
@@ -39,12 +48,50 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
   const acceptDocument = useAcceptDocument();
   const correctDocument = useRequestDocumentCorrection();
 
+  const refreshDocument = useRefreshDocument();
+
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [waiveOpen, setWaiveOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  /** Fetch what the server actually has, and keep the buttons off until it lands. */
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshDocument(doc.id, request?.id ?? null);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  /**
+   * A refused decision. A stale version is not a failure the advisor caused, so
+   * it reads as news plus a way out rather than as an error.
+   */
+  const refused = (err: unknown, fallbackTitle: string): boolean => {
+    const stale = staleVersion(err);
+    if (!stale) {
+      toast({ title: fallbackTitle, description: getErrorMessage(err), variant: 'destructive' });
+      return false;
+    }
+    toast({
+      title: stale.currentVersionId
+        ? 'A newer file arrived while you were looking'
+        : 'The newest file is still being checked',
+      description: getErrorMessage(err),
+      action: (
+        <ToastAction altText="Refresh this document" onClick={() => void refresh()}>
+          Refresh
+        </ToastAction>
+      ),
+    });
+    return true;
+  };
 
   const settled = request ? request.status === 'accepted' || request.status === 'waived' : false;
   const nothingToDecide = !version && !request;
   const busy =
+    refreshing ||
     acceptRequest.isPending || correctRequest.isPending || waiveRequest.isPending ||
     acceptDocument.isPending || correctDocument.isPending;
 
@@ -59,13 +106,20 @@ const ReviewActions: React.FC<Props> = ({ document: doc, request, version }) => 
       else await acceptDocument.mutateAsync({ id: doc.id, versionId: version!.id });
       toast({ title: 'Accepted', description: doc.displayName ?? doc.name });
     } catch (err) {
-      toast({ title: 'Could not accept', description: getErrorMessage(err), variant: 'destructive' });
+      refused(err, 'Could not accept');
     }
   };
 
   const correct = async (note: string) => {
-    if (request) await correctRequest.mutateAsync({ id: request.id, note, versionId: version!.id });
-    else await correctDocument.mutateAsync({ id: doc.id, note, versionId: version!.id });
+    try {
+      if (request) await correctRequest.mutateAsync({ id: request.id, note, versionId: version!.id });
+      else await correctDocument.mutateAsync({ id: doc.id, note, versionId: version!.id });
+    } catch (err) {
+      // Rethrown so the dialog stays open with the note still typed in it — the
+      // note is worth keeping even though the version it was about has moved.
+      refused(err, 'Could not send it back');
+      throw err;
+    }
     toast({ title: 'Sent back for correction', description: 'The client sees your note in their portal.' });
   };
 

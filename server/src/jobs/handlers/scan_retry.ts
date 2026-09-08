@@ -9,6 +9,14 @@
  *
  * A verdict of `infected` on retry quarantines the version: the row stays as the
  * record, the bytes are deleted, and the document stops pointing at it.
+ *
+ * H2: this job no longer has its own opinion about what "published" means. It
+ * scans, writes the verdict, and hands the version to `publishVersion` — the
+ * same call the upload path makes. Before that it repointed `currentVersionId`
+ * at whatever it had just scanned, so a slow scan of an older version undid a
+ * newer one that was already on screen, and it skipped the request transition
+ * whenever the request was `accepted`, so a replacement that arrived during an
+ * outage published without ever reaching the advisor (audit F4).
  */
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
@@ -16,6 +24,7 @@ import type { Job } from '../../db/schema.js';
 import { absPathForKey, discardStaged } from '../../files/store.js';
 import { scanFile, scanRequired } from '../../files/scan.js';
 import { audit } from '../../db/audit.js';
+import { lockDocument, publishVersion, quarantineVersion } from '../../workflow/publish.js';
 
 export async function scanRetryJob(job: Job): Promise<void> {
   const payload = (job.payload ?? {}) as { versionId?: unknown };
@@ -53,56 +62,65 @@ export async function scanRetryJob(job: Job): Promise<void> {
 
   if (result.verdict === 'infected') {
     await db.transaction(async (tx) => {
-      await tx
-        .update(schema.documentVersions)
-        .set({ scanStatus: 'infected', scanDetail: result.detail, scannedAt: now, publishedAt: null })
-        .where(eq(schema.documentVersions.id, version.id));
-      // Never serve it: if the document points here, unpoint it.
-      if (document?.currentVersionId === version.id) {
-        await tx.update(schema.documents).set({ currentVersionId: null, updatedAt: now }).where(eq(schema.documents.id, document.id));
-      }
+      await quarantineVersion(tx, { versionId: version.id, detail: result.detail, now });
+      // Inside the transaction: the record of a quarantine and the quarantine
+      // itself are one fact, and a log that can be missing is not a log (F10).
+      await audit(
+        {
+          action: 'document.quarantined',
+          targetType: 'document_version',
+          targetId: version.id,
+          clientId: document?.clientId ?? null,
+          actorKind: 'system',
+          meta: { signature: result.detail, onRetry: true },
+        },
+        tx
+      );
     });
     // The row stays as the record; the bytes do not.
     discardStaged(abs);
 
-    await audit({
-      action: 'document.quarantined',
-      targetType: 'document_version',
-      targetId: version.id,
-      clientId: document?.clientId ?? null,
-      actorKind: 'system',
-      meta: { signature: result.detail, onRetry: true },
-    });
     console.error(`[worker] scan_retry ${job.id}: version ${version.id} is INFECTED (${result.detail}); quarantined`);
     return;
   }
 
-  /* Clean at last: publish it, and move the checklist on if it was waiting. */
-  await db.transaction(async (tx) => {
+  /* Clean at last: publish it through the one publication path, and move the
+     checklist on if it was waiting. The document is locked first — every path
+     that publishes takes the document lock before touching a version row, which
+     is what keeps this job and a concurrent upload from deadlocking. */
+  const outcome = await db.transaction(async (tx) => {
+    await lockDocument(tx, version.documentId);
     await tx
       .update(schema.documentVersions)
-      .set({ scanStatus: 'clean', scanDetail: null, scannedAt: now, publishedAt: version.publishedAt ?? now })
+      .set({ scanStatus: 'clean', scanDetail: null, scannedAt: now })
       .where(eq(schema.documentVersions.id, version.id));
-    if (document) {
-      await tx.update(schema.documents).set({ currentVersionId: version.id, updatedAt: now }).where(eq(schema.documents.id, document.id));
-      if (document.requestId) {
-        const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, document.requestId));
-        if (request && request.status !== 'waived' && request.status !== 'accepted') {
-          await tx.update(schema.requests).set({ status: 'submitted', updatedAt: now }).where(eq(schema.requests.id, request.id));
-        }
-      }
-    }
+
+    const published = await publishVersion(tx, { versionId: version.id, now, reason: 'scan_retry' });
+    await audit(
+      {
+        action: 'document.published',
+        targetType: 'document_version',
+        targetId: version.id,
+        clientId: document?.clientId ?? null,
+        actorKind: 'system',
+        meta: {
+          afterRetry: true,
+          versionNo: version.versionNo,
+          // A late arrival that lost to a newer version is worth being able to
+          // find in the log a month later.
+          currentChanged: published.currentChanged,
+        },
+      },
+      tx
+    );
+    return published;
   });
 
-  await audit({
-    action: 'document.published',
-    targetType: 'document_version',
-    targetId: version.id,
-    clientId: document?.clientId ?? null,
-    actorKind: 'system',
-    meta: { afterRetry: true, versionNo: version.versionNo },
-  });
-  console.log(`[worker] scan_retry ${job.id}: version ${version.id} scanned clean and published`);
+  console.log(
+    outcome.currentChanged
+      ? `[worker] scan_retry ${job.id}: version ${version.id} scanned clean and published`
+      : `[worker] scan_retry ${job.id}: version ${version.id} scanned clean but a newer version is already current; superseded`
+  );
 }
 
 export default scanRetryJob;

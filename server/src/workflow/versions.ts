@@ -10,10 +10,18 @@
  * C2.2 uses this to record versions; C2.3's publish pipeline calls the same
  * function at the end of its transaction, so the upload path and any future
  * path cannot drift apart.
+ *
+ * H2 moved the second half of that job into `publish.ts`: this function
+ * allocates and inserts the row, and `publishVersion` decides what the reader
+ * sees. Two reasons. The allocation has to happen with the document locked or
+ * concurrent uploads collide on `version_no` (audit F3), and publication has to
+ * be one shared path or the scan-retry job's copy of it drifts — which is
+ * exactly what F4 was.
  */
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { Document, DocumentVersion, ScanStatus } from '../db/schema.js';
+import { allocateVersionNo, lockDocument, publishVersion } from './publish.js';
 
 export interface NewVersionInput {
   document: Document;
@@ -39,25 +47,26 @@ export interface NewVersionResult {
 
 /**
  * Inserts the next version and moves everything that depends on it, in one
- * transaction: supersede the previous version, repoint `currentVersionId`, and
- * put the request back in front of the advisor.
+ * transaction: lock the document, allocate the number under that lock, insert,
+ * and — if a scanner has already said the file is clean — publish it.
  */
 export async function recordNewVersion(input: NewVersionInput): Promise<NewVersionResult> {
   const now = input.now ?? new Date();
   const scanStatus = input.scanStatus ?? 'clean';
-  const published = scanStatus === 'clean';
 
   return db.transaction(async (tx) => {
-    const [{ maxNo }] = await tx
-      .select({ maxNo: sql<number>`COALESCE(MAX(${schema.documentVersions.versionNo}), 0)` })
-      .from(schema.documentVersions)
-      .where(eq(schema.documentVersions.documentId, input.document.id));
+    // Lock first, allocate second (invariant 17). Without this, two uploads
+    // landing together both read the same MAX and one of them dies on the
+    // unique index — a 500 for a client whose file was perfectly fine.
+    const document = await lockDocument(tx, input.document.id);
+    if (!document) throw new Error(`recordNewVersion: document ${input.document.id} does not exist`);
+    const versionNo = await allocateVersionNo(tx, document.id);
 
     const [version] = await tx
       .insert(schema.documentVersions)
       .values({
-        documentId: input.document.id,
-        versionNo: Number(maxNo) + 1,
+        documentId: document.id,
+        versionNo,
         originalFilename: input.originalFilename,
         mimeType: input.mimeType,
         sizeBytes: input.sizeBytes,
@@ -68,57 +77,18 @@ export async function recordNewVersion(input: NewVersionInput): Promise<NewVersi
         scannedAt: scanStatus === 'pending' ? null : now,
         uploadedByKind: input.uploadedByKind,
         uploadedById: input.uploadedById,
-        publishedAt: published ? now : null,
         createdAt: now,
       })
       .returning();
 
-    // Only a published version becomes the one being served; a quarantined or
-    // pending one is recorded but changes nothing the reader can see.
-    if (!published) {
-      return { version, document: input.document, reopenedRequest: false };
+    // A quarantined or still-being-checked version is recorded but changes
+    // nothing the reader can see. `publishVersion` owns the rest.
+    if (scanStatus !== 'clean') {
+      return { version, document, reopenedRequest: false };
     }
 
-    // Everything older is superseded — exactly one live version per document.
-    await tx
-      .update(schema.documentVersions)
-      .set({ supersededAt: now })
-      .where(
-        and(
-          eq(schema.documentVersions.documentId, input.document.id),
-          isNull(schema.documentVersions.supersededAt),
-          sql`${schema.documentVersions.id} <> ${version.id}`
-        )
-      );
-
-    const [document] = await tx
-      .update(schema.documents)
-      .set({ currentVersionId: version.id, updatedAt: now })
-      .where(eq(schema.documents.id, input.document.id))
-      .returning();
-
-    let reopenedRequest = false;
-    if (document.requestId) {
-      const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, document.requestId));
-      if (request && request.status !== 'waived') {
-        // A new answer means the advisor has to look again, whatever they
-        // decided last time. The old review row is left untouched.
-        reopenedRequest = request.status === 'accepted';
-        await tx
-          .update(schema.requests)
-          .set({
-            status: 'submitted',
-            // A fresh submission also clears a stale "I don't have this".
-            clientResponseKind: null,
-            clientResponseNote: null,
-            clientResponseAt: null,
-            updatedAt: now,
-          })
-          .where(eq(schema.requests.id, request.id));
-      }
-    }
-
-    return { version, document, reopenedRequest };
+    const outcome = await publishVersion(tx, { versionId: version.id, now, reason: 'upload' });
+    return { version: outcome.version, document: outcome.document, reopenedRequest: outcome.reopened };
   });
 }
 

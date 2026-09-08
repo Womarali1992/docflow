@@ -76,7 +76,7 @@ describe('documents', () => {
     expect(legacy.status).toBe(400);
     expect(legacy.body.code).toBe('use_review_actions');
 
-    const accepted = await request(app).post(`${url}/accept`).set('Cookie', advisor).send({});
+    const accepted = await request(app).post(`${url}/accept`).set('Cookie', advisor).send({ versionId: fx.client1a.uploadVersion });
     expect(accepted.status).toBe(200);
     // C5.4 dropped the legacy `status` column the decision used to mirror; the
     // decision itself is the record, and it is read from /reviews.
@@ -85,7 +85,7 @@ describe('documents', () => {
     const correction = await request(app)
       .post(`${url}/request-correction`)
       .set('Cookie', advisor)
-      .send({ note: 'Need the full statement' });
+      .send({ versionId: fx.client1a.uploadVersion, note: 'Need the full statement' });
     expect(correction.status).toBe(200);
 
     const history = await request(app).get(`${url}/reviews`).set('Cookie', advisor);

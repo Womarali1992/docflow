@@ -52,7 +52,7 @@ describe('request lifecycle', () => {
     expect((await requestRow(requestId)).status).toBe('requested');
 
     // 1. The client answers.
-    await submitVersion(documentId, { kind: 'client', id: fx.client1a.id }, 'policy.pdf');
+    const first = await submitVersion(documentId, { kind: 'client', id: fx.client1a.id }, 'policy.pdf');
     expect((await requestRow(requestId)).status).toBe('submitted');
 
     // 2. The advisor sends it back, and has to say why.
@@ -63,7 +63,7 @@ describe('request lifecycle', () => {
     const correction = await request(app)
       .post(`/api/requests/${requestId}/request-correction`)
       .set('Cookie', advisor)
-      .send({ note: 'This is last year’s policy — please send the current one.' });
+      .send({ versionId: first.version.id, note: 'This is last year’s policy — please send the current one.' });
     expect(correction.status).toBe(200);
     expect(correction.body.status).toBe('needs_correction');
 
@@ -129,8 +129,8 @@ describe('request lifecycle', () => {
     expect(reopened.body).toMatchObject({ status: 'requested', waivedReason: null, waivedAt: null });
 
     // With an answer on file, reopening puts it back in front of the advisor.
-    await submitVersion(id, { kind: 'client', id: fx.client1a.id });
-    await request(app).post(`/api/requests/${id}/accept`).set('Cookie', advisor).send({});
+    const answer = await submitVersion(id, { kind: 'client', id: fx.client1a.id });
+    await request(app).post(`/api/requests/${id}/accept`).set('Cookie', advisor).send({ versionId: answer.version.id });
     const again = await request(app).post(`/api/requests/${id}/reopen`).set('Cookie', advisor);
     expect(again.body.status).toBe('submitted');
   });
@@ -423,8 +423,11 @@ describe('engagements and templates', () => {
     expect(added.status).toBe(201);
 
     // The seeded line is still outstanding; answer it, then accept the answer.
-    await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
-    const accepted = await request(app).post(`/api/requests/${fx.client1a.request}/accept`).set('Cookie', advisor);
+    const answer = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+    const accepted = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionId: answer.version.id });
     expect(accepted.status).toBe(200);
 
     const after = await request(app).get(`/api/engagements?clientId=${fx.client1a.id}`).set('Cookie', advisor);
@@ -490,13 +493,13 @@ describe('the advisor dashboard counts live rows', () => {
     expect(start.body.waitingOnClients.count).toBe(2); // one per client of provider1
     expect(start.body.readyToReview.count).toBe(0);
 
-    await submitVersion(id, { kind: 'client', id: fx.client1a.id });
+    const answer = await submitVersion(id, { kind: 'client', id: fx.client1a.id });
     const submitted = await request(app).get('/api/dashboard').set('Cookie', advisor);
     expect(submitted.body.readyToReview.count).toBe(1);
     expect(submitted.body.readyToReview.ids).toContain(id);
     expect(submitted.body.waitingOnClients.count).toBe(1);
 
-    await request(app).post(`/api/requests/${id}/accept`).set('Cookie', advisor).send({});
+    await request(app).post(`/api/requests/${id}/accept`).set('Cookie', advisor).send({ versionId: answer.version.id });
     const accepted = await request(app).get('/api/dashboard').set('Cookie', advisor);
     expect(accepted.body.readyToReview.count).toBe(0);
     expect(accepted.body.waitingOnClients.count).toBe(1);

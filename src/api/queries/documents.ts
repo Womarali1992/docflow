@@ -5,6 +5,7 @@
  * (invariant 2). That is why there is `useUploadVersion` and no "replace file"
  * — the shape of the API here is the shape of the guarantee.
  */
+import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../client';
 import type { Document, Review, UploadResult, VersionWithReviews } from '../types';
@@ -26,6 +27,29 @@ export function useDocuments(params: DocumentListParams = {}) {
     queryFn: () => api.documents.list(params),
     enabled: signedIn,
   });
+}
+
+/**
+ * Fetch the review workspace again and wait for it to land.
+ *
+ * The stale-version 409 (H2) is the case this exists for: the advisor asked to
+ * decide about a version that is no longer the current one, and the honest
+ * answer is not an error message but the file they should be reading. The
+ * promise resolves once the refetch has settled, so the decision buttons can
+ * stay disabled until the screen is telling the truth again.
+ */
+export function useRefreshDocument() {
+  const queryClient = useQueryClient();
+  const scope = useScope();
+  return useCallback(
+    async (documentId: string, requestId?: string | null) => {
+      // `keys.document` is a prefix: it covers the document, its versions and
+      // its reviews in one go.
+      await queryClient.invalidateQueries({ queryKey: keys.document(scope, documentId) });
+      if (requestId) await queryClient.invalidateQueries({ queryKey: keys.request(scope, requestId) });
+    },
+    [queryClient, scope]
+  );
 }
 
 export function useDocument(id: string | undefined) {

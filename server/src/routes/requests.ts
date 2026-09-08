@@ -28,6 +28,7 @@ import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
 import { auditRequest } from '../db/audit.js';
+import { decidableVersion, refusalBody, type DecisionRefusal, type Tx } from '../workflow/publish.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, clientOnly, findRequest, isId, notFound } from './scope.js';
@@ -70,6 +71,82 @@ async function versionForRequest(request: RequestRow, versionId: string | undefi
 /** The document currently answering this request, if any. */
 async function documentForRequest(requestId: string) {
   const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.requestId, requestId));
+  return doc ?? null;
+}
+
+/**
+ * Accept and request-correction, which are the same transaction with a
+ * different word in it: check that the decision names the version the advisor
+ * was actually reading, write the review, move the request, and record it —
+ * all with the document locked, all or nothing.
+ *
+ * Before H2 this was three unlocked steps, so an advisor deciding about v1
+ * while v2 landed got a 200 and a review row pointing at a file nobody had
+ * looked at (audit F5). `decidableVersion` is the guard; a 409 `stale_version`
+ * is what the review workspace turns into "Refresh and read that one".
+ */
+interface DecisionInput {
+  request: RequestRow;
+  decision: 'accepted' | 'needs_correction';
+  nextStatus: 'accepted' | 'needs_correction';
+  namedVersionId: string | null;
+  note: string | null;
+  action: 'request.accepted' | 'request.correction_requested';
+}
+
+type DecisionResult = { ok: true; versionId: string | null; now: Date } | DecisionRefusal;
+
+async function recordDecision(req: ExpressRequest, input: DecisionInput): Promise<DecisionResult> {
+  const auth = req.auth!;
+  const now = new Date();
+
+  return db.transaction(async (tx): Promise<DecisionResult> => {
+    const document = await documentForRequestTx(tx, input.request.id);
+
+    let versionId: string | null = null;
+    if (document) {
+      const decidable = await decidableVersion(tx, document.id, input.namedVersionId);
+      if (!decidable.ok) return decidable;
+      versionId = decidable.versionId;
+
+      await tx.insert(schema.reviews).values({
+        documentId: document.id,
+        versionId,
+        requestId: input.request.id,
+        reviewerId: auth.sub,
+        decision: input.decision,
+        note: input.note,
+        createdAt: now,
+      });
+    }
+
+    await tx
+      .update(schema.requests)
+      .set({ status: input.nextStatus, updatedAt: now })
+      .where(eq(schema.requests.id, input.request.id));
+
+    // The decision and the record of it are one fact (F10): inside the
+    // transaction, so a failed audit rolls the decision back rather than
+    // leaving a change nobody can account for.
+    await auditRequest(
+      req,
+      {
+        action: input.action,
+        targetType: 'request',
+        targetId: input.request.id,
+        clientId: input.request.clientId,
+        meta: { versionId },
+      },
+      tx
+    );
+
+    return { ok: true, versionId, now };
+  });
+}
+
+/** The document answering a request, read inside a transaction. */
+async function documentForRequestTx(tx: Tx, requestId: string) {
+  const [doc] = await tx.select().from(schema.documents).where(eq(schema.documents.requestId, requestId));
   return doc ?? null;
 }
 
@@ -123,32 +200,17 @@ router.post('/:id/accept', async (req, res) => {
   const target = await versionForRequest(request, parsed.data.versionId);
   if (!target.ok) return badRequest(res, 'That version does not belong to this request.', 'version_mismatch');
 
-  const document = await documentForRequest(request.id);
-  const versionId = target.versionId ?? document?.currentVersionId ?? null;
-  const now = new Date();
-
-  await db.transaction(async (tx) => {
-    if (document) {
-      await tx.insert(schema.reviews).values({
-        documentId: document.id,
-        versionId,
-        requestId: request.id,
-        reviewerId: auth.sub,
-        decision: 'accepted',
-        note: parsed.data.note ?? null,
-        createdAt: now,
-      });
-    }
-    await tx.update(schema.requests).set({ status: 'accepted', updatedAt: now }).where(eq(schema.requests.id, request.id));
-  });
-
-  await auditRequest(req, {
+  const outcome = await recordDecision(req, {
+    request,
+    decision: 'accepted',
+    nextStatus: 'accepted',
+    namedVersionId: target.versionId,
+    note: parsed.data.note ?? null,
     action: 'request.accepted',
-    targetType: 'request',
-    targetId: request.id,
-    clientId: request.clientId,
-    meta: { versionId },
   });
+  if (!outcome.ok) return res.status(outcome.status).json(refusalBody(outcome));
+  const { now } = outcome;
+
   await notify({
     userKind: 'client',
     userId: request.clientId,
@@ -195,32 +257,17 @@ router.post('/:id/request-correction', async (req, res) => {
   const target = await versionForRequest(request, parsed.data.versionId);
   if (!target.ok) return badRequest(res, 'That version does not belong to this request.', 'version_mismatch');
 
-  const document = await documentForRequest(request.id);
-  const versionId = target.versionId ?? document?.currentVersionId ?? null;
-  const now = new Date();
-
-  await db.transaction(async (tx) => {
-    if (document) {
-      await tx.insert(schema.reviews).values({
-        documentId: document.id,
-        versionId,
-        requestId: request.id,
-        reviewerId: auth.sub,
-        decision: 'needs_correction',
-        note: parsed.data.note,
-        createdAt: now,
-      });
-    }
-    await tx.update(schema.requests).set({ status: 'needs_correction', updatedAt: now }).where(eq(schema.requests.id, request.id));
-  });
-
-  await auditRequest(req, {
+  const outcome = await recordDecision(req, {
+    request,
+    decision: 'needs_correction',
+    nextStatus: 'needs_correction',
+    namedVersionId: target.versionId,
+    note: parsed.data.note,
     action: 'request.correction_requested',
-    targetType: 'request',
-    targetId: request.id,
-    clientId: request.clientId,
-    meta: { versionId },
   });
+  if (!outcome.ok) return res.status(outcome.status).json(refusalBody(outcome));
+  const { now } = outcome;
+
   await notify({
     userKind: 'client',
     userId: request.clientId,
