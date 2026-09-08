@@ -1,39 +1,51 @@
 import { Toaster } from "@/components/ui/toaster";
-import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import DocFlowLayout from "@/components/docflow/Layout";
 import ClientLayout from "@/components/docflow/ClientLayout";
 import { MfaGate, RouteGuard } from "@/components/RouteGuard";
-import Index from "./pages/Index";
+import { lazy } from "react";
+
+/**
+ * The way in stays eager (H4).
+ *
+ * Signing in is the one thing every visit does and the one thing that must not
+ * wait on a second round trip, so the auth screens and the two error pages are
+ * part of the first chunk. Everything behind the guards is split: an advisor
+ * never loads the portal's code, a client never loads the advisor's, and
+ * neither pays for the review workspace until they open it. The layouts put a
+ * `<Suspense>` around their `<Outlet />`, so the nav is already on screen while
+ * a page arrives.
+ */
+import Login from "./pages/Login";
 import Mfa from "./pages/Mfa";
 import MfaEnroll from "./pages/MfaEnroll";
 import Invite from "./pages/Invite";
 import Forgot from "./pages/Forgot";
 import Reset from "./pages/Reset";
 import NotFound from "./pages/NotFound";
-import Settings from "./pages/Settings";
-import SystemStatus from "./pages/SystemStatus";
-import Client from "./pages/Client";
-import Clients from "./pages/Clients";
-import Engagement from "./pages/Engagement";
-import Templates from "./pages/Templates";
-import Review from "./pages/Review";
-import Work from "./pages/Work";
-import PortalHome from "./pages/portal/Home";
-import PortalRequests from "./pages/portal/Requests";
-import PortalDocuments from "./pages/portal/Documents";
-import PortalShared from "./pages/portal/Shared";
-import PortalMessages from "./pages/portal/Messages";
-import PortalSecurity from "./pages/portal/Security";
-import DocumentsPage from "./pages/Documents";
-import DocumentPage from "./pages/Document";
-import Login from "./pages/Login";
+
+const Index = lazy(() => import("./pages/Index"));
+const Settings = lazy(() => import("./pages/Settings"));
+const SystemStatus = lazy(() => import("./pages/SystemStatus"));
+const Client = lazy(() => import("./pages/Client"));
+const Clients = lazy(() => import("./pages/Clients"));
+const Engagement = lazy(() => import("./pages/Engagement"));
+const Templates = lazy(() => import("./pages/Templates"));
+const Review = lazy(() => import("./pages/Review"));
+const Work = lazy(() => import("./pages/Work"));
+const DocumentsPage = lazy(() => import("./pages/Documents"));
+const DocumentPage = lazy(() => import("./pages/Document"));
+const PortalHome = lazy(() => import("./pages/portal/Home"));
+const PortalRequests = lazy(() => import("./pages/portal/Requests"));
+const PortalDocuments = lazy(() => import("./pages/portal/Documents"));
+const PortalShared = lazy(() => import("./pages/portal/Shared"));
+const PortalMessages = lazy(() => import("./pages/portal/Messages"));
+const PortalSecurity = lazy(() => import("./pages/portal/Security"));
 
 const App = () => (
   <TooltipProvider>
     <Toaster />
-    <Sonner />
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />

@@ -1,6 +1,6 @@
-import { useCallback, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { api, ApiError } from '@/api/client';
+import { api, ApiError, UNAUTHORIZED_EVENT } from '@/api/client';
 import { keys } from '@/api/queries/keys';
 import { useScope } from '@/api/queries/auth';
 
@@ -89,6 +89,7 @@ export const UPLOAD_MESSAGE: Record<string, string> = {
   unchanged: 'This is the same file you already sent — nothing more to do.',
   duplicate_upload: 'Already sent — this is the same upload, not a second copy.',
   bad_upload_id: 'That upload could not be identified. Try again.',
+  session_expired: 'Your session ended. Sign in again, then retry.',
 };
 
 /** 200 answers that mean "nothing new happened", which is a success, not a failure. */
@@ -213,65 +214,118 @@ function post(
 }
 
 export function useUploadQueue() {
-  const [state, dispatch] = useReducer(queueReducer, initialQueue);
+  const [state, reactDispatch] = useReducer(queueReducer, initialQueue);
   const queryClient = useQueryClient();
   const scope = useScope();
-  const controllers = useRef(new Map<string, AbortController>());
-  const running = useRef(false);
+
+  /**
+   * The queue as it is *now* (invariant 22, "the queue reads the present").
+   *
+   * React's state is always one render behind a callback that closed over it,
+   * and `dispatch` does not update it synchronously. The pump cannot decide
+   * from that: a file cancelled a moment ago must not be sent, and one added a
+   * moment ago must be. So every dispatch goes through this wrapper, which
+   * applies the same pure reducer to a ref first and then tells React. The
+   * reducer is untouched — it is still the whole of the queue's rules, and
+   * still the unit `useUploadQueue.test.ts` tests directly.
+   */
+  const latest = useRef<QueueState>(initialQueue);
+  const dispatch = useCallback((action: QueueAction) => {
+    latest.current = queueReducer(latest.current, action);
+    reactDispatch(action);
+  }, []);
+
+  /** The one send in flight, so cancelling *that* file aborts the right request. */
+  const inflight = useRef<{ id: string; controller: AbortController } | null>(null);
+  const pumping = useRef(false);
+  const unmounted = useRef(false);
+
+  /**
+   * The session ended underneath the queue — signed out in another tab, idled
+   * out, or revoked. Nothing still waiting can succeed, so say so once, in a
+   * sentence that names the next step. Files already with the server stay
+   * where they are; Retry works after signing back in.
+   */
+  const failSession = useCallback(() => {
+    for (const item of latest.current.items) {
+      if (item.state === 'queued' || item.state === 'uploading') {
+        dispatch({ type: 'failed', id: item.id, code: 'session_expired', message: UPLOAD_MESSAGE.session_expired });
+      }
+    }
+  }, [dispatch]);
 
   /** Drains the queue one file at a time until nothing is left to send. */
-  const pump = useCallback(
-    async (queue: QueueState) => {
-      if (running.current) return;
-      running.current = true;
-      let current = queue;
+  const pump = useCallback(async () => {
+    if (pumping.current) return;
+    pumping.current = true;
 
-      try {
-        for (;;) {
-          const item = nextQueued(current);
-          if (!item) break;
+    try {
+      while (!unmounted.current) {
+        // Read the present before every send. Cancel, remove and enqueue all
+        // take effect on the next decision rather than the next run, so a file
+        // added mid-flight is picked up here and one cancelled mid-flight is
+        // simply no longer `queued` and is skipped.
+        const item = nextQueued(latest.current);
+        if (!item) break;
 
-          current = queueReducer(current, { type: 'start', id: item.id });
-          dispatch({ type: 'start', id: item.id });
+        dispatch({ type: 'start', id: item.id });
+        const controller = new AbortController();
+        inflight.current = { id: item.id, controller };
 
-          const controller = new AbortController();
-          controllers.current.set(item.id, controller);
-
-          try {
-            const result = await post(item.target, item.file, {
-              onProgress: (fraction) => dispatch({ type: 'progress', id: item.id, fraction }),
-              signal: controller.signal,
-              uploadId: item.uploadId,
-            });
-            current = queueReducer(current, { type: 'settled', id: item.id, status: result.status, code: result.code });
-            dispatch({ type: 'settled', id: item.id, status: result.status, code: result.code });
-          } catch (err) {
-            const code = err instanceof ApiError ? (err.body.code as string | undefined) : undefined;
-            if (code === 'cancelled') {
-              current = queueReducer(current, { type: 'cancel', id: item.id });
-              dispatch({ type: 'cancel', id: item.id });
-            } else {
-              const fallback = err instanceof Error ? err.message : 'That did not send. Try again.';
-              const message = messageForCode(code, fallback);
-              current = queueReducer(current, { type: 'failed', id: item.id, code, message });
-              dispatch({ type: 'failed', id: item.id, code, message });
-            }
-          } finally {
-            controllers.current.delete(item.id);
+        try {
+          const result = await post(item.target, item.file, {
+            onProgress: (fraction) => dispatch({ type: 'progress', id: item.id, fraction }),
+            signal: controller.signal,
+            uploadId: item.uploadId,
+          });
+          dispatch({ type: 'settled', id: item.id, status: result.status, code: result.code });
+        } catch (err) {
+          const apiError = err instanceof ApiError ? err : undefined;
+          const code = apiError?.body.code as string | undefined;
+          if (apiError?.status === 401) {
+            // Nothing behind it can succeed either. One message, then stop.
+            failSession();
+            break;
           }
+          if (code === 'cancelled') {
+            dispatch({ type: 'cancel', id: item.id });
+          } else {
+            const fallback = err instanceof Error ? err.message : 'That did not send. Try again.';
+            dispatch({ type: 'failed', id: item.id, code, message: messageForCode(code, fallback) });
+          }
+        } finally {
+          inflight.current = null;
         }
-      } finally {
-        running.current = false;
-        // One invalidation for the whole run: the checklist, the documents and
-        // the counts all move together when files land.
+      }
+    } finally {
+      pumping.current = false;
+      // One invalidation for the whole run: the checklist, the documents and
+      // the counts all move together when files land. Not after unmount —
+      // there is nobody left to re-render.
+      if (!unmounted.current) {
         await queryClient.invalidateQueries({ queryKey: keys.engagements(scope) });
         await queryClient.invalidateQueries({ queryKey: keys.documents(scope) });
         await queryClient.invalidateQueries({ queryKey: keys.requests(scope) });
         await queryClient.invalidateQueries({ queryKey: keys.dashboard(scope) });
       }
-    },
-    [queryClient, scope]
-  );
+    }
+  }, [dispatch, failSession, queryClient, scope]);
+
+  useEffect(() => {
+    unmounted.current = false;
+    const onUnauthorized = () => {
+      failSession();
+      inflight.current?.controller.abort();
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+      // Leaving the page ends the upload: the bytes would land with nobody to
+      // hear the answer, and the client can send them again.
+      unmounted.current = true;
+      inflight.current?.controller.abort();
+    };
+  }, [failSession]);
 
   const enqueue = useCallback(
     (files: File[] | FileList, target: UploadTarget) => {
@@ -279,31 +333,40 @@ export function useUploadQueue() {
       if (list.length === 0) return;
       const items = list.map((file) => ({ id: nextId(), uploadId: newUploadId(), file, target }));
       dispatch({ type: 'enqueue', items });
-      // Pump from a state that already includes them: dispatch has not landed yet.
-      void pump(queueReducer(state, { type: 'enqueue', items }));
+      // A pump already running will see them on its next iteration; this
+      // starts one if there is none.
+      void pump();
     },
-    [pump, state]
+    [dispatch, pump]
   );
 
-  const cancel = useCallback((id: string) => {
-    controllers.current.get(id)?.abort();
-    dispatch({ type: 'cancel', id });
-  }, []);
+  const cancel = useCallback(
+    (id: string) => {
+      const flight = inflight.current;
+      if (flight?.id === id) flight.controller.abort();
+      dispatch({ type: 'cancel', id });
+    },
+    [dispatch]
+  );
 
   const retry = useCallback(
     (id: string) => {
       dispatch({ type: 'retry', id });
-      void pump(queueReducer(state, { type: 'retry', id }));
+      void pump();
     },
-    [pump, state]
+    [dispatch, pump]
   );
 
-  const remove = useCallback((id: string) => {
-    controllers.current.get(id)?.abort();
-    dispatch({ type: 'remove', id });
-  }, []);
+  const remove = useCallback(
+    (id: string) => {
+      const flight = inflight.current;
+      if (flight?.id === id) flight.controller.abort();
+      dispatch({ type: 'remove', id });
+    },
+    [dispatch]
+  );
 
-  const clearFinished = useCallback(() => dispatch({ type: 'clearFinished' }), []);
+  const clearFinished = useCallback(() => dispatch({ type: 'clearFinished' }), [dispatch]);
 
   const active = state.items.filter((it) => it.state === 'queued' || it.state === 'uploading');
 

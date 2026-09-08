@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
+import PageLoading from './PageLoading';
 import ClientSidebar from './ClientSidebar';
 import ClientTopbar from './ClientTopbar';
 import TweaksBar from './TweaksBar';
@@ -33,7 +34,9 @@ const ClientLayout: React.FC = () => {
           <ClientTopbar onMenuClick={() => setDrawerOpen(true)} />
           <ConnectionBanner />
           <ErrorBoundary key={location.pathname} where="your portal">
-            <Outlet />
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>

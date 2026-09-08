@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
+import PageLoading from './PageLoading';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import TweaksBar from './TweaksBar';
@@ -35,7 +36,9 @@ const DocFlowLayout: React.FC = () => {
           <ConnectionBanner />
           {/* Scoped to the screen: a failed page leaves the nav usable. */}
           <ErrorBoundary key={location.pathname} where="this screen">
-            <Outlet />
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
