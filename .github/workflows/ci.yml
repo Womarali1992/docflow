@@ -141,5 +141,12 @@ jobs:
         with:
           name: ci-status
           path: .ci/
-          if-no-files-found: warn
+          # `.ci` is a dot-directory, and v4 skips hidden files unless told
+          # otherwise — the first run uploaded nothing and still reported
+          # success, with the reason only in a warning line. The path is scoped
+          # to that one directory, so this cannot sweep in .git or a .env.
+          include-hidden-files: true
+          # Fail rather than warn: an empty report means the steps that build it
+          # did not run, and a silently-empty artifact is worse than none.
+          if-no-files-found: error
           retention-days: 30
