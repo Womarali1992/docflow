@@ -21,6 +21,9 @@ server/.data/
 server/test/.data-tmp/
 server/test/.import-tmp/
 
+# CI run reports (test totals + npm run status), uploaded as an artifact
+.ci/
+
 # Unrelated standalone prototype (own git repo)
 drilldown/
 

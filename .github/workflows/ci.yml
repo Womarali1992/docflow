@@ -1,0 +1,145 @@
+# Continuous integration for both suites (H8).
+#
+# The reason this exists is in the audit: the full server suite is ~12 minutes
+# on the laptop this thing is deployed to, and it has been OOM-killed there more
+# than once. A release gate that depends on one machine having enough free
+# memory is not a gate. This runs the same two suites on a clean box, against a
+# real Postgres, on every push.
+#
+# It runs the checks in the order that fails cheapest: the static gates before
+# the suites, the frontend before the server. A typo in a type is a 40-second
+# answer here and a 15-minute one if it waits behind the database tests.
+#
+# What it deliberately does NOT do: install ClamAV. The one test that needs a
+# real scanner skips itself when nothing answers on 3310, exactly as it does on
+# a dev box, and says so in the log. Standing up a virus scanner to assert that
+# EICAR is EICAR would be the slowest test in the run and would prove something
+# about the runner rather than about this code.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first: nobody needs the result of a commit that
+# has already been replaced, and the runner minutes are better spent on the tip.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck, lint, build, both suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        # 16, not 17: the laptop runs 17 and the dump format is what matters
+        # there, whereas here the only question is whether the schema and the
+        # queries work on the oldest version this pilot claims to support.
+        image: postgres:16
+        env:
+          POSTGRES_USER: docflow
+          POSTGRES_PASSWORD: docflow_dev
+          POSTGRES_DB: docflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U docflow -d docflow_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # test/setup.ts refuses any URL that does not name docflow_test, and
+      # points every server module at it before they are imported.
+      DATABASE_URL_TEST: postgres://docflow:docflow_dev@localhost:5432/docflow_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install (frontend)
+        run: npm ci
+
+      - name: Install (server)
+        run: npm ci
+        working-directory: server
+
+      # --- the static gates, cheapest first ---------------------------------
+
+      - name: Typecheck (frontend)
+        run: npm run typecheck
+
+      - name: Lint (frontend)
+        # Zero errors is the gate. The nine react-refresh warnings are the
+        # inherited baseline and are not treated as failures here either.
+        run: npm run lint
+
+      - name: Build (frontend)
+        run: npm run build
+
+      - name: Build (server)
+        run: npm run build
+        working-directory: server
+
+      - name: Typecheck the tests (server)
+        run: npm run typecheck:test
+        working-directory: server
+
+      # --- the suites --------------------------------------------------------
+
+      - name: Test (frontend)
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json=.ci/frontend-tests.json
+
+      - name: Test (server)
+        run: npx vitest run --reporter=default --reporter=json --outputFile.json=../.ci/server-tests.json
+        working-directory: server
+
+      # --- what ran, as an artifact -----------------------------------------
+
+      # `npm run status` answers "what exactly is running here" in one command
+      # (H0). Folding the run's own totals into it makes the artifact a complete
+      # answer rather than a snapshot with a hole where the tests should be.
+      - name: Collect the totals
+        if: always()
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const read = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
+            const of = (r) => r && { files: r.numTotalTestSuites, tests: r.numTotalTests, passed: r.numPassedTests, failed: r.numFailedTests, ok: r.success };
+            fs.writeFileSync(".ci/test-totals.json", JSON.stringify({
+              at: new Date().toISOString(),
+              run: process.env.GITHUB_RUN_ID ?? null,
+              commit: process.env.GITHUB_SHA ?? null,
+              frontend: of(read(".ci/frontend-tests.json")),
+              server: of(read(".ci/server-tests.json")),
+            }, null, 2));
+          '
+          cat .ci/test-totals.json
+
+      - name: Collect the status
+        if: always()
+        working-directory: server
+        env:
+          DATABASE_URL: postgres://docflow:docflow_dev@localhost:5432/docflow_test
+        run: node scripts/status.mjs --tests ../.ci/test-totals.json > ../.ci/status.json || true
+
+      - name: Upload the run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-status
+          path: .ci/
+          if-no-files-found: warn
+          retention-days: 30
