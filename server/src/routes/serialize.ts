@@ -7,6 +7,7 @@
  * turned into a path on the firm's disk.
  */
 import type { Document, DocumentVersion, Engagement, Request as RequestRow, RequestTemplate, Review } from '../db/schema.js';
+import type { RequestCorrection } from '../workflow/corrections.js';
 
 /** A request is overdue when it is still outstanding and its deadline has passed. Never stored. */
 export function isOverdue(row: Pick<RequestRow, 'status' | 'dueDate'>, now = new Date()): boolean {
@@ -74,7 +75,12 @@ export function toAttachment(doc: Document, version: DocumentVersion | undefined
   };
 }
 
-export function serializeRequest(r: RequestRow, now = new Date(), attachments: RequestAttachment[] = []) {
+export function serializeRequest(
+  r: RequestRow,
+  now = new Date(),
+  attachments: RequestAttachment[] = [],
+  correction: RequestCorrection | null = null
+) {
   return {
     id: r.id,
     engagementId: r.engagementId,
@@ -101,6 +107,10 @@ export function serializeRequest(r: RequestRow, now = new Date(), attachments: R
        absent rather than wrong. */
     attachments,
     attachmentCount: attachments.length,
+    /* What the advisor asked for, while the line is waiting on a corrected
+       copy. Only the open one: once the client sends again the note has done
+       its job, and it stays readable in the item's thread. */
+    correction: r.status === 'needs_correction' ? correction : null,
   };
 }
 

@@ -13,6 +13,7 @@ import { authenticate } from '../middleware/auth.js';
 import { NAME_MAX } from '../security/limits.js';
 import { serializeDocument, serializeRequest } from './serialize.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
+import { correctionsByRequest } from '../workflow/corrections.js';
 import { isId } from './scope.js';
 
 const router = asyncRouter();
@@ -106,12 +107,13 @@ router.get('/', async (req, res) => {
   const truncated = documents.length > LIMIT || requests.length > LIMIT;
   const hits = requests.slice(0, LIMIT);
   const attachments = await attachmentsByRequest(hits.map((r) => r.id));
+  const corrections = await correctionsByRequest(hits.filter((r) => r.status === 'needs_correction').map((r) => r.id));
 
   res.json({
     query: q,
     truncated,
     documents: documents.slice(0, LIMIT).map(serializeDocument),
-    requests: hits.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [])),
+    requests: hits.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [], corrections.get(r.id) ?? null)),
   });
 });
 

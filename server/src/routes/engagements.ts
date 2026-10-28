@@ -18,6 +18,7 @@ import { recordActivity } from '../db/activity-log.js';
 import { itemsToRequests, type TemplateItem } from '../workflow/starter-templates.js';
 import { serializeDocument, serializeEngagement, serializeRequest } from './serialize.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
+import { correctionsByRequest } from '../workflow/corrections.js';
 import { exportFilename, manifestCsv, planExport } from '../workflow/export.js';
 import { contentDisposition } from '../files/filename.js';
 import { ZipFile } from 'yazl';
@@ -186,10 +187,11 @@ router.get('/:id', async (req, res) => {
 
   // The attachments of every line in two queries, not two per line (H5).
   const attachments = await attachmentsByRequest(requests.map((r) => r.id));
+  const corrections = await correctionsByRequest(requests.filter((r) => r.status === 'needs_correction').map((r) => r.id));
 
   res.json({
     engagement: serializeEngagement(engagement),
-    requests: requests.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [])),
+    requests: requests.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [], corrections.get(r.id) ?? null)),
     documents: documents.map((d) => ({
       ...serializeDocument(d),
       currentVersion: d.currentVersionId ? summarizeVersion(versionById.get(d.currentVersionId)) : null,

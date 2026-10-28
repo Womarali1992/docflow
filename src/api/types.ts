@@ -245,6 +245,8 @@ export interface RequestItem {
   /** Every file filed against this line, oldest first. */
   attachments: RequestAttachment[];
   attachmentCount: number;
+  /** What the advisor asked for — set only while the line is `needs_correction`. */
+  correction: { note: string; createdAt: Date } | null;
 }
 
 export interface DocumentVersion {

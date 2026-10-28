@@ -188,6 +188,9 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
             Waive it with a reason, or leave it on the list.
           </div>
         )}
+        {request.status === 'needs_correction' && request.correction && (
+          <div className="df-note">You asked: {request.correction.note}</div>
+        )}
         {request.status === 'waived' && request.waivedReason && (
           <div className="df-note">Waived: {request.waivedReason}</div>
         )}

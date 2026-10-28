@@ -86,6 +86,43 @@ describe('request lifecycle', () => {
     expect(reviews.map((r) => r.decision).sort()).toEqual(['accepted', 'needs_correction']);
   });
 
+  /** 2026-10-28 audit: the note was stored on the review and nobody ever read it back out. */
+  it('puts the correction note in front of the client, on the line and in its thread', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const client = await loginAs(fx, 'client1a');
+    const requestId = fx.client1a.request;
+    const note = 'This is the December statement rather than the annual 1098.';
+
+    const first = await submitVersion(requestId, { kind: 'client', id: fx.client1a.id }, 'statement.pdf');
+    const sent = await request(app)
+      .post(`/api/requests/${requestId}/request-correction`)
+      .set('Cookie', advisor)
+      .send({ versionId: first.version.id, note });
+    expect(sent.status).toBe(200);
+    expect(sent.body.correction).toMatchObject({ note });
+
+    // The client's engagement tree — the portal's source — carries it on the line.
+    const engagementId = (await requestRow(requestId)).engagementId;
+    const tree = await request(app).get(`/api/engagements/${engagementId}`).set('Cookie', client);
+    expect(tree.status).toBe(200);
+    const line = tree.body.requests.find((r: { id: string }) => r.id === requestId);
+    expect(line.status).toBe('needs_correction');
+    expect(line.correction.note).toBe(note);
+
+    // And it is a message on the item's thread, from the advisor, that the client can answer.
+    const thread = await request(app).get(`/api/messages?documentId=${first.document.id}`).set('Cookie', client);
+    expect(thread.status).toBe(200);
+    expect(thread.body).toHaveLength(1);
+    expect(thread.body[0]).toMatchObject({ senderKind: 'provider', documentId: first.document.id });
+    expect(thread.body[0].content).toContain(note);
+
+    // Once a corrected copy arrives the open note is gone from the line; the thread keeps it.
+    await submitVersion(requestId, { kind: 'client', id: fx.client1a.id }, 'form-1098.pdf');
+    const after = await request(app).get(`/api/requests/${requestId}`).set('Cookie', client);
+    expect(after.body.status).toBe('submitted');
+    expect(after.body.correction).toBeNull();
+  });
+
   it('will not accept or correct a request nothing has been submitted against', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const id = fx.client1a.request;

@@ -43,7 +43,13 @@ export function clientRequestState(request: RequestItem, attachments: RequestAtt
       state: 'needs_correction',
       label: 'Needs another look',
       cls: 'df-danger',
-      note: 'Your accountant has asked for a corrected copy — their note is in the messages for this item.',
+      /* The note itself, not a pointer to it: this card is where the client is
+         looking, and "see the messages" sent them to a thread that was empty
+         (2026-10-28 audit). It is also posted to the item's thread, so a reply
+         has somewhere to go. */
+      note: request.correction?.note
+        ? `Your accountant said: “${request.correction.note}”`
+        : 'Your accountant has asked for a corrected copy. Send a new one, or ask them a question.',
     };
   }
   if (request.status === 'submitted' || request.status === 'in_review') {

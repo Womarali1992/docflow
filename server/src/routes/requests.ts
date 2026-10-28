@@ -30,6 +30,7 @@ import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
 import { auditRequest } from '../db/audit.js';
 import { decidableVersions, refusalBody, type DecisionRefusal } from '../workflow/publish.js';
 import { attachmentsForRequest, documentsForRequest } from '../workflow/attachments.js';
+import { correctionsByRequest } from '../workflow/corrections.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, clientOnly, findRequest, notFound } from './scope.js';
@@ -130,6 +131,23 @@ async function recordDecision(req: ExpressRequest, input: DecisionInput): Promis
 
     const versionIds = decidable.decisions.map((d) => d.versionId);
 
+    /* A correction is a question to the client, so it goes where questions
+       go: the item's own thread, in the advisor's words, where the client can
+       answer it. Before the 2026-10-28 audit the portal promised the note was
+       "in the messages for this item" and it was only ever on the review rows. */
+    if (input.decision === 'needs_correction' && input.note) {
+      await tx.insert(schema.messages).values({
+        clientId: input.request.clientId,
+        providerId: input.request.providerId,
+        documentId: decidable.decisions[0]?.documentId ?? null,
+        senderKind: 'provider',
+        senderId: auth.sub,
+        senderName: auth.name,
+        content: `Re: ${input.request.title}\n\n${input.note}`,
+        createdAt: now,
+      });
+    }
+
     // The decision and the record of it are one fact (F10): inside the
     // transaction, so a failed audit rolls the decision back rather than
     // leaving a change nobody can account for.
@@ -151,10 +169,16 @@ async function recordDecision(req: ExpressRequest, input: DecisionInput): Promis
   });
 }
 
-/** The request as it stands, with its attachments, ready to answer with. */
+/** A request row in its public shape, with what hangs off it: its attachments and any open correction. */
+async function present(row: RequestRow, now = new Date()) {
+  const corrections = row.status === 'needs_correction' ? await correctionsByRequest([row.id]) : null;
+  return serializeRequest(row, now, await attachmentsForRequest(row.id), corrections?.get(row.id) ?? null);
+}
+
+/** The request as it stands, re-read, ready to answer with. */
 async function freshRequest(requestId: string, now: Date) {
   const [updated] = await db.select().from(schema.requests).where(eq(schema.requests.id, requestId));
-  return serializeRequest(updated, now, await attachmentsForRequest(requestId));
+  return present(updated, now);
 }
 
 /* Wording, category, deadline and order. Never status. */
@@ -170,7 +194,7 @@ const patchSchema = z.object({
 router.get('/:id', async (req, res) => {
   const request = await findRequest(req.auth!, req.params.id);
   if (!request) return notFound(res);
-  res.json(serializeRequest(request, new Date(), await attachmentsForRequest(request.id)));
+  res.json(await present(request));
 });
 
 router.patch('/:id', async (req, res) => {
@@ -185,7 +209,7 @@ router.patch('/:id', async (req, res) => {
   if (dueDate !== undefined) updates.dueDate = dueDate === null ? null : new Date(dueDate);
 
   const [updated] = await db.update(schema.requests).set(updates).where(eq(schema.requests.id, request.id)).returning();
-  res.json(serializeRequest(updated, new Date(), await attachmentsForRequest(request.id)));
+  res.json(await present(updated));
 });
 
 /* ------------------------------------------------------------ advisor verbs */
@@ -333,7 +357,7 @@ router.post('/:id/waive', async (req, res) => {
     targetId: request.id,
   });
 
-  res.json(serializeRequest(updated, now, await attachmentsForRequest(request.id)));
+  res.json(await present(updated, now));
 });
 
 /** Puts a decided request back in play — back to `submitted` if an answer is on file. */
@@ -355,7 +379,7 @@ router.post('/:id/reopen', async (req, res) => {
     .where(eq(schema.requests.id, request.id))
     .returning();
 
-  res.json(serializeRequest(updated, now, await attachmentsForRequest(request.id)));
+  res.json(await present(updated, now));
 });
 
 /* ------------------------------------------------------------- client verbs */
@@ -415,7 +439,7 @@ router.post('/:id/respond', async (req, res) => {
     targetId: request.id,
   });
 
-  res.json(serializeRequest(updated, now, await attachmentsForRequest(request.id)));
+  res.json(await present(updated, now));
 });
 
 export default router;
