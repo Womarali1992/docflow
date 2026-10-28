@@ -218,6 +218,7 @@ const Engagement: React.FC = () => {
               engagementTitle={engagement.title}
               closed={closed}
               requests={requests}
+              removed={data.removedRequests ?? []}
               documents={data.documents}
             />
           )}

@@ -41,7 +41,7 @@ import { duplicateAnswer, publishStagedUpload, versionByUploadId, type PublishSu
 import { quotaRefusal } from '../files/quota.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
-import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound } from './scope.js';
+import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound, REQUEST_REMOVED } from './scope.js';
 import { type Tx } from '../workflow/publish.js';
 import { notify } from '../notify.js';
 import type { Document } from '../db/schema.js';
@@ -267,6 +267,13 @@ function withStaging(handler: (req: Request, res: Response) => Promise<unknown>)
  * with itself, so that lock is gone — and the version-number race it also
  * guarded now only exists on the replace path, where `recordNewVersionTx` holds
  * the document lock exactly as it does for `POST /documents/:id/versions`.
+ *
+ * The request row is locked again for a different reason: an advisor can take
+ * a line off the checklist while a file for it is still on its way (2026-10-28
+ * audit). `POST /requests/:id/remove` takes the same lock and refuses a line
+ * with any file on it. So either the removal sees this document and refuses,
+ * or this sees the removal and puts the line back. A file the client sent never
+ * sits on a line nobody can see.
  */
 async function documentForRequest(
   tx: Tx,
@@ -275,6 +282,15 @@ async function documentForRequest(
   replacing: Document | undefined
 ): Promise<Document> {
   if (replacing) return replacing;
+
+  const [line] = await tx
+    .select({ archivedAt: schema.requests.archivedAt })
+    .from(schema.requests)
+    .where(eq(schema.requests.id, request.id))
+    .for('update');
+  if (line?.archivedAt) {
+    await tx.update(schema.requests).set({ archivedAt: null, updatedAt: new Date() }).where(eq(schema.requests.id, request.id));
+  }
 
   /* Named after the file, not after the checklist line. Six receipts against
      "2024 receipts" used to be impossible; six attachments all *called* "2024
@@ -313,7 +329,7 @@ router.post(
         if (request.status === 'waived') {
           return badRequest(res, 'Your accountant has marked this item as not needed.', 'request_closed');
         }
-        if (request.archivedAt) return notFound(res);
+        if (request.archivedAt) return badRequest(res, REQUEST_REMOVED, 'request_removed');
         /* A closed year takes no more files, by either route (2026-10-28 audit:
            the ad-hoc route refused, this one did not). */
         const [engagement] = await db

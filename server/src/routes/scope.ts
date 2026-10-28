@@ -23,6 +23,9 @@ export const notFound = (res: Response) => res.status(404).json({ error: 'Not fo
 export const advisorOnly = (res: Response) => res.status(403).json({ error: 'Only your advisor can do that.' });
 export const clientOnly = (res: Response) => res.status(403).json({ error: 'Only the client can do that.' });
 
+/** What a client is told about a line that was taken off their list while they had it open. */
+export const REQUEST_REMOVED = 'Your accountant has taken this item off your list. There is nothing to send for it.';
+
 export function badRequest(res: Response, error: string, code?: string) {
   return res.status(400).json(code ? { error, code } : { error });
 }

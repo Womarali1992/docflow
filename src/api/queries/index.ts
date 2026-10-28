@@ -40,6 +40,8 @@ export {
   useRequestCorrection,
   useWaiveRequest,
   useReopenRequest,
+  useRemoveRequest,
+  useRestoreRequest,
   useRespondToRequest,
   useUploadToRequest,
 } from './requests';

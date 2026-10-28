@@ -226,6 +226,19 @@ describe('the reminder run', () => {
     expect((await runReminders({ today: '2026-04-15', timeZone: TZ })).items).toBe(0);
   });
 
+  it('does not chase a line taken off the checklist', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const created = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+      .set('Cookie', advisor)
+      .send({ items: [{ title: 'W-2' }] });
+    const id = (created.body as Array<{ id: string }>)[0].id;
+    await setDue(id, '2026-04-15');
+    await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+
+    expect((await runReminders({ today: '2026-04-15', timeZone: TZ })).items).toBe(0);
+  });
+
   it('lets the advisor remind a client now, once a day', async () => {
     process.env.SMTP_URL = 'smtps://user:pw@smtp.example.com:465';
     try {

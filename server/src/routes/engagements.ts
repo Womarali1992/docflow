@@ -170,11 +170,16 @@ router.get('/:id', async (req, res) => {
   if (!engagement) return notFound(res);
   const now = new Date();
 
-  const requests = await db
+  const lines = await db
     .select()
     .from(schema.requests)
     .where(eq(schema.requests.engagementId, engagement.id))
     .orderBy(asc(schema.requests.sortOrder), asc(schema.requests.createdAt));
+  /* A line taken off the checklist is not part of it: every count on both
+     screens reads `requests`. The advisor gets the removed ones on their own,
+     to put one back; the client never sees them. */
+  const requests = lines.filter((r) => r.archivedAt === null);
+  const removed = req.auth!.kind === 'provider' ? lines.filter((r) => r.archivedAt !== null) : [];
 
   const allDocuments = await db.select().from(schema.documents).where(eq(schema.documents.engagementId, engagement.id));
   // A client does not see a deliverable until it is shared (invariant: 404, not 403).
@@ -193,6 +198,7 @@ router.get('/:id', async (req, res) => {
   res.json({
     engagement: serializeEngagement(engagement),
     requests: requests.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [], corrections.get(r.id) ?? null)),
+    ...(req.auth!.kind === 'provider' ? { removedRequests: removed.map((r) => serializeRequest(r, now)) } : {}),
     documents: documents.map((d) => ({
       ...serializeDocument(d),
       currentVersion: d.currentVersionId ? summarizeVersion(versionById.get(d.currentVersionId)) : null,

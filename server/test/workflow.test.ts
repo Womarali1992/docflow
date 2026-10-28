@@ -10,9 +10,10 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, schema } from '../src/db/client.js';
+import { db, pool, schema } from '../src/db/client.js';
 import { recordNewVersion } from '../src/workflow/versions.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
+import { FIXTURES } from './fixtures.js';
 import { PDF_BYTES, app, loginAs, request, seedFixture, type Fixture } from './helpers.js';
 
 /** Puts a new version on a document, exactly as C2.3's publish step will. */
@@ -31,6 +32,8 @@ async function submitVersion(documentId: string, uploader: { kind: 'provider' | 
     uploadedById: uploader.id,
   });
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function requestRow(id: string) {
   const [row] = await db.select().from(schema.requests).where(eq(schema.requests.id, id));
@@ -206,6 +209,143 @@ describe('request lifecycle', () => {
       .send({ versionId: fx.client1a.uploadVersion });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('version_mismatch');
+  });
+});
+
+/* 2026-10-28 audit: a line asked for by mistake could only be waived, with a
+   reason the client reads. */
+describe('taking a line off the checklist', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  const tree = (cookie: string, engagementId: string) => request(app).get(`/api/engagements/${engagementId}`).set('Cookie', cookie);
+  const ids = (rows: Array<{ id: string }>) => rows.map((r) => r.id);
+
+  it('takes an empty line off both screens and the queue, and keeps it for the advisor', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const client = await loginAs(fx, 'client1a');
+    const id = fx.client1a.request;
+
+    const removed = await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+    expect(removed.status).toBe(200);
+    expect(removed.body.archivedAt).not.toBeNull();
+    // Status is left as it was: removing is not a decision about the line.
+    expect(removed.body.status).toBe('requested');
+
+    const forAdvisor = await tree(advisor, fx.client1a.engagement);
+    expect(ids(forAdvisor.body.requests)).not.toContain(id);
+    expect(ids(forAdvisor.body.removedRequests)).toEqual([id]);
+
+    const forClient = await tree(client, fx.client1a.engagement);
+    expect(ids(forClient.body.requests)).not.toContain(id);
+    expect(forClient.body).not.toHaveProperty('removedRequests');
+
+    const dash = await request(app).get('/api/dashboard').set('Cookie', advisor);
+    expect(ids(dash.body.waitingOnClients.items)).not.toContain(id);
+
+    // Removing twice is the same as removing once.
+    const again = await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+    expect(again.status).toBe(200);
+    const rows = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'request.removed'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ targetId: id, clientId: fx.client1a.id });
+  });
+
+  it('puts it back as it was', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const id = fx.client1a.request;
+    await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+
+    const restored = await request(app).post(`/api/requests/${id}/restore`).set('Cookie', advisor);
+    expect(restored.status).toBe(200);
+    expect(restored.body).toMatchObject({ archivedAt: null, status: 'requested' });
+
+    const after = await tree(advisor, fx.client1a.engagement);
+    expect(ids(after.body.requests)).toContain(id);
+    expect(after.body.removedRequests).toEqual([]);
+    const rows = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'request.restored'));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('refuses once the client has sent a file for it — that line is on the record', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const id = fx.client1a.request;
+    await submitVersion(id, { kind: 'client', id: fx.client1a.id });
+
+    const res = await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('has_files');
+    expect((await requestRow(id)).archivedAt).toBeNull();
+  });
+
+  it('is the advisor’s, and not on a closed engagement', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const client = await loginAs(fx, 'client1a');
+    const id = fx.client1a.request;
+
+    const byClient = await request(app).post(`/api/requests/${id}/remove`).set('Cookie', client);
+    expect(byClient.status).toBe(403);
+
+    await request(app).post(`/api/engagements/${fx.client1a.engagement}/close`).set('Cookie', advisor);
+    const onClosed = await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+    expect(onClosed.status).toBe(400);
+    expect(onClosed.body.code).toBe('engagement_closed');
+  });
+
+  it('tells a client with the line still open that it is off their list', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const client = await loginAs(fx, 'client1a');
+    const id = fx.client1a.request;
+    await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+
+    const upload = await request(app)
+      .post(`/api/requests/${id}/uploads`)
+      .set('Cookie', client)
+      .attach('file', PDF_BYTES, { filename: 'late.pdf', contentType: 'application/pdf' });
+    expect(upload.status).toBe(400);
+    expect(upload.body.code).toBe('request_removed');
+
+    const respond = await request(app).post(`/api/requests/${id}/respond`).set('Cookie', client).send({ kind: 'not_applicable' });
+    expect(respond.status).toBe(400);
+    expect(respond.body.code).toBe('request_removed');
+  });
+
+  /**
+   * The race, held still: the client's upload was authorized while the line was
+   * on the list, and the advisor removes it while the bytes are on their way.
+   * The upload waits for the line's lock, sees the removal, and puts the line
+   * back — a file never lands on a line nobody can see.
+   */
+  it('puts the line back when a file reaches it after all', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const id = fx.client1a.request;
+    const holder = await pool.connect();
+
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM requests WHERE id = $1 FOR UPDATE', [id]);
+
+      const pending = request(app)
+        .post(`/api/requests/${id}/uploads`)
+        .set('Cookie', client)
+        .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name })
+        .then((r) => r);
+      const raced = await Promise.race([pending.then(() => 'finished' as const), sleep(500).then(() => 'blocked' as const)]);
+      expect(raced).toBe('blocked');
+
+      // What `POST /requests/:id/remove` writes, landing while the upload waits.
+      await holder.query('UPDATE requests SET archived_at = now() WHERE id = $1', [id]);
+      await holder.query('COMMIT');
+
+      const res = await pending;
+      expect([201, 202]).toContain(res.status);
+      expect((await requestRow(id)).archivedAt).toBeNull();
+    } finally {
+      holder.release();
+    }
   });
 });
 

@@ -310,6 +310,8 @@ export interface EngagementDocument extends Document {
 export interface EngagementTree {
   engagement: Engagement;
   requests: RequestItem[];
+  /** Lines taken off the checklist. Advisor only; a client's tree never has them. */
+  removedRequests?: RequestItem[];
   documents: EngagementDocument[];
 }
 

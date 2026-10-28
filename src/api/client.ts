@@ -410,6 +410,9 @@ export const api = {
     waive: (id: string, reason: string) =>
       request<RequestItem>(`/requests/${id}/waive`, { method: 'POST', body: JSON.stringify({ reason }) }),
     reopen: (id: string) => request<RequestItem>(`/requests/${id}/reopen`, { method: 'POST' }),
+    /** Off the checklist, for a line nothing was sent against; 409 `has_files` otherwise. */
+    remove: (id: string) => request<RequestItem>(`/requests/${id}/remove`, { method: 'POST' }),
+    restore: (id: string) => request<RequestItem>(`/requests/${id}/restore`, { method: 'POST' }),
     /** "I don't have this" — recorded, and deliberately does not move the status. */
     respond: (id: string, input: { kind: 'not_applicable'; note?: string }) =>
       request<RequestItem>(`/requests/${id}/respond`, { method: 'POST', body: JSON.stringify(input) }),

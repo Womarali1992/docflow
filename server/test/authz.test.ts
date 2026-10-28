@@ -557,6 +557,19 @@ const cases: Case[] = [
     check: (res) => expect(res.body.status).toBe('requested'),
   },
   {
+    // The seeded request has no file on it yet, so it can come off the checklist.
+    name: 'POST /api/requests/:id/remove (nothing sent yet)',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/remove`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).not.toBeNull(),
+  },
+  {
+    name: 'POST /api/requests/:id/restore',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/restore`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).toBeNull(),
+  },
+  {
     // The mirror image of the advisor verbs: the client answers, the advisor cannot answer for them.
     name: 'POST /api/requests/:id/respond (the client answers)',
     req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/respond`).send({ kind: 'not_applicable', note: 'I rent' }),

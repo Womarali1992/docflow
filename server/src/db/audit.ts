@@ -44,6 +44,9 @@ export type AuditAction =
   | 'request.accepted'
   | 'request.correction_requested'
   | 'request.waived'
+  /* A line taken off the checklist before anything was sent for it, and put back (2026-10-28 audit). */
+  | 'request.removed'
+  | 'request.restored'
   | 'document.published'
   /* Stored and queued for a re-scan: the honest name for a 202, and the row a
      later `document.published` from the scan-retry job pairs with (H3). */

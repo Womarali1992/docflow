@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RequestItem, RequestStatus } from '@/api/types';
-import { useAcceptRequest, useReopenRequest, useRequestCorrection, useUpdateRequest, useWaiveRequest } from '@/api/queries';
+import { useAcceptRequest, useRemoveRequest, useReopenRequest, useRequestCorrection, useUpdateRequest, useWaiveRequest } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
@@ -14,7 +14,9 @@ import ReasonDialog from '../ReasonDialog';
  * is no "Accept" on a line nothing has been submitted against, because the
  * server answers that with `nothing_submitted` and a disabled-looking button
  * that fails is worse than no button. Waiving asks for a reason and correcting
- * asks for a note, because both are refused without one.
+ * asks for a note, because both are refused without one. Remove is offered only
+ * while nothing has been sent for the line; after that the line is part of the
+ * record and waiving is the way to close it.
  */
 
 const STATUS_PILL: Record<RequestStatus, { label: string; cls: string }> = {
@@ -45,6 +47,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   const requestCorrection = useRequestCorrection();
   const waive = useWaiveRequest();
   const reopen = useReopenRequest();
+  const remove = useRemoveRequest();
 
   const [editing, setEditing] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
@@ -61,7 +64,8 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   const settled = request.status === 'accepted' || request.status === 'waived';
   /* The client said "I don't have this" and nobody has decided yet. */
   const needsDecision = Boolean(request.clientResponseKind) && !settled;
-  const busy = accept.isPending || requestCorrection.isPending || waive.isPending || reopen.isPending || updateRequest.isPending;
+  const busy =
+    accept.isPending || requestCorrection.isPending || waive.isPending || reopen.isPending || remove.isPending || updateRequest.isPending;
 
   /**
    * The files filed against this line (H5), and the decision they permit.
@@ -116,6 +120,13 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
       toast({ title: failTitle, description: getErrorMessage(err), variant: 'destructive' });
     }
   };
+
+  /* Reversible from "Removed" under the list, so no confirmation step. */
+  const removeLine = () =>
+    run(async () => {
+      await remove.mutateAsync(request.id);
+      toast({ title: 'Removed from the checklist', description: `${request.title}. The client no longer sees it.` });
+    }, 'Could not remove');
 
   if (editing) {
     return (
@@ -266,6 +277,11 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
           )}
           {editable && !settled && (
             <button className="df-btn df-sm df-ghost" disabled={busy} onClick={startEdit}>Edit</button>
+          )}
+          {editable && attachments.length === 0 && (
+            <button className="df-btn df-sm df-ghost" disabled={busy} onClick={removeLine} title="Take it off the list. The client is not told why.">
+              Remove
+            </button>
           )}
         </div>
       </div>
