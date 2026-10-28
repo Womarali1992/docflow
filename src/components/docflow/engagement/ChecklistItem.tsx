@@ -137,7 +137,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
           </div>
           <label className="df-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} />
-            <span className="df-field-label" style={{ margin: 0 }}>Required — the client is chased for it</span>
+            <span className="df-field-label" style={{ margin: 0 }}>Required — the client is reminded until it is sent</span>
           </label>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="df-btn df-sm df-primary" onClick={saveEdit} disabled={busy || !title.trim()}>

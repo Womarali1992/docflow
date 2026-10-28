@@ -72,6 +72,11 @@ export function useReopenEngagement() {
   return useEngagementMutation<string, Engagement>((id) => api.engagements.reopen(id), (id) => id);
 }
 
+/** "Remind them now." Nothing on screen changes, so nothing is invalidated. */
+export function useRemindClient() {
+  return useMutation({ mutationFn: (id: string) => api.engagements.remind(id) });
+}
+
 /** Appends checklist lines — from a template or explicit items, never both. */
 export function useAddRequests() {
   return useEngagementMutation<

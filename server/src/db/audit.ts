@@ -34,6 +34,8 @@ export type AuditAction =
   /* A whole engagement copied out as a zip — every accepted file and every
      shared deliverable leaving the system at once (H8). */
   | 'engagement.exported'
+  /* An advisor pressed "Remind now" (2026-10-28 audit). */
+  | 'engagement.reminded'
   | 'request.created'
   | 'request.accepted'
   | 'request.correction_requested'

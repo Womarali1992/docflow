@@ -498,6 +498,13 @@ const cases: Case[] = [
     check: (res) => expect(res.body.status).toBe('open'),
   },
   {
+    /* The fixture engagement has one open line, so the owner's press is a real reminder. */
+    name: 'POST /api/engagements/:id/remind',
+    req: (fx) => request(app).post(`/api/engagements/${fx.client1a.engagement}/remind`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.items).toBe(1),
+  },
+  {
     name: 'POST /api/engagements/:id/requests (explicit items)',
     req: (fx) =>
       request(app)

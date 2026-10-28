@@ -1,15 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useClient, useCloseEngagement, useEngagement, useReopenEngagement } from '@/api/queries';
+import { useClient, useCloseEngagement, useEngagement, useRemindClient, useReopenEngagement } from '@/api/queries';
 import { api } from '@/api/client';
 import { useToast } from '@/hooks/use-toast';
-import { getErrorMessage } from '@/utils/errors';
+import { getErrorMessage, isMissing } from '@/utils/errors';
 import { I } from '@/components/docflow/icons';
 import MessagesPanel from '@/components/docflow/MessagesPanel';
 import Checklist from '@/components/docflow/engagement/Checklist';
 import Deliverables from '@/components/docflow/engagement/Deliverables';
 import Uploads from '@/components/docflow/engagement/Uploads';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
+import LoadError from '@/components/docflow/LoadError';
 
 /**
  * The engagement workspace — one piece of work, start to finish.
@@ -33,9 +34,10 @@ const Engagement: React.FC = () => {
   const { engagementId } = useParams<{ engagementId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { data, isPending, error } = useEngagement(engagementId);
+  const { data, isPending, error, refetch } = useEngagement(engagementId);
   const closeEngagement = useCloseEngagement();
   const reopenEngagement = useReopenEngagement();
+  const remindClient = useRemindClient();
   const [tab, setTab] = useState<Tab>('checklist');
 
   const client = useClient(data?.engagement.clientId);
@@ -54,6 +56,13 @@ const Engagement: React.FC = () => {
         <div className="df-section">
           <SkeletonRows rows={5} label="Loading this engagement" />
         </div>
+      </div>
+    );
+  }
+  if (error && !isMissing(error)) {
+    return (
+      <div className="df-page">
+        <LoadError what="this engagement" onRetry={() => void refetch()} />
       </div>
     );
   }
@@ -96,6 +105,20 @@ const Engagement: React.FC = () => {
       }
     } catch (err) {
       toast({ title: 'Could not change the engagement', description: getErrorMessage(err), variant: 'destructive' });
+    }
+  };
+
+  const remind = async () => {
+    try {
+      const sent = await remindClient.mutateAsync(engagement.id);
+      toast({
+        title: 'Reminder sent',
+        description: `${client.data?.name ?? 'The client'} has been reminded about ${sent.items} item${sent.items === 1 ? '' : 's'}${
+          sent.emailQueued ? ', by email and in their portal' : ' in their portal'
+        }.`,
+      });
+    } catch (err) {
+      toast({ title: 'No reminder sent', description: getErrorMessage(err), variant: 'destructive' });
     }
   };
 
@@ -147,6 +170,16 @@ const Engagement: React.FC = () => {
           ) : (
             <button className="df-btn df-ghost" disabled title="Nothing has been accepted or shared in this engagement yet">
               <I.Download size={13} /> Export
+            </button>
+          )}
+          {!closed && withClient > 0 && (
+            <button
+              className="df-btn df-ghost"
+              onClick={remind}
+              disabled={remindClient.isPending}
+              title="Send the client today’s reminder about what is still waiting on them"
+            >
+              <I.Bell size={13} /> {remindClient.isPending ? 'Sending…' : 'Remind client'}
             </button>
           )}
           <button className="df-btn df-ghost" onClick={toggleStatus} disabled={busy}>

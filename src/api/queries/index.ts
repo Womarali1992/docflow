@@ -29,6 +29,7 @@ export {
   useUpdateEngagement,
   useCloseEngagement,
   useReopenEngagement,
+  useRemindClient,
   useAddRequests,
 } from './engagements';
 export {

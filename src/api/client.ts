@@ -380,6 +380,8 @@ export const api = {
       request<Engagement>(`/engagements/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     close: (id: string) => request<Engagement>(`/engagements/${id}/close`, { method: 'POST' }),
     reopen: (id: string) => request<Engagement>(`/engagements/${id}/reopen`, { method: 'POST' }),
+    /** Today's reminder for this engagement's outstanding lines; at most one per client per day. */
+    remind: (id: string) => request<{ items: number; emailQueued: boolean }>(`/engagements/${id}/remind`, { method: 'POST' }),
     /** Appends checklist lines — from a template or explicit items, never both. */
     addRequests: (id: string, input: { templateId: string; dueDate?: string | null } | { items: TemplateItem[]; dueDate?: string | null }) =>
       request<RequestItem[]>(`/engagements/${id}/requests`, { method: 'POST', body: JSON.stringify(input) }),

@@ -24,6 +24,7 @@ import { contentDisposition } from '../files/filename.js';
 import { ZipFile } from 'yazl';
 import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
 import { notify } from '../notify.js';
+import { remindNow } from '../jobs/handlers/reminders.js';
 
 const router = asyncRouter();
 router.use(authenticate);
@@ -321,6 +322,46 @@ router.post('/:id/close', async (req, res) => {
     clientId: engagement.clientId,
   });
   res.json(serializeEngagement(updated));
+});
+
+/**
+ * "Remind them now." The morning run's notice, sent today, for this
+ * engagement's outstanding lines — at most one reminder per client per day,
+ * whoever sends it (see `remindNow`).
+ */
+router.post('/:id/remind', async (req, res) => {
+  const auth = req.auth!;
+  const engagement = await loadForAdvisor(req, res);
+  if (!engagement) return;
+
+  const outcome = await remindNow(engagement);
+  if (!outcome.ok) {
+    const message = {
+      engagement_closed: 'This engagement is closed. Reopen it before reminding the client.',
+      nothing_outstanding: 'Nothing on this checklist is waiting on the client.',
+      already_reminded: 'They have already been reminded today. The next reminder can go tomorrow.',
+    }[outcome.code];
+    return res.status(outcome.code === 'already_reminded' ? 409 : 400).json({ error: message, code: outcome.code });
+  }
+
+  await auditRequest(req, {
+    action: 'engagement.reminded',
+    targetType: 'engagement',
+    targetId: engagement.id,
+    clientId: engagement.clientId,
+    meta: { items: outcome.items },
+  });
+  await recordActivity({
+    providerId: engagement.providerId,
+    clientId: engagement.clientId,
+    type: 'update',
+    description: `sent a reminder about ${outcome.items} item${outcome.items === 1 ? '' : 's'}`,
+    actorKind: 'provider',
+    actorId: auth.sub,
+    actorName: auth.name,
+    targetId: engagement.id,
+  });
+  res.json({ items: outcome.items, emailQueued: outcome.emailQueued });
 });
 
 router.post('/:id/reopen', async (req, res) => {
