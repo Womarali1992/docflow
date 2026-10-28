@@ -44,6 +44,8 @@ export type NotificationType =
   /* → the advisor */
   | 'upload.received'
   | 'upload.quarantined'
+  /* The client took back a file before it was decided. In-app only: nothing to act on. */
+  | 'upload.withdrawn'
   /* The scanner never answered for one file; it needs a person (System status). */
   | 'scan.stuck'
   | 'request.not_applicable'

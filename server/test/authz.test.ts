@@ -644,6 +644,13 @@ const cases: Case[] = [
     check: (res) => expect(res.body.archivedAt).not.toBeNull(),
   },
   {
+    // The client's own verb: the seeded request's document is on the checklist and undecided.
+    name: 'POST /api/documents/:id/withdraw (the client takes back a file)',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.request}/withdraw`),
+    expect: S(403, 404, 200, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).not.toBeNull(),
+  },
+  {
     name: 'POST /api/documents/:id/unarchive',
     req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/unarchive`),
     expect: S(200, 404, 403, 404, 404, 401),

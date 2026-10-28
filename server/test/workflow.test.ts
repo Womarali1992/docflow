@@ -35,6 +35,25 @@ async function submitVersion(documentId: string, uploader: { kind: 'provider' | 
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Waits until some backend in this database is blocked on a row lock. A fixed
+ * sleep cannot tell "waiting for the lock" from "still on its way there", and
+ * on a busy machine the second looks exactly like the first. Asked on a fresh
+ * pool connection, because a transaction sees one frozen snapshot of
+ * pg_stat_activity.
+ */
+async function someoneWaitsForALock(timeoutMs = 10_000): Promise<boolean> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const { rows } = await pool.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+    );
+    if (rows[0].n > 0) return true;
+    await sleep(25);
+  }
+  return false;
+}
+
 async function requestRow(id: string) {
   const [row] = await db.select().from(schema.requests).where(eq(schema.requests.id, id));
   return row;
@@ -333,8 +352,8 @@ describe('taking a line off the checklist', () => {
         .set('Cookie', client)
         .attach('file', Buffer.from(FIXTURES.pdf.bytes), { filename: FIXTURES.pdf.name })
         .then((r) => r);
-      const raced = await Promise.race([pending.then(() => 'finished' as const), sleep(500).then(() => 'blocked' as const)]);
-      expect(raced).toBe('blocked');
+      // Authorized while the line was on the list, and now parked on its lock.
+      expect(await someoneWaitsForALock()).toBe(true);
 
       // What `POST /requests/:id/remove` writes, landing while the upload waits.
       await holder.query('UPDATE requests SET archived_at = now() WHERE id = $1', [id]);
@@ -346,6 +365,130 @@ describe('taking a line off the checklist', () => {
     } finally {
       holder.release();
     }
+  });
+});
+
+/* 2026-10-28 audit: a client who sent the wrong file could only send another. */
+describe('a client withdrawing a file', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  /** A second file on the client's open line, as a second upload would make it. */
+  async function anotherAttachment(requestId: string) {
+    const [line] = await db.select().from(schema.requests).where(eq(schema.requests.id, requestId));
+    const [doc] = await db
+      .insert(schema.documents)
+      .values({
+        clientId: line.clientId,
+        providerId: line.providerId,
+        engagementId: line.engagementId,
+        requestId,
+        kind: 'client_upload',
+        name: 'second.pdf',
+        displayName: 'second.pdf',
+        category: line.category,
+      })
+      .returning();
+    return submitVersion(doc.id, { kind: 'client', id: line.clientId }, 'second.pdf');
+  }
+
+  const withdraw = (cookie: string, documentId: string) => request(app).post(`/api/documents/${documentId}/withdraw`).set('Cookie', cookie);
+
+  it('takes back a file nobody has decided on, keeps it on the record, and reopens the line', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const sent = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id }, 'wrong.pdf');
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+
+    const tree = await request(app).get(`/api/engagements/${fx.client1a.engagement}`).set('Cookie', client);
+    const line = tree.body.requests.find((r: { id: string }) => r.id === fx.client1a.request);
+    expect(line.attachments[0]).toMatchObject({ documentId: sent.document.id, decided: false });
+
+    const res = await withdraw(client, sent.document.id);
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).not.toBeNull();
+    // Nothing else is on the line, so it is the client's to answer again.
+    expect((await requestRow(fx.client1a.request)).status).toBe('requested');
+
+    // The bytes and the row are still there, and the advisor can see both.
+    const [version] = await db.select().from(schema.documentVersions).where(eq(schema.documentVersions.id, sent.version.id));
+    expect(version).toBeDefined();
+    const seen = await request(app).get(`/api/documents/${sent.document.id}`).set('Cookie', advisor);
+    expect(seen.status).toBe(200);
+
+    const audit = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'document.withdrawn'));
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ targetId: sent.document.id, actorKind: 'client' });
+    const told = await db.select().from(schema.notifications).where(eq(schema.notifications.type, 'upload.withdrawn'));
+    expect(told).toHaveLength(1);
+    expect(told[0].userId).toBe(fx.provider1.id);
+
+    // Twice is once.
+    expect((await withdraw(client, sent.document.id)).status).toBe(200);
+    expect(await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'document.withdrawn'))).toHaveLength(1);
+  });
+
+  it('refuses once the advisor has ruled on the file', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const sent = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+    await request(app)
+      .post(`/api/requests/${fx.client1a.request}/request-correction`)
+      .set('Cookie', advisor)
+      .send({ versionId: sent.version.id, note: 'Wrong year' });
+
+    const res = await withdraw(client, sent.document.id);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('decided');
+    expect((await requestRow(fx.client1a.request)).status).toBe('needs_correction');
+
+    // A replacement starts undecided again, and can be withdrawn.
+    const replaced = await submitVersion(sent.document.id, { kind: 'client', id: fx.client1a.id }, 'still-wrong.pdf');
+    expect(replaced.version.versionNo).toBe(2);
+    expect((await withdraw(client, sent.document.id)).status).toBe(200);
+  });
+
+  it('puts an accepted line back to accepted when the stray file is withdrawn', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const first = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+    await request(app).post(`/api/requests/${fx.client1a.request}/accept`).set('Cookie', advisor).send({ versionId: first.version.id });
+
+    const stray = await anotherAttachment(fx.client1a.request);
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+
+    expect((await withdraw(client, stray.document.id)).status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('accepted');
+  });
+
+  it('hands the line back to the advisor when they un-archive a withdrawn file', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const sent = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+    await withdraw(client, sent.document.id);
+    expect((await requestRow(fx.client1a.request)).status).toBe('requested');
+
+    const back = await request(app).post(`/api/documents/${sent.document.id}/unarchive`).set('Cookie', advisor);
+    expect(back.status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+  });
+
+  it('is the client’s own verb, for checklist files only', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const other = await loginAs(fx, 'client1b');
+    const sent = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+
+    expect((await withdraw(advisor, sent.document.id)).status).toBe(403);
+    expect((await withdraw(other, sent.document.id)).status).toBe(404);
+
+    // An ad-hoc upload is not on the checklist, so there is no line to take it off.
+    const adHoc = await withdraw(client, fx.client1a.upload);
+    expect(adHoc.status).toBe(400);
+    expect(adHoc.body.code).toBe('not_withdrawable');
   });
 });
 

@@ -5,6 +5,7 @@ import { useClientWork } from '@/api/queries/portal';
 import { I } from '@/components/docflow/icons';
 import RequestCard from '@/components/docflow/portal/RequestCard';
 import { clientRequestState } from '@/components/docflow/portal/requestState';
+import { WithdrawableFiles } from '@/components/docflow/portal/WithdrawFile';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 /**
@@ -14,7 +15,7 @@ import { SkeletonRows } from '@/components/docflow/Skeleton';
  * this page answers it in order: what came back needing a fix, what is late,
  * what is due soon, then everything else still open. Anything already sent is
  * below the fold under "with your accountant", where it is reassurance rather
- * than a task.
+ * than a task — and where a file sent by mistake can still be withdrawn.
  *
  * The counter is the accountant's counter: an item is done when they have
  * accepted it or agreed it is not needed, not when a file was uploaded.
@@ -111,6 +112,7 @@ const PortalHome: React.FC = () => {
                             ? `You sent ${request.attachments[0].displayName}`
                             : `You sent ${request.attachmentCount} files`)}
                     </div>
+                    <WithdrawableFiles request={request} />
                   </div>
                   <span className={'df-pill ' + state.cls}>{state.label}</span>
                 </div>

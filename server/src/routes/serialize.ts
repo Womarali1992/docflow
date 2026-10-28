@@ -51,6 +51,8 @@ export interface RequestAttachment {
   displayName: string;
   currentVersion: ReturnType<typeof summarizeAttachmentVersion>;
   state: 'ready' | 'checking' | 'refused';
+  /** The advisor has accepted or corrected the version on screen; until then the client may withdraw it. */
+  decided: boolean;
 }
 
 /** Just enough of a version to name it on a checklist row. */
@@ -72,7 +74,12 @@ function summarizeAttachmentVersion(v: DocumentVersion | undefined) {
  * `newest` is only needed when there is no current version: it is what says
  * whether the file is still being checked or was refused.
  */
-export function toAttachment(doc: Document, version: DocumentVersion | undefined, newest?: DocumentVersion): RequestAttachment {
+export function toAttachment(
+  doc: Document,
+  version: DocumentVersion | undefined,
+  newest?: DocumentVersion,
+  decided = false
+): RequestAttachment {
   const currentVersion = summarizeAttachmentVersion(version);
   const refused = !currentVersion && (newest?.scanStatus === 'infected' || newest?.scanStatus === 'encrypted');
   return {
@@ -80,6 +87,7 @@ export function toAttachment(doc: Document, version: DocumentVersion | undefined
     displayName: doc.displayName ?? doc.name,
     currentVersion,
     state: currentVersion?.available ? 'ready' : refused ? 'refused' : 'checking',
+    decided,
   };
 }
 

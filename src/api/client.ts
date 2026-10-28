@@ -345,6 +345,8 @@ export const api = {
     unshare: (id: string) => request<Document>(`/documents/${id}/unshare`, { method: 'POST' }),
     archive: (id: string) => request<Document>(`/documents/${id}/archive`, { method: 'POST' }),
     unarchive: (id: string) => request<Document>(`/documents/${id}/unarchive`, { method: 'POST' }),
+    /** The client takes back a file they sent; 409 `decided` once the advisor has ruled on it. */
+    withdraw: (id: string) => request<Document>(`/documents/${id}/withdraw`, { method: 'POST' }),
     /** An empty document record; the bytes arrive separately through an upload route. */
     create: (input: { clientId: string; name: string; category?: string; engagementId?: string }) =>
       request<Document>('/documents', {

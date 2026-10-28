@@ -57,6 +57,8 @@ export type AuditAction =
   | 'document.shared'
   | 'document.unshared'
   | 'document.archived'
+  /* The client took back a file they sent, before the advisor decided on it (2026-10-28 audit). */
+  | 'document.withdrawn'
   | 'admin.action'
   | 'backup.run'
   /* An advisor put a failed background job back in the queue (H7). */

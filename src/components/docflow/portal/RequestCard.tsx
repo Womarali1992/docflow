@@ -9,6 +9,7 @@ import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
 import Modal from '../Modal';
 import AskDialog from './AskDialog';
+import { WithdrawDialog } from './WithdrawFile';
 import { clientRequestState } from './requestState';
 
 /**
@@ -23,6 +24,10 @@ import { clientRequestState } from './requestState';
  * Uploading goes through the queue (C4.2): several files at once, each with its
  * own progress, cancel and — when one is refused — its own sentence explaining
  * why, without losing the ones that worked.
+ *
+ * A file sent by mistake can be withdrawn until the accountant has ruled on it.
+ * After that it is part of their decision, and Replace is the way to send a
+ * better copy.
  */
 
 const BUCKET_PILL: Record<PortalStep['bucket'], { label: string; cls: string } | null> = {
@@ -46,6 +51,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
   const attachments = request.attachments;
   const { toast } = useToast();
   const respond = useRespondToRequest();
+  const [withdrawing, setWithdrawing] = useState<RequestAttachment | null>(null);
   const queue = useUploadQueue();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
@@ -144,6 +150,15 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
               >
                 {attachment.state === 'refused' ? 'Send again' : 'Replace'}
               </button>
+              {!attachment.decided && (
+                <button
+                  className="df-btn df-sm df-ghost"
+                  onClick={() => setWithdrawing(attachment)}
+                  title={`Take back ${attachment.displayName}`}
+                >
+                  Withdraw
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -206,6 +221,8 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
           </button>
         )}
       </div>
+
+      <WithdrawDialog file={withdrawing} lastOne={attachments.length === 1} onClose={() => setWithdrawing(null)} />
 
       <AskDialog open={askOpen} onClose={() => setAskOpen(false)} about={request.title} documentId={attachments[0]?.documentId} />
 

@@ -111,6 +111,7 @@ export async function attachmentsByRequest(
     ? await reader.select().from(schema.documentVersions).where(inArray(schema.documentVersions.id, versionIds))
     : [];
   const versionById = new Map(versions.map((v) => [v.id, v]));
+  const decided = await decidedVersions(versionIds, reader);
 
   /* A document with nothing readable is either still being checked or was
      refused by the scanner, and only its newest version can say which. */
@@ -129,11 +130,30 @@ export async function attachmentsByRequest(
     if (!doc.requestId) continue;
     const list = byRequest.get(doc.requestId) ?? [];
     list.push(
-      toAttachment(doc, doc.currentVersionId ? versionById.get(doc.currentVersionId) : undefined, newest.get(doc.id))
+      toAttachment(
+        doc,
+        doc.currentVersionId ? versionById.get(doc.currentVersionId) : undefined,
+        newest.get(doc.id),
+        doc.currentVersionId !== null && decided.has(doc.currentVersionId)
+      )
     );
     byRequest.set(doc.requestId, list);
   }
   return byRequest;
+}
+
+/**
+ * The versions among these that carry a review, accepted or corrected. A file
+ * is "decided" while the version on screen is one the advisor has ruled on; a
+ * replacement starts undecided again.
+ */
+export async function decidedVersions(versionIds: string[], reader: Reader = db): Promise<Set<string>> {
+  if (versionIds.length === 0) return new Set();
+  const rows = await reader
+    .selectDistinct({ versionId: schema.reviews.versionId })
+    .from(schema.reviews)
+    .where(inArray(schema.reviews.versionId, versionIds));
+  return new Set(rows.map((r) => r.versionId).filter((id): id is string => id !== null));
 }
 
 /** The attachments of a single request — the one-request form of the above. */

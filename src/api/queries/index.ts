@@ -59,6 +59,7 @@ export {
   useShareDocument,
   useUnshareDocument,
   useArchiveDocument,
+  useWithdrawDocument,
   useUnarchiveDocument,
   type DocumentListParams,
 } from './documents';

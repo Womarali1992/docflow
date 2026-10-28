@@ -224,6 +224,8 @@ export interface RequestAttachment {
    * readable is left — the client has to send it again.
    */
   state: 'ready' | 'checking' | 'refused';
+  /** The advisor has accepted or corrected the version on screen. Until then the client may withdraw it. */
+  decided: boolean;
 }
 
 export interface RequestItem {
