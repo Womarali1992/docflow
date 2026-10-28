@@ -117,7 +117,7 @@ jobs:
           node -e '
             const fs = require("node:fs");
             const read = (p) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; } };
-            const of = (r) => r && { files: r.numTotalTestSuites, tests: r.numTotalTests, passed: r.numPassedTests, failed: r.numFailedTests, ok: r.success };
+            const of = (r) => r && { suites: r.numTotalTestSuites, tests: r.numTotalTests, passed: r.numPassedTests, failed: r.numFailedTests, ok: r.success };
             fs.writeFileSync(".ci/test-totals.json", JSON.stringify({
               at: new Date().toISOString(),
               run: process.env.GITHUB_RUN_ID ?? null,
