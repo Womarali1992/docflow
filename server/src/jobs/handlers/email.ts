@@ -107,6 +107,17 @@ export function render(payload: MailJobPayload): { subject: string; text: string
           `Sign in to your secure portal for the details:\n${payload.link ?? portal}` +
           signoff,
       };
+    /* To the advisor, about their clients. Still generic: a firm inbox is
+       read on phones and forwarded, so it says that something arrived and
+       where to look, never who sent what. */
+    case 'advisor_activity':
+      return {
+        subject: 'New activity from your clients in DocFlow',
+        text:
+          `Your clients have sent documents, messages or answers since you last heard from DocFlow.\n\n` +
+          `Sign in to see what is waiting for you:\n${payload.link ?? `${portal}/work`}` +
+          signoff,
+      };
     /* The one notice that goes to the firm rather than to a client, so it says
        what is wrong outright — these are facts about the machine, and an
        accountant who has to sign in to find out what the email meant will stop

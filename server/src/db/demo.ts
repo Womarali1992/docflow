@@ -355,7 +355,7 @@ async function main() {
           title: `${client.name} says they do not have: ${item.title}`,
           body: item.state.note,
           link: `/engagements/${engagement.id}`,
-        });
+        }, { email: false });
       }
     }
 
@@ -399,7 +399,7 @@ async function main() {
           title: `Your accountant shared: ${deliverable.name}`,
           body: 'It is ready to download from your portal.',
           link: '/portal/shared',
-        });
+        }, { email: false });
       }
     }
 
@@ -422,7 +422,7 @@ async function main() {
           type: 'message.new',
           title: `New message from ${client.name}`,
           link: `/clients/${client.id}`,
-        });
+        }, { email: false });
       }
     }
 

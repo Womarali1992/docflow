@@ -19,7 +19,14 @@ import type { Job } from '../db/schema.js';
  * firm's own machine (H7). It carries sentences rather than a link, and the
  * same rule still applies: counts and states, never a client.
  */
-export const MAIL_TEMPLATES = ['invitation', 'password_reset', 'new_item', 'needs_attention', 'ops_digest'] as const;
+export const MAIL_TEMPLATES = [
+  'invitation',
+  'password_reset',
+  'new_item',
+  'needs_attention',
+  'advisor_activity',
+  'ops_digest',
+] as const;
 export type MailTemplate = (typeof MAIL_TEMPLATES)[number];
 
 export interface MailJobPayload extends Record<string, unknown> {
