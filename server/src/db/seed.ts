@@ -66,7 +66,9 @@ async function seed() {
     [provider] = await db
       .insert(schema.providers)
       .values({
-        name: 'Sarah Johnson',
+        /* Not "Sarah Johnson": that is the demo client, and a thread between
+           two people with one name is unreadable (2026-10-28 audit). */
+        name: 'Sarah Mitchell',
         email: advisorEmail,
         passwordHash,
         firmName: 'Meridian CPA',
