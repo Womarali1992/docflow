@@ -11,6 +11,7 @@ import Deliverables from '@/components/docflow/engagement/Deliverables';
 import Uploads from '@/components/docflow/engagement/Uploads';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
 import LoadError from '@/components/docflow/LoadError';
+import { EditEngagementDialog } from '@/components/docflow/EditDetailsDialogs';
 
 /**
  * The engagement workspace — one piece of work, start to finish.
@@ -39,6 +40,7 @@ const Engagement: React.FC = () => {
   const reopenEngagement = useReopenEngagement();
   const remindClient = useRemindClient();
   const [tab, setTab] = useState<Tab>('checklist');
+  const [editOpen, setEditOpen] = useState(false);
 
   const client = useClient(data?.engagement.clientId);
 
@@ -182,11 +184,16 @@ const Engagement: React.FC = () => {
               <I.Bell size={13} /> {remindClient.isPending ? 'Sending…' : 'Remind client'}
             </button>
           )}
+          <button className="df-btn df-ghost" onClick={() => setEditOpen(true)} title="Change the title or tax year">
+            Edit
+          </button>
           <button className="df-btn df-ghost" onClick={toggleStatus} disabled={busy}>
             {closed ? <><I.Refresh size={13} /> Reopen</> : <><I.Check size={13} /> Close engagement</>}
           </button>
         </div>
       </div>
+
+      <EditEngagementDialog open={editOpen} onClose={() => setEditOpen(false)} engagement={engagement} />
 
       <div className="df-kpi-strip">
         <Kpi label="To review" value={toReview} tone={toReview > 0 ? 'df-info' : undefined} hint="Client has sent something" />

@@ -114,6 +114,35 @@ describe('audit coverage', () => {
     expect(deactivated.clientId).toBe(created.body.id);
   });
 
+  it('records a client’s sign-in address being moved, hashed both ways — and not a rename', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+
+    const renamed = await request(app).patch(`/api/clients/${fx.client1a.id}`).set('Cookie', advisor).send({ name: 'New Name' });
+    expect(renamed.status).toBe(200);
+    // Same address, different capitals: not a move.
+    const recased = await request(app)
+      .patch(`/api/clients/${fx.client1a.id}`)
+      .set('Cookie', advisor)
+      .send({ email: fx.client1a.email.toUpperCase() });
+    expect(recased.status).toBe(200);
+    expect(await rowsFor('client.email_changed')).toHaveLength(0);
+
+    const moved = await request(app)
+      .patch(`/api/clients/${fx.client1a.id}`)
+      .set('Cookie', advisor)
+      .send({ email: 'moved.address@example.com' });
+    expect(moved.status).toBe(200);
+
+    const rows = await rowsFor('client.email_changed');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].clientId).toBe(fx.client1a.id);
+    const meta = rows[0].meta as { fromHash: string; toHash: string };
+    expect(meta.fromHash).toMatch(/^[0-9a-f]{32}$/);
+    expect(meta.toHash).toMatch(/^[0-9a-f]{32}$/);
+    expect(meta.fromHash).not.toBe(meta.toHash);
+    expect(JSON.stringify(rows[0].meta)).not.toContain('@');
+  });
+
   it('records an invitation being accepted, by the holder of the link', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const created = await request(app)

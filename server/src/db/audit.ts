@@ -31,6 +31,8 @@ export type AuditAction =
   | 'client.reactivated'
   /* An advisor removed a client's authenticator so they can enroll a new one (2026-10-28 audit). */
   | 'client.mfa_reset'
+  /* An advisor moved a client's sign-in address (2026-10-28 audit). */
+  | 'client.email_changed'
   | 'engagement.created'
   | 'engagement.closed'
   /* A whole engagement copied out as a zip — every accepted file and every

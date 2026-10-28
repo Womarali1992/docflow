@@ -11,6 +11,7 @@ import EngagementProgress from '@/components/docflow/EngagementProgress';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
 import { isMissing } from '@/utils/errors';
 import LoadError from '@/components/docflow/LoadError';
+import { EditClientDialog } from '@/components/docflow/EditDetailsDialogs';
 
 /**
  * One client's page: their engagements, what each is waiting on, the thread,
@@ -44,6 +45,7 @@ const Client: React.FC = () => {
   const { data: engagements = [], isPending: engagementsPending } = useEngagements({ clientId });
   const [newEngagementOpen, setNewEngagementOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const { open, closed } = useMemo(() => {
     const sorted = [...engagements].sort((a, b) => {
@@ -101,6 +103,9 @@ const Client: React.FC = () => {
           </div>
         </div>
         <div className="df-head-actions">
+          <button className="df-btn df-ghost" onClick={() => setEditOpen(true)} title="Change the client's name or email">
+            Edit
+          </button>
           <ClientAccess client={client} />
           <button className="df-btn df-primary" onClick={() => setNewEngagementOpen(true)}>
             <I.Plus size={13} /> New engagement
@@ -157,6 +162,7 @@ const Client: React.FC = () => {
         <MessagesPanel clientId={client.id} meKind="provider" subtitle={`With ${client.name}`} />
       </div>
 
+      <EditClientDialog open={editOpen} onClose={() => setEditOpen(false)} client={client} />
       <NewEngagementDialog
         open={newEngagementOpen}
         onClose={() => setNewEngagementOpen(false)}

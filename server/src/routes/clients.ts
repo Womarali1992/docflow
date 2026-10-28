@@ -223,6 +223,18 @@ router.patch('/:id', requireProvider, async (req, res) => {
   // A new password ends every session the client had (plan: revocation paths).
   if (password !== undefined) await revokeAllSessions('client', req.params.id);
 
+  // The sign-in address decides who receives the reset links, so moving it is
+  // on the record — hashed, like every address in the log (2026-10-28 audit).
+  if (email !== undefined && normalizeEmail(email) !== existing.emailNormalized) {
+    await auditRequest(req, {
+      action: 'client.email_changed',
+      targetType: 'client',
+      targetId: existing.id,
+      clientId: existing.id,
+      meta: { fromHash: hashedEmail(existing.email), toHash: hashedEmail(email) },
+    });
+  }
+
   res.json(await loadClientRow(req.params.id, 'provider'));
 });
 
