@@ -9,6 +9,8 @@ import ClientAccess from '@/components/docflow/ClientAccess';
 import NewEngagementDialog from '@/components/docflow/NewEngagementDialog';
 import EngagementProgress from '@/components/docflow/EngagementProgress';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
+import { isMissing } from '@/utils/errors';
+import LoadError from '@/components/docflow/LoadError';
 
 /**
  * One client's page: their engagements, what each is waiting on, the thread,
@@ -38,7 +40,7 @@ const formatRelative = (d: Date | null) => {
 const Client: React.FC = () => {
   const { clientId } = useParams<{ clientId: string }>();
   const navigate = useNavigate();
-  const { data: client, isPending, error } = useClient(clientId);
+  const { data: client, isPending, error, refetch } = useClient(clientId);
   const { data: engagements = [], isPending: engagementsPending } = useEngagements({ clientId });
   const [newEngagementOpen, setNewEngagementOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
@@ -57,6 +59,13 @@ const Client: React.FC = () => {
 
   if (isPending) {
     return <div className="df-page"><div className="df-empty">Loading…</div></div>;
+  }
+  if (error && !isMissing(error)) {
+    return (
+      <div className="df-page">
+        <LoadError what="this client" onRetry={() => void refetch()} />
+      </div>
+    );
   }
   if (error || !client) {
     return (

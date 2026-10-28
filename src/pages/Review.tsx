@@ -10,7 +10,7 @@ import {
   useUnshareDocument,
 } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
-import { getErrorMessage } from '@/utils/errors';
+import { getErrorMessage, isMissing } from '@/utils/errors';
 import { I } from '@/components/docflow/icons';
 import Modal from '@/components/docflow/Modal';
 import MessagesPanel from '@/components/docflow/MessagesPanel';
@@ -19,6 +19,7 @@ import VersionHistory from '@/components/docflow/review/VersionHistory';
 import ReviewActions from '@/components/docflow/review/ReviewActions';
 import AttachmentSwitcher from '@/components/docflow/review/AttachmentSwitcher';
 import Organization from '@/components/docflow/review/Organization';
+import LoadError from '@/components/docflow/LoadError';
 
 /**
  * The review workspace: the document on the left, everything you need to decide
@@ -44,7 +45,7 @@ const Review: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const { data: doc, isPending, error } = useDocument(documentId);
+  const { data: doc, isPending, error, refetch } = useDocument(documentId);
   const { data: versions = [] } = useDocumentVersions(documentId);
   const { data: request = null } = useRequest(doc?.requestId ?? undefined);
   const { data: client } = useClient(doc?.clientId);
@@ -68,6 +69,13 @@ const Review: React.FC = () => {
 
   if (isPending) {
     return <div className="df-page"><div className="df-empty">Loading…</div></div>;
+  }
+  if (error && !isMissing(error)) {
+    return (
+      <div className="df-page">
+        <LoadError what="this document" onRetry={() => void refetch()} />
+      </div>
+    );
   }
   if (error || !doc) {
     return (
