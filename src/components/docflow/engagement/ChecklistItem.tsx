@@ -288,7 +288,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
         title="Waive this item"
         subtitle={request.title}
         label="Why is this not needed?"
-        help="This stays on the file. A year from now it has to answer “why isn’t this on the list?”."
+        help="The client sees this reason on their checklist, and it stays on the file — so write it for both: “No brokerage account in 2026”, not “confirmed by phone on the 3rd”."
         placeholder="Client had no brokerage account in 2026."
         confirmLabel="Waive item"
         onConfirm={(reason) => waive.mutateAsync({ id: request.id, reason })}

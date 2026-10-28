@@ -106,6 +106,8 @@ export interface Activity {
   actorId?: string | null;
   actorName?: string | null;
   targetId?: string | null;
+  /** Where "View" goes, resolved by the server; null when there is nowhere useful. */
+  link?: string | null;
   createdAt: Date;
 }
 

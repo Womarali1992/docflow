@@ -33,6 +33,8 @@ const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
 
   const crumbs: { label: string; to?: string; muted?: boolean }[] = (() => {
     if (pathname === '/') return [{ label: 'Overview' }];
+    if (pathname === '/work') return [{ label: 'Overview', to: '/', muted: true }, { label: 'Work queue' }];
+    if (pathname.startsWith('/review/')) return [{ label: 'Work queue', to: '/work', muted: true }, { label: 'Review' }];
     if (pathname.startsWith('/settings')) return [{ label: 'Settings' }];
     if (pathname.startsWith('/templates')) return [{ label: 'Templates' }];
     if (pathname === '/clients') return [{ label: 'Clients' }];
@@ -51,7 +53,7 @@ const Topbar: React.FC<TopbarProps> = ({ onMenuClick }) => {
     if (pathname.startsWith('/documents/')) {
       return [{ label: 'Documents', to: '/documents', muted: true }, { label: 'Document' }];
     }
-    return [{ label: 'Not found' }];
+    return [{ label: 'Page not found' }];
   })();
 
   const handleLogout = async () => {

@@ -12,20 +12,45 @@ const DEV_CREDS = {
   client: { email: 'sarah.johnson@meridian.co', password: 'client123' },
 };
 
+type Kind = 'provider' | 'client';
+const KIND_KEY = 'docflow.login.kind';
+
+/**
+ * Which side the form starts on. Clients outnumber the firm's own people by
+ * dozens to one, so a first visit starts on Client — the 2026-10-28 audit found
+ * clients who missed the toggle met a bare refusal. After that, whatever this
+ * browser chose last; and a link into the advisor's screens means the advisor.
+ */
+function initialKind(from: string | undefined): Kind {
+  if (from) return from.startsWith('/portal') ? 'client' : 'provider';
+  try {
+    const saved = window.localStorage.getItem(KIND_KEY);
+    if (saved === 'provider' || saved === 'client') return saved;
+  } catch {
+    /* storage unavailable: fall through to the default */
+  }
+  return 'client';
+}
+
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
 
-  const [kind, setKind] = useState<'provider' | 'client'>('provider');
-  const [email, setEmail] = useState(DEV ? DEV_CREDS.provider.email : '');
-  const [password, setPassword] = useState(DEV ? DEV_CREDS.provider.password : '');
+  const [kind, setKind] = useState<Kind>(() => initialKind((location.state as { from?: string } | null)?.from));
+  const [email, setEmail] = useState(DEV ? DEV_CREDS[kind].email : '');
+  const [password, setPassword] = useState(DEV ? DEV_CREDS[kind].password : '');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const setKindAndDefaults = (k: 'provider' | 'client') => {
+  const setKindAndDefaults = (k: Kind) => {
     setKind(k);
     setError(null);
+    try {
+      window.localStorage.setItem(KIND_KEY, k);
+    } catch {
+      /* a preference, not state: fine to lose */
+    }
     if (DEV) {
       setEmail(DEV_CREDS[k].email);
       setPassword(DEV_CREDS[k].password);
@@ -41,6 +66,11 @@ const Login = () => {
     setLoading(true);
     try {
       const { me, stage } = await login(email, password, kind);
+      try {
+        window.localStorage.setItem(KIND_KEY, kind);
+      } catch {
+        /* a preference, not state: fine to lose */
+      }
       const redirect = (location.state as { from?: string } | null)?.from;
       // The password is only the first step: the code (or enrollment) screen comes next,
       // and it forwards to `from` once the session is active.
@@ -81,7 +111,7 @@ const Login = () => {
               style={{ flex: 1 }}
               type="button"
             >
-              Advisor
+              I work at the firm
             </button>
             <button
               className={kind === 'client' ? 'df-active' : ''}
@@ -89,7 +119,7 @@ const Login = () => {
               style={{ flex: 1 }}
               type="button"
             >
-              Client
+              I’m a client
             </button>
           </div>
 
@@ -122,6 +152,13 @@ const Login = () => {
                 style={{ alignSelf: 'flex-start', padding: '4px 8px', fontSize: 11.5 }}
               >
                 {error}
+              </div>
+            )}
+            {error && (
+              <div className="df-small df-muted">
+                {kind === 'provider'
+                  ? 'Signing in to send documents to your accountant? Choose “I’m a client” above.'
+                  : 'Work at the firm? Choose “I work at the firm” above.'}
               </div>
             )}
 

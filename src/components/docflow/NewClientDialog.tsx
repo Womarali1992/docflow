@@ -25,13 +25,11 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
   const inviteClient = useInviteClient();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [plan, setPlan] = useState('Core');
-  const [aum, setAum] = useState('');
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Client | null>(null);
   const [invite, setInvite] = useState<OneTimeLinkView | null>(null);
 
-  const reset = () => { setName(''); setEmail(''); setPlan('Core'); setAum(''); };
+  const reset = () => { setName(''); setEmail(''); };
   const close = () => { reset(); onClose(); };
 
   const finish = () => {
@@ -49,8 +47,6 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
       const c = await createClient.mutateAsync({
         name: name.trim(),
         email: email.trim(),
-        plan: plan.trim() || 'Core',
-        aum: aum.trim() ? Number(aum) : null,
       });
       toast({ title: 'Client created', description: `${c.name} was added.` });
       setCreated(c);
@@ -75,7 +71,7 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
     }
   };
 
-  const canSubmit = name.trim() && email.trim() && (!aum.trim() || !Number.isNaN(Number(aum)));
+  const canSubmit = name.trim() && email.trim();
 
   return (
     <>
@@ -102,19 +98,6 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
             <span className="df-field-label">Email</span>
             <input className="df-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@example.com" />
           </label>
-          <div className="df-form-row">
-            <label className="df-field">
-              <span className="df-field-label">Plan</span>
-              <select className="df-input" value={plan} onChange={(e) => setPlan(e.target.value)}>
-                <option value="Core">Core</option>
-                <option value="Wealth Tier">Wealth Tier</option>
-              </select>
-            </label>
-            <label className="df-field">
-              <span className="df-field-label">AUM <span className="df-muted">(optional)</span></span>
-              <input className="df-input" inputMode="decimal" value={aum} onChange={(e) => setAum(e.target.value)} placeholder="e.g. 1500000" />
-            </label>
-          </div>
           <div className="df-muted" style={{ fontSize: 12 }}>
             The client chooses their own password from the invitation link; nothing to type here.
           </div>

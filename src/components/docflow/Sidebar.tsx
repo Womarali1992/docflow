@@ -65,7 +65,7 @@ const Sidebar: React.FC = () => {
         <div className="df-brand-mark">D</div>
         <div>
           <div className="df-brand-name">DocFlow</div>
-          <div className="df-brand-sub">CPA · v3.2</div>
+          <div className="df-brand-sub">{me?.kind === 'provider' && me.firmName ? me.firmName : 'Client documents'}</div>
         </div>
       </div>
 

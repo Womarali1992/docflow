@@ -502,6 +502,32 @@ describe('engagements and templates', () => {
   });
 });
 
+/* 2026-10-28 audit: every `update` row's "View" went to /documents/<request id>. */
+describe('the activity feed links where the work is', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it('sends a checklist decision to its engagement and a message to the client', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    await request(app).post(`/api/requests/${fx.client1a.request}/waive`).set('Cookie', advisor).send({ reason: 'Not needed' });
+    await request(app).post('/api/messages').set('Cookie', advisor).send({ clientId: fx.client1a.id, content: 'Hello' });
+
+    const feed = await request(app).get('/api/activities').set('Cookie', advisor);
+    expect(feed.status).toBe(200);
+    const waived = feed.body.find((a: { description: string }) => a.description.startsWith('waived:'));
+    expect(waived.link).toBe(`/engagements/${fx.client1a.engagement}`);
+    const message = feed.body.find((a: { type: string; actorKind: string }) => a.type === 'message' && a.actorKind === 'provider');
+    expect(message.link).toBe(`/clients/${fx.client1a.id}`);
+
+    // A client's own feed carries no advisor routes.
+    const mine = await request(app).get('/api/activities').set('Cookie', await loginAs(fx, 'client1a'));
+    expect(mine.body.every((a: { link: string | null }) => a.link === null)).toBe(true);
+  });
+});
+
 describe('the advisor dashboard counts live rows', () => {
   let fx: Fixture;
 
