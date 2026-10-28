@@ -67,6 +67,11 @@ export function useClientResetLink() {
   return useClientMutation<string, OneTimeLink>((id) => api.clients.resetLink(id), (id) => id);
 }
 
+/** A client who lost their phone: their next sign-in sets up a new authenticator. */
+export function useResetClientMfa() {
+  return useClientMutation<string, { reset: boolean; sessionsRevoked: number }>((id) => api.clients.resetMfa(id), (id) => id);
+}
+
 /** Reversible: sign-in is refused and live sessions end, the file stays. */
 export function useDeactivateClient() {
   return useClientMutation<string, Client>((id) => api.clients.deactivate(id), (id) => id);

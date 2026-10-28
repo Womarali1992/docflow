@@ -1,6 +1,6 @@
 import { type Request, type Response } from 'express';
 import { asyncRouter } from './async-router.js';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
@@ -282,6 +282,41 @@ router.post('/:id/password-reset', requireProvider, async (req, res) => {
     firmName: await firmNameFor(req.auth!.providerId),
   });
   res.json({ link, expiresAt, emailQueued });
+});
+
+/**
+ * A client who lost their phone. Removes their authenticator and recovery
+ * codes and ends their sessions; their next sign-in (password first, as
+ * always) sets up a new authenticator.
+ *
+ * Before the 2026-10-28 audit the only way back was `npm run admin --
+ * reset-mfa` on the server console, which a client locked out on a Saturday in
+ * April does not have. The screen asks the advisor to confirm it is really
+ * them first: this is the help-desk step an attacker who has the password
+ * would try to talk their way through.
+ */
+router.post('/:id/mfa-reset', requireProvider, async (req, res) => {
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
+  if (existing.deactivatedAt) return res.status(409).json(DEACTIVATED);
+
+  const removed = await db.transaction(async (tx) => {
+    const totp = await tx
+      .delete(schema.mfaTotp)
+      .where(and(eq(schema.mfaTotp.userKind, 'client'), eq(schema.mfaTotp.userId, existing.id)))
+      .returning({ id: schema.mfaTotp.id });
+    await tx
+      .delete(schema.recoveryCodes)
+      .where(and(eq(schema.recoveryCodes.userKind, 'client'), eq(schema.recoveryCodes.userId, existing.id)));
+    await auditRequest(
+      req,
+      { action: 'client.mfa_reset', targetType: 'client', targetId: existing.id, clientId: existing.id },
+      tx
+    );
+    return totp.length;
+  });
+  const sessionsRevoked = await revokeAllSessions('client', existing.id);
+  res.json({ reset: removed > 0, sessionsRevoked });
 });
 
 /* Reversible: sign-in refused, every session ended, pending invitations dropped. Data untouched. */

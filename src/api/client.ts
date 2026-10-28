@@ -303,6 +303,9 @@ export const api = {
     invite: (id: string) => request<OneTimeLink>(`/clients/${id}/invitations`, { method: 'POST' }),
     /** A copy-link password reset for a client who already has a password. */
     resetLink: (id: string) => request<OneTimeLink>(`/clients/${id}/password-reset`, { method: 'POST' }),
+    /** Removes the client's authenticator and recovery codes; their next sign-in enrolls a new one. */
+    resetMfa: (id: string) =>
+      request<{ reset: boolean; sessionsRevoked: number }>(`/clients/${id}/mfa-reset`, { method: 'POST' }),
     deactivate: (id: string) => request<Client>(`/clients/${id}/deactivate`, { method: 'POST' }),
     reactivate: (id: string) => request<Client>(`/clients/${id}/reactivate`, { method: 'POST' }),
   },

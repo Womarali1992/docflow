@@ -220,6 +220,12 @@ const cases: Case[] = [
     check: (res) => expect(res.body.link).toMatch(/\/reset\/[A-Za-z0-9_-]{43}$/),
   },
   {
+    name: 'POST /api/clients/:id/mfa-reset (own client)',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/mfa-reset`),
+    expect: S(200, 404, 403, 403, 403, 401),
+    check: (res) => expect(res.body.reset).toBe(true),
+  },
+  {
     name: 'POST /api/clients/:id/deactivate (own client)',
     req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/deactivate`),
     expect: S(200, 404, 403, 403, 403, 401),

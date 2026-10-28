@@ -19,6 +19,7 @@ export {
   useUpdateClient,
   useInviteClient,
   useClientResetLink,
+  useResetClientMfa,
   useDeactivateClient,
   useReactivateClient,
 } from './clients';
