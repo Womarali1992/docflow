@@ -18,6 +18,9 @@ import { recordActivity } from '../db/activity-log.js';
 import { itemsToRequests, type TemplateItem } from '../workflow/starter-templates.js';
 import { serializeDocument, serializeEngagement, serializeRequest } from './serialize.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
+import { exportFilename, manifestCsv, planExport } from '../workflow/export.js';
+import { contentDisposition } from '../files/filename.js';
+import { ZipFile } from 'yazl';
 import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
 import { notify } from '../notify.js';
 
@@ -192,6 +195,73 @@ router.get('/:id', async (req, res) => {
       currentVersion: d.currentVersionId ? summarizeVersion(versionById.get(d.currentVersionId)) : null,
     })),
   });
+});
+
+/**
+ * The season-end archive: everything accepted, everything sent back, and a
+ * sheet saying what each file is (H8).
+ *
+ * Advisor only. A client already has the portal, where the same files are one
+ * click each and always current; a zip is what a firm needs when a return is
+ * filed and the engagement has to become a folder in their own records.
+ *
+ * Streamed, not buffered. A season of scans is tens of megabytes and there is
+ * no reason for all of it to be in memory at once — `yazl` reads each file as
+ * the archive is written. That is also why the plan is built *first*: the
+ * status code and every header have to be decided before a single byte goes
+ * out, because once the stream starts an error can only truncate it.
+ */
+router.get('/:id/export', requireProvider, async (req, res) => {
+  const engagement = await findEngagement(req.auth!, req.params.id);
+  if (!engagement) return notFound(res);
+
+  const plan = await planExport(engagement);
+  if (plan.included === 0) {
+    return res.status(409).json({
+      code: 'nothing_to_export',
+      error:
+        plan.omitted > 0
+          ? 'Nothing in this engagement can be exported yet — every accepted file is still being checked or was quarantined.'
+          : 'Nothing has been accepted in this engagement yet, so there is nothing to export.',
+    });
+  }
+
+  const [client] = await db
+    .select({ name: schema.clients.name })
+    .from(schema.clients)
+    .where(eq(schema.clients.id, engagement.clientId));
+
+  /* Audited before the stream opens, and awaited: an export copies a client's
+     whole file out of the system, which is exactly the kind of thing the log
+     exists to have recorded even if the download itself then fails. */
+  await auditRequest(req, {
+    action: 'engagement.exported',
+    targetType: 'engagement',
+    targetId: engagement.id,
+    clientId: engagement.clientId,
+    meta: { included: plan.included, omitted: plan.omitted, bytes: plan.totalBytes },
+  });
+
+  const zip = new ZipFile();
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', contentDisposition('attachment', exportFilename(engagement, client?.name ?? 'client')));
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  /* yazl reports a file that vanished or failed to read between the plan and
+     the stream as an 'error' on the ZipFile; unhandled, that takes the process
+     down. The status is already committed, so the only honest answer is to cut
+     the download short — a truncated zip fails to open rather than lying. */
+  zip.on('error', () => res.destroy());
+  zip.outputStream.pipe(res);
+
+  /* The manifest goes in first, so a truncated download still carries the list
+     of what the archive was supposed to contain. */
+  zip.addBuffer(Buffer.from(manifestCsv(plan.entries), 'utf8'), 'manifest.csv');
+  for (const entry of plan.entries) {
+    if (entry.path && entry.absPath) zip.addFile(entry.absPath, entry.path);
+  }
+  zip.end();
 });
 
 /** Just enough of a version for a list row; the full shape is on /documents/:id/versions. */

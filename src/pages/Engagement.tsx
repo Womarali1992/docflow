@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useClient, useCloseEngagement, useEngagement, useReopenEngagement } from '@/api/queries';
+import { api } from '@/api/client';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '@/components/docflow/icons';
@@ -73,6 +74,12 @@ const Engagement: React.FC = () => {
 
   const toReview = requests.filter((r) => r.status === 'submitted' || r.status === 'in_review').length;
   const withClient = requests.filter((r) => r.status === 'requested' || r.status === 'needs_correction').length;
+  /* The archive is everything accepted plus every shared deliverable, so with
+     neither there is nothing to export and the server answers 409. Better to
+     say so on a disabled button than to hand somebody a tab of raw JSON. */
+  const exportableCount =
+    requests.filter((r) => r.status === 'accepted').length +
+    deliverables.filter((d) => d.shared && !d.archivedAt).length;
   const overdue = requests.filter((r) => r.overdue).length;
   const needsDecision = requests.filter(
     (r) => Boolean(r.clientResponseKind) && r.status !== 'accepted' && r.status !== 'waived'
@@ -129,6 +136,19 @@ const Engagement: React.FC = () => {
           </div>
         </div>
         <div className="df-head-actions">
+          {exportableCount > 0 ? (
+            <a
+              className="df-btn df-ghost"
+              href={api.engagementExport.url(engagement.id)}
+              title="Everything accepted and everything shared, as a zip with a manifest"
+            >
+              <I.Download size={13} /> Export
+            </a>
+          ) : (
+            <button className="df-btn df-ghost" disabled title="Nothing has been accepted or shared in this engagement yet">
+              <I.Download size={13} /> Export
+            </button>
+          )}
           <button className="df-btn df-ghost" onClick={toggleStatus} disabled={busy}>
             {closed ? <><I.Refresh size={13} /> Reopen</> : <><I.Check size={13} /> Close engagement</>}
           </button>

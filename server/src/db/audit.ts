@@ -31,6 +31,9 @@ export type AuditAction =
   | 'client.reactivated'
   | 'engagement.created'
   | 'engagement.closed'
+  /* A whole engagement copied out as a zip — every accepted file and every
+     shared deliverable leaving the system at once (H8). */
+  | 'engagement.exported'
   | 'request.created'
   | 'request.accepted'
   | 'request.correction_requested'

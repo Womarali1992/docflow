@@ -791,6 +791,24 @@ const cases: Case[] = [
   },
   {
     /**
+     * The season-end archive is the firm's own record-keeping: a client already
+     * has the portal, where the same files are one click each and always
+     * current — so every client is 403, and the other advisor is 404, never
+     * 403, because whose engagement this is is not something the route confirms.
+     *
+     * The owning advisor gets a zip. The seeded engagement has no *accepted*
+     * request in it, but it does have a **shared deliverable**, and that is
+     * exportable on its own — the archive is everything accepted plus
+     * everything sent back, not only the former. (The 409 for an engagement
+     * with nothing exportable at all is in export.test.ts, which builds its own
+     * engagement precisely so it can be empty.)
+     */
+    name: 'GET /api/engagements/:id/export',
+    req: (fx) => request(app).get(`/api/engagements/${fx.client1a.engagement}/export`),
+    expect: S(200, 404, 403, 403, 403, 401),
+  },
+  {
+    /**
      * Retrying a failed background job is the firm's own maintenance, so a
      * client may not do it at all. The advisors get 404 because no such job
      * exists — which is the answer the matrix is asking about; the 200 and the

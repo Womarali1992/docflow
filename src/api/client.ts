@@ -465,6 +465,16 @@ export const api = {
       }),
   },
 
+  engagementExport: {
+    /**
+     * Same-origin URL for the season-end archive, for an `<a href>` — the same
+     * shape every other download in this app uses, so the session cookie rides
+     * along and the browser streams the zip to disk instead of react-query
+     * holding tens of megabytes in memory.
+     */
+    url: (engagementId: string) => `${BASE}/engagements/${engagementId}/export`,
+  },
+
   ops: {
     /** Advisor only — queue depth, worker, scanner, disk, backups and the build. */
     status: (opts?: ReadOpts) => request<OpsStatus>('/ops/status', { poll: opts?.poll }),

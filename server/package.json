@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "prebuild": "node scripts/clean.mjs",
     "build": "tsc -p tsconfig.json",
-  "postbuild": "node scripts/release-stamp.mjs",
+    "postbuild": "node scripts/release-stamp.mjs",
     "start": "node dist/index.js",
     "worker": "tsx src/worker.ts",
     "worker:start": "node dist/worker.js",
@@ -20,7 +20,7 @@
     "legacy:redundancy": "node scripts/legacy-redundancy.mjs",
     "files:orphans": "node scripts/orphans.mjs",
     "backup:dump": "node scripts/backup-dump.mjs",
-  "backup:manifest": "node scripts/manifest.mjs",
+    "backup:manifest": "node scripts/manifest.mjs",
     "backup:record": "node scripts/record-backup.mjs",
     "db:create": "node scripts/create-db.mjs",
     "totp": "node scripts/totp.mjs",
@@ -50,6 +50,7 @@
     "otplib": "^12.0.1",
     "pg": "^8.23.0",
     "qrcode": "^1.5.4",
+    "yazl": "^3.3.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -63,6 +64,7 @@
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^6.0.3",
+    "@types/yazl": "^3.3.1",
     "drizzle-kit": "^0.30.0",
     "supertest": "^7.1.4",
     "tsx": "^4.19.2",
