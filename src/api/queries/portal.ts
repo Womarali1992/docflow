@@ -68,7 +68,14 @@ export function useClientWork() {
     const now = Date.now();
     const done = requests.filter((r) => r.status === 'accepted' || r.status === 'waived');
     const withAdvisor = requests.filter((r) => r.status === 'submitted' || r.status === 'in_review');
-    const outstanding = requests.filter((r) => r.status === 'requested' || r.status === 'needs_correction');
+    /* A closed engagement takes no more files, so its leftover lines are not
+       steps: offering an Upload button the server will refuse is worse than
+       saying nothing. */
+    const outstanding = requests.filter(
+      (r) =>
+        (r.status === 'requested' || r.status === 'needs_correction') &&
+        engagementById.get(r.engagementId)?.status !== 'closed'
+    );
 
     const steps: PortalStep[] = outstanding
       .map((request) => ({

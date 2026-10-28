@@ -29,3 +29,25 @@ export const QUEUE_EXPLAIN: Record<QueueFilter, string> = {
 
 export const isQueueFilter = (v: string | null): v is QueueFilter =>
   Boolean(v) && QUEUE_FILTERS.includes(v as QueueFilter);
+
+/** A ready-to-review row that has a file to open. */
+export interface QueueStop {
+  id: string;
+  documentId?: string | null;
+}
+
+/**
+ * Where "previous" and "next" go from the line being reviewed, through the
+ * ready-to-review queue (2026-10-28 audit: thirty items were thirty round trips
+ * back to the list).
+ *
+ * The line on screen leaves the queue the moment it is decided, so when it is
+ * not in the list any more "next" is simply the oldest thing still waiting —
+ * which is exactly where an advisor working down the queue wants to go.
+ */
+export function queueNeighbours<T extends QueueStop>(items: T[], currentRequestId: string | null | undefined) {
+  const stops = items.filter((i) => i.documentId);
+  const at = currentRequestId ? stops.findIndex((i) => i.id === currentRequestId) : -1;
+  if (at < 0) return { prev: null, next: stops[0] ?? null, position: null, total: stops.length };
+  return { prev: stops[at - 1] ?? null, next: stops[at + 1] ?? null, position: at + 1, total: stops.length };
+}

@@ -345,8 +345,14 @@ export interface DashboardRequestRef {
   clientId: string;
   /** Where the line lives, so a queue row can open the checklist it came from. */
   engagementId: string;
+  engagementTitle: string;
   title: string;
+  status: RequestStatus;
   dueDate?: Date | null;
+  /** When the line last moved: sent, sent back, or asked for. */
+  since: Date;
+  /** Ready-to-review rows only: the first file to open in the review workspace. */
+  documentId?: string | null;
   note?: string | null;
 }
 

@@ -16,6 +16,14 @@ import { SkeletonRows } from '@/components/docflow/Skeleton';
 
 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
+/** "today", "yesterday", "3 days ago" — how long a line has been sitting. */
+const ago = (d: Date) => {
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return `${days} days ago`;
+};
+
 const Work: React.FC = () => {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -100,7 +108,13 @@ const Work: React.FC = () => {
                 </div>
               ))
             : (requestBucket?.items ?? []).map((item) => {
-                const target = item.engagementId ? `/engagements/${item.engagementId}` : `/clients/${item.clientId}`;
+                /* A line ready to review opens on its file; anything else opens its checklist. */
+                const target =
+                  filter === 'ready' && item.documentId
+                    ? `/review/${item.documentId}`
+                    : item.engagementId
+                      ? `/engagements/${item.engagementId}`
+                      : `/clients/${item.clientId}`;
                 return (
                   <div
                     key={item.id}
@@ -115,13 +129,19 @@ const Work: React.FC = () => {
                       <div className="df-name">{item.title}</div>
                       <div className="df-meta">
                         {clientName(item.clientId)}
-                        {item.dueDate ? <> · due {formatDate(item.dueDate)}</> : null}
+                        {item.engagementTitle ? <> · {item.engagementTitle}</> : null}
+                        {filter === 'ready' && item.since ? <> · sent {ago(item.since)}</> : null}
+                        {filter !== 'ready' && item.dueDate ? <> · due {formatDate(item.dueDate)}</> : null}
+                        {filter !== 'ready' && !item.dueDate && item.since ? <> · asked {ago(item.since)}</> : null}
                       </div>
                       {item.note && <div className="df-note">“{item.note}”</div>}
                     </div>
-                    <div>{filter === 'overdue' && <span className="df-pill df-danger">Overdue</span>}</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {filter === 'overdue' && <span className="df-pill df-danger">Overdue</span>}
+                      {filter !== 'ready' && item.status === 'needs_correction' && <span className="df-pill df-warn">Sent back</span>}
+                    </div>
                     <button className="df-btn df-sm df-ghost" onClick={(e) => { e.stopPropagation(); navigate(target); }}>
-                      Open
+                      {filter === 'ready' && item.documentId ? 'Review' : 'Open'}
                     </button>
                   </div>
                 );

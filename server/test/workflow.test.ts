@@ -548,6 +548,23 @@ describe('the advisor dashboard counts live rows', () => {
     expect(waiting.find((r) => r.id === fx.client1a.request)?.engagementId).toBe(fx.client1a.engagement);
   });
 
+  /* 2026-10-28 audit: rows said only title + client, and a closed year's
+     leftovers sat in "waiting" forever. */
+  it('says enough to read a row without opening it, and leaves closed engagements out', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const answer = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+
+    const res = await request(app).get('/api/dashboard').set('Cookie', advisor);
+    const [ready] = res.body.readyToReview.items;
+    expect(ready).toMatchObject({ id: fx.client1a.request, status: 'submitted', documentId: answer.document.id });
+    expect(typeof ready.engagementTitle).toBe('string');
+    expect(Number.isNaN(Date.parse(ready.since))).toBe(false);
+
+    await request(app).post(`/api/engagements/${fx.client1b.engagement}/close`).set('Cookie', advisor);
+    const after = await request(app).get('/api/dashboard').set('Cookie', advisor);
+    expect(after.body.waitingOnClients.items.map((r: { clientId: string }) => r.clientId)).not.toContain(fx.client1b.id);
+  });
+
   it('moves a request between buckets as it is worked', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const id = fx.client1a.request;

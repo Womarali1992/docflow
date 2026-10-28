@@ -39,6 +39,8 @@ const DATE_FIELDS = new Set([
      row, and they stay ISO strings so nothing formats them as local wall time. */
   'closedAt', 'archivedAt', 'waivedAt', 'clientResponseAt', 'sharedAt',
   'scannedAt', 'publishedAt', 'supersededAt',
+  /* The work queue's "when did this line last move" (2026-10-28 audit). */
+  'since',
 ]);
 
 function reviveDates<T>(obj: unknown): T {

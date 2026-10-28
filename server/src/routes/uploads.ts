@@ -314,6 +314,15 @@ router.post(
           return badRequest(res, 'Your accountant has marked this item as not needed.', 'request_closed');
         }
         if (request.archivedAt) return notFound(res);
+        /* A closed year takes no more files, by either route (2026-10-28 audit:
+           the ad-hoc route refused, this one did not). */
+        const [engagement] = await db
+          .select({ status: schema.engagements.status })
+          .from(schema.engagements)
+          .where(eq(schema.engagements.id, request.engagementId));
+        if (engagement?.status === 'closed') {
+          return badRequest(res, 'This engagement is closed. Ask your accountant to reopen it.', 'engagement_closed');
+        }
         // Only the client answers their own checklist; the advisor files ad-hoc.
         if (req.auth!.kind !== 'client') {
           return res.status(403).json({ error: 'Only the client uploads against a request.', code: 'client_only' });

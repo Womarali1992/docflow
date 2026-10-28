@@ -77,6 +77,17 @@ describe('authorize before bytes', () => {
     expect(res.body.code).toBe('client_only');
     expect(stagedFiles()).toEqual([]);
   });
+
+  /* 2026-10-28 audit: the ad-hoc route refused a closed year and this one did not. */
+  it('refuses a file for a line in a closed engagement, without staging it', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    await request(app).post(`/api/engagements/${fx.client1a.engagement}/close`).set('Cookie', advisor);
+    const client = await loginAs(fx, 'client1a');
+    const res = await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('engagement_closed');
+    expect(stagedFiles()).toEqual([]);
+  });
 });
 
 describe('validation', () => {
