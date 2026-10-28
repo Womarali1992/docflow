@@ -19,12 +19,14 @@ import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
 import { clientMe, openSession, providerMe, type AuthState, type Me } from '../auth/signin.js';
 import { audit, hashedEmail, ipOf } from '../db/audit.js';
 import { looksLikeToken, tokenState } from '../auth/tokens.js';
+import { findClientByEmail, findProviderByEmail, providerEmailIsTaken } from '../auth/email.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
 
 const router = asyncRouter();
 
 const loginSchema = z.object({
-  email: z.string().email().max(NAME_MAX),
+  // Trimmed before it is checked: a pasted address often carries a space.
+  email: z.string().trim().email().max(NAME_MAX),
   password: z.string().min(1).max(1024),
   kind: z.enum(['provider', 'client']),
 });
@@ -77,7 +79,7 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
   const { email, password, kind } = parsed.data;
 
   if (kind === 'provider') {
-    const [provider] = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
+    const provider = await findProviderByEmail(email);
     if (!provider) return await refuseLogin(req, res, email, kind, 'no_such_account');
     const check = await verifyPassword(password, provider.passwordHash);
     if (!check.ok) return await refuseLogin(req, res, email, kind, 'wrong_password', provider.id);
@@ -101,7 +103,7 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
     const state: AuthState = { stage, me };
     return res.json(state);
   } else {
-    const [client] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
+    const client = await findClientByEmail(email);
     if (!client) return await refuseLogin(req, res, email, kind, 'no_such_account');
     const check = await verifyPassword(password, client.passwordHash);
     if (!check.ok) return await refuseLogin(req, res, email, kind, 'wrong_password', client.id);
@@ -147,8 +149,7 @@ router.post('/signup-provider', async (req, res) => {
   }
   const { name, email, password, firmName } = parsed.data;
 
-  const existing = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
-  if (existing.length > 0) return res.status(409).json({ error: 'Email already registered' });
+  if (await providerEmailIsTaken(email)) return res.status(409).json({ error: 'Email already registered' });
 
   const passwordHash = await hashPassword(password);
   const [provider] = await db
@@ -254,7 +255,7 @@ router.post('/password', authenticate, async (req, res) => {
 });
 
 const resetRequestSchema = z.object({
-  email: z.string().email().max(NAME_MAX),
+  email: z.string().trim().email().max(NAME_MAX),
   kind: z.enum(['provider', 'client']),
 });
 
@@ -268,23 +269,20 @@ router.post('/password-reset/request', lookupLimiter, async (req, res) => {
   const { email, kind } = parsed.data;
 
   if (kind === 'provider') {
-    const [p] = await db.select({ id: schema.providers.id, deactivatedAt: schema.providers.deactivatedAt, firmName: schema.providers.firmName }).from(schema.providers).where(eq(schema.providers.email, email));
+    const p = await findProviderByEmail(email);
     if (p && !p.deactivatedAt) {
       const { token } = await createPasswordReset('provider', p.id);
-      await enqueueEmail({ template: 'password_reset', to: email, link: resetLink(token), firmName: p.firmName ?? undefined });
+      await enqueueEmail({ template: 'password_reset', to: p.email, link: resetLink(token), firmName: p.firmName ?? undefined });
     }
   } else {
-    const [c] = await db
-      .select({ id: schema.clients.id, deactivatedAt: schema.clients.deactivatedAt, passwordHash: schema.clients.passwordHash, providerId: schema.clients.providerId })
-      .from(schema.clients)
-      .where(eq(schema.clients.email, email));
+    const c = await findClientByEmail(email);
     if (c && !c.deactivatedAt && c.passwordHash) {
       const { token } = await createPasswordReset('client', c.id);
       // Only worth a second query when there is a mail server to send it through.
       const [p] = isMailConfigured()
         ? await db.select({ firmName: schema.providers.firmName, name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId))
         : [undefined];
-      await enqueueEmail({ template: 'password_reset', to: email, link: resetLink(token), firmName: p?.firmName ?? p?.name ?? undefined });
+      await enqueueEmail({ template: 'password_reset', to: c.email, link: resetLink(token), firmName: p?.firmName ?? p?.name ?? undefined });
     }
   }
   res.status(202).json({ ok: true });

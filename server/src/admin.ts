@@ -22,6 +22,7 @@ import { hashPassword, isRefusedDemoPassword, passwordSchema } from './auth/pass
 import { createPasswordReset, resetLink } from './auth/resets.js';
 import { listLiveSessions, revokeAllSessions } from './auth/sessions.js';
 import { audit } from './db/audit.js';
+import { findClientByEmail, findProviderByEmail, providerEmailIsTaken } from './auth/email.js';
 
 type Kind = 'provider' | 'client';
 type Flags = Record<string, string | true>;
@@ -107,11 +108,11 @@ interface Account {
 
 async function findAccount(kind: Kind, email: string): Promise<Account> {
   if (kind === 'provider') {
-    const [p] = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
+    const p = await findProviderByEmail(email);
     if (!p) throw new UsageError(`No advisor with email ${email}`);
     return { kind, id: p.id, name: p.name, email: p.email, providerId: p.id, deactivatedAt: p.deactivatedAt };
   }
-  const [c] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
+  const c = await findClientByEmail(email);
   if (!c) throw new UsageError(`No client with email ${email}`);
   return { kind, id: c.id, name: c.name, email: c.email, providerId: c.providerId, deactivatedAt: c.deactivatedAt };
 }
@@ -152,8 +153,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
     const email = need(flags, 'email');
     const name = need(flags, 'name');
     const firm = typeof flags.firm === 'string' ? flags.firm.trim() : null;
-    const [existing] = await db.select({ id: schema.providers.id }).from(schema.providers).where(eq(schema.providers.email, email));
-    if (existing) throw new UsageError(`An advisor with email ${email} already exists`);
+    if (await providerEmailIsTaken(email)) throw new UsageError(`An advisor with email ${email} already exists`);
 
     const password = await passwordFromEnvOrPrompt();
     checkPassword(password);

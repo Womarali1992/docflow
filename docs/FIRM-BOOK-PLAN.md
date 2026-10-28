@@ -14,7 +14,7 @@
 | Step | Commit | Status | Id | Notes |
 |---|---|---|---|---|
 | F0 | `docs(plan): firm book + assignment` | DONE | | go-ahead 2026-10-28; the five questions answered (see the end) |
-| F0b | `fix(auth): a client signs in whatever case they type` | pending | | split out of parked F7; no schema change |
+| F0b | `fix(auth): a client signs in whatever case they type` | DONE | | 2026-10-29; clients by `email_normalized`, advisors by `lower(trim(email))` (exact spelling breaks a case-only tie); padded addresses trimmed by the schema; reset link goes to the address on file; admin CLI and advisor signup follow. Server 831 / 24 files |
 | F1 | `feat(schema): a firm owns the book (expand)` | pending | | migration `0011_firms`, additive + backfill |
 | F2 | `feat(notify): advisor notices go to the assigned advisor, or the whole firm` | pending | | no schema change |
 | F3 | `feat(tenant): the firm is the tenant` | pending | | every scope check; authz matrix gains `colleague1` |
@@ -25,8 +25,8 @@
 | F8 | `chore(seed): a two-advisor firm to demo` | pending | | |
 | F9 | `chore(db): contract the provider-as-tenant columns` | **PARKED** (Q5), only on your word | | destructive migration `0014` (`0013` if F7 stays parked) |
 
-Baseline before F1: server 818 tests at `0000029`. The full run at `2c4e365` is recorded in the
-F0 notes once it finishes. Frontend: typecheck clean, eslint 0 errors / 9 warnings, vitest
+Baseline before F1: server 818 tests at `0000029`; 831 / 24 files with F0b on top of `2c4e365`
+(2026-10-29, this run also covers the withdraw commit). Frontend: typecheck clean, eslint 0 errors / 9 warnings, vitest
 55 / 8 files, build clean.
 
 Every step runs the full server suite **alone** (`npx vitest run` in `server/`, about 11 min,
