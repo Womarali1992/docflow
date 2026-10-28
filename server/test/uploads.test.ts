@@ -372,6 +372,62 @@ describe('scanning through the upload route', () => {
     expect(after.publishedAt).toBeNull();
     const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, documentId));
     expect(doc.currentVersionId).toBeNull();
+
+    /* 2026-10-28 audit: this used to read "Being checked" forever and tell
+       nobody. The line now says the file was refused, and both sides hear. */
+    const line = await request(app).get(`/api/requests/${fx.client1a.request}`).set('Cookie', client);
+    const attachment = line.body.attachments.find((a: { documentId: string }) => a.documentId === documentId);
+    expect(attachment.state).toBe('refused');
+
+    const toClient = await db.select().from(schema.notifications).where(eq(schema.notifications.userId, fx.client1a.id));
+    expect(toClient.map((n) => n.type)).toContain('upload.refused');
+    const toAdvisor = await db.select().from(schema.notifications).where(eq(schema.notifications.userId, fx.provider1.id));
+    expect(toAdvisor.map((n) => n.type)).toContain('upload.quarantined');
+  });
+
+  it('does not let a refused file block a decision about the rest of the line', async () => {
+    // One file refused on re-scan…
+    process.env.SCAN_REQUIRED = 'true';
+    process.env.CLAMD_HOST = '127.0.0.1';
+    process.env.CLAMD_PORT = '1';
+    const client = await loginAs(fx, 'client1a');
+    await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.type, 'scan_retry'));
+    await pointAt('infected');
+    await scanRetryJob(job);
+
+    // …and a good one beside it.
+    await clamd?.stop();
+    await pointAt('clean');
+    const good = await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'png');
+    expect(good.status).toBe(201);
+
+    const advisor = await loginAs(fx, 'provider1');
+    const accepted = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionIds: [good.body.version.id] });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.status).toBe('accepted');
+  });
+
+  it('tells the advisor when the scanner never answered for a file', async () => {
+    process.env.SCAN_REQUIRED = 'true';
+    process.env.CLAMD_HOST = '127.0.0.1';
+    process.env.CLAMD_PORT = '1';
+    const client = await loginAs(fx, 'client1a');
+    await attach(request(app).post(`/api/requests/${fx.client1a.request}/uploads`).set('Cookie', client), 'pdf');
+    const [job] = await db.select().from(schema.jobs).where(eq(schema.jobs.type, 'scan_retry'));
+
+    // Not on an ordinary failed attempt — the queue will try again.
+    await expect(scanRetryJob({ ...job, attempts: 1 })).rejects.toThrow(/still unavailable/);
+    const stuck = () => db.select().from(schema.notifications).where(eq(schema.notifications.type, 'scan.stuck'));
+    expect(await stuck()).toHaveLength(0);
+
+    // On the last one, after which nothing will try again unless a person does.
+    await expect(scanRetryJob({ ...job, attempts: job.maxAttempts })).rejects.toThrow(/still unavailable/);
+    const [notice] = await stuck();
+    expect(notice).toMatchObject({ userKind: 'provider', userId: fx.provider1.id, link: '/settings/system' });
   });
 
   it('keeps failing the retry while the scanner stays down, so the queue backs off', async () => {

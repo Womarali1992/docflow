@@ -75,7 +75,11 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   const attachments = request.attachments;
   const versionIds = attachments.map((a) => a.currentVersion?.id).filter((id): id is string => Boolean(id));
   const stillChecking = attachments.some((a) => a.state === 'checking');
-  const decidable = attachments.length > 0 && !stillChecking && versionIds.length === attachments.length;
+  /* A file the scanner refused is shown but not decided on: there is nothing
+     in it to accept, and the server leaves it out of the decision too. */
+  const refused = attachments.filter((a) => a.state === 'refused');
+  const live = attachments.length - refused.length;
+  const decidable = live > 0 && !stillChecking && versionIds.length === live;
 
   const startEdit = () => {
     setTitle(request.title);
@@ -193,6 +197,13 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
         )}
         {request.status === 'waived' && request.waivedReason && (
           <div className="df-note">Waived: {request.waivedReason}</div>
+        )}
+        {refused.length > 0 && (
+          <div className="df-note df-note-warn">
+            {refused.length === 1
+              ? `${refused[0].displayName} failed the virus check and was removed. The client has been asked to send it again.`
+              : `${refused.length} files failed the virus check and were removed. The client has been asked to send them again.`}
+          </div>
         )}
         {stillChecking && (
           <div className="df-note df-note-warn">

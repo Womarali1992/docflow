@@ -39,8 +39,13 @@ export type NotificationType =
   | 'request.accepted'
   | 'deliverable.shared'
   | 'reminder.due'
+  /* The re-scan found something and the file was removed: send it again. */
+  | 'upload.refused'
   /* → the advisor */
   | 'upload.received'
+  | 'upload.quarantined'
+  /* The scanner never answered for one file; it needs a person (System status). */
+  | 'scan.stuck'
   | 'request.not_applicable'
   | 'message.new';
 
@@ -71,6 +76,9 @@ const EMAILED: ReadonlySet<NotificationType> = new Set<NotificationType>([
   'deliverable.shared',
   'message.new',
   'upload.received',
+  'upload.refused',
+  'upload.quarantined',
+  'scan.stuck',
   'request.not_applicable',
 ]);
 
@@ -93,7 +101,7 @@ export function noticeEmailKey(userKind: NotificationInput['userKind'], userId: 
 
 function templateFor(input: NotificationInput): MailTemplate {
   if (input.userKind === 'provider') return 'advisor_activity';
-  return input.type === 'request.correction' ? 'needs_attention' : 'new_item';
+  return input.type === 'request.correction' || input.type === 'upload.refused' ? 'needs_attention' : 'new_item';
 }
 
 /**

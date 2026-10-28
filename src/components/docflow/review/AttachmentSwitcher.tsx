@@ -50,6 +50,7 @@ const AttachmentSwitcher: React.FC<Props> = ({ request, currentDocumentId }) => 
           >
             <span className="df-attachment-tab-name">{attachment.displayName}</span>
             {attachment.state === 'checking' && <span className="df-pill df-warn">Checking</span>}
+            {attachment.state === 'refused' && <span className="df-pill df-danger">Removed</span>}
           </button>
         ))}
       </div>

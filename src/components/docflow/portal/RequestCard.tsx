@@ -62,6 +62,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
   const [naNote, setNaNote] = useState('');
 
   const bucketPill = BUCKET_PILL[step.bucket];
+  const refused = attachments.filter((a) => a.state === 'refused');
   const status = clientRequestState(request, attachments);
 
   /** Opens the picker with (or without) a replacement target set first. */
@@ -131,18 +132,27 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
               </div>
               {attachment.state === 'checking' ? (
                 <span className="df-pill df-warn">Being checked</span>
+              ) : attachment.state === 'refused' ? (
+                <span className="df-pill df-danger">Not accepted</span>
               ) : (
                 <span className="df-pill df-ok">Sent</span>
               )}
               <button
-                className="df-btn df-sm df-ghost"
+                className={'df-btn df-sm ' + (attachment.state === 'refused' ? 'df-primary' : 'df-ghost')}
                 onClick={() => choose(attachment, fileRef)}
                 title={`Send a corrected copy of ${attachment.displayName}`}
               >
-                Replace
+                {attachment.state === 'refused' ? 'Send again' : 'Replace'}
               </button>
             </div>
           ))}
+        </div>
+      )}
+      {refused.length > 0 && (
+        <div className="df-note df-note-warn">
+          {refused.length === 1
+            ? `${refused[0].displayName} was not accepted: it did not pass the security check and was removed. Please send it again — from a different device if you can.`
+            : `${refused.length} of your files were not accepted: they did not pass the security check and were removed. Please send them again — from a different device if you can.`}
         </div>
       )}
       {alreadySaid && (

@@ -35,10 +35,13 @@ export function serializeEngagement(e: Engagement) {
  * One file answering a checklist line (H5).
  *
  * A request holds any number of these: six receipts are six attachments, each
- * with its own version history, each replaceable on its own. The two states are
- * the two the client is already told apart everywhere else — `ready` means
+ * with its own version history, each replaceable on its own. The states are
+ * the ones the client is already told apart everywhere else — `ready` means
  * there is something readable to open, `checking` means the bytes are here and
- * the virus check has not finished.
+ * the virus check has not finished — plus `refused`: the scanner rejected the
+ * newest version and nothing readable is left. Before the 2026-10-28 audit that
+ * last one read as `checking` forever, so a client whose file was quarantined
+ * on a re-scan was told there was nothing more to do.
  *
  * `currentVersion` is the same summary the engagement tree uses, so a screen
  * that has attachments does not need a second round trip to render them.
@@ -47,7 +50,7 @@ export interface RequestAttachment {
   documentId: string;
   displayName: string;
   currentVersion: ReturnType<typeof summarizeAttachmentVersion>;
-  state: 'ready' | 'checking';
+  state: 'ready' | 'checking' | 'refused';
 }
 
 /** Just enough of a version to name it on a checklist row. */
@@ -64,14 +67,19 @@ function summarizeAttachmentVersion(v: DocumentVersion | undefined) {
   };
 }
 
-/** The attachment shape for one document plus its current version, if any. */
-export function toAttachment(doc: Document, version: DocumentVersion | undefined): RequestAttachment {
+/**
+ * The attachment shape for one document plus its current version, if any.
+ * `newest` is only needed when there is no current version: it is what says
+ * whether the file is still being checked or was refused.
+ */
+export function toAttachment(doc: Document, version: DocumentVersion | undefined, newest?: DocumentVersion): RequestAttachment {
   const currentVersion = summarizeAttachmentVersion(version);
+  const refused = !currentVersion && (newest?.scanStatus === 'infected' || newest?.scanStatus === 'encrypted');
   return {
     documentId: doc.id,
     displayName: doc.displayName ?? doc.name,
     currentVersion,
-    state: currentVersion?.available ? 'ready' : 'checking',
+    state: currentVersion?.available ? 'ready' : refused ? 'refused' : 'checking',
   };
 }
 

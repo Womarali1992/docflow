@@ -216,8 +216,12 @@ export interface RequestAttachment {
   documentId: string;
   displayName: string;
   currentVersion: VersionSummary | null;
-  /** `ready` means there is something to open; `checking` means the scan is still running. */
-  state: 'ready' | 'checking';
+  /**
+   * `ready` means there is something to open; `checking` means the scan is still
+   * running; `refused` means the scanner rejected the newest file and nothing
+   * readable is left — the client has to send it again.
+   */
+  state: 'ready' | 'checking' | 'refused';
 }
 
 export interface RequestItem {
