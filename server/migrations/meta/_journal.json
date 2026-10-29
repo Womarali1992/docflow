@@ -99,6 +99,13 @@
       "when": 1793249100513,
       "tag": "0013_firm_client_email",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793251895432,
+      "tag": "0014_contract_provider_tenant",
+      "breakpoints": true
     }
   ]
 }

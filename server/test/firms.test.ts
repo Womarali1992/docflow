@@ -1,8 +1,8 @@
 /**
  * The firm is the tenant (docs/FIRM-BOOK-PLAN.md). Every row the app writes
- * carries its firm and no longer an advisor as its tenant (`provider_id` stays
- * in the schema, unwritten, until F9 drops it), and a client is assigned to the
- * advisor who added them. Who may *see* a row is pinned in the authz matrix,
+ * carries its firm, and no table names an advisor as its tenant any more (F9
+ * dropped `provider_id`), and a client is assigned to the advisor who added
+ * them. Who may *see* a row is pinned in the authz matrix,
  * where `colleague1` is answered exactly as the advisor whose client it is.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -12,12 +12,9 @@ import { app, loginAs, request, seedFixture, type Fixture } from './helpers.js';
 
 const TENANT_TABLES = ['clients', 'engagements', 'requests', 'documents', 'messages', 'activities', 'request_templates'];
 
-/** Rows that still name an advisor as their tenant, or sit in a firm other than `firmId`. */
+/** Rows that sit in a firm other than `firmId`. */
 async function strays(table: string, firmId: string): Promise<number> {
-  const { rows } = await pool.query(
-    `SELECT count(*)::int AS n FROM "${table}" WHERE provider_id IS NOT NULL OR firm_id <> $1`,
-    [firmId]
-  );
+  const { rows } = await pool.query(`SELECT count(*)::int AS n FROM "${table}" WHERE firm_id <> $1`, [firmId]);
   return rows[0].n;
 }
 
@@ -28,7 +25,17 @@ describe('firm', () => {
     fx = await seedFixture();
   });
 
-  it('every row the app writes carries the firm, and no advisor as its tenant', async () => {
+  it('no table keeps an advisor as its tenant, and providers no longer hold the firm name (F9)', async () => {
+    const { rows } = await pool.query(
+      `SELECT table_name, column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND (column_name = 'provider_id' OR (table_name = 'providers' AND column_name = 'firm_name'))
+        ORDER BY table_name`
+    );
+    // The invitee of a staff invitation is a person, not a tenant: that `provider_id` stays.
+    expect(rows).toEqual([{ table_name: 'staff_invitations', column_name: 'provider_id' }]);
+  });
+
+  it('every row the app writes carries the firm', async () => {
     // Firm 2 is not in this story; without it every row left is the app's or firm 1's fixture.
     await pool.query('DELETE FROM clients WHERE firm_id = $1', [fx.provider2.firmId]);
     await pool.query('DELETE FROM activities WHERE firm_id = $1', [fx.provider2.firmId]);

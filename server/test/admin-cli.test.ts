@@ -62,7 +62,6 @@ describe('admin CLI', () => {
 
     const [p] = await db.select().from(schema.providers).where(eq(schema.providers.email, 'new@firm.test'));
     expect(p).toBeDefined();
-    expect(p.firmName).toBe('New Firm CPA');
     expect(p.passwordChangedAt).not.toBeNull();
     // A new advisor founds a firm of their own and owns it; the firm's id is never theirs.
     const [firm] = await db.select().from(schema.firms).where(eq(schema.firms.id, p.firmId));
@@ -78,7 +77,7 @@ describe('admin CLI', () => {
 
     const log = await adminActivities();
     expect(log).toHaveLength(1);
-    expect(log[0]).toMatchObject({ firmId: p.firmId, providerId: null, type: 'update', actorKind: null, actorId: null });
+    expect(log[0]).toMatchObject({ firmId: p.firmId, type: 'update', actorKind: null, actorId: null });
     expect(log[0].description).toContain('created advisor account new@firm.test');
   });
 

@@ -12,11 +12,14 @@ import type { NewProvider, Provider } from './schema.js';
  * `0011_firms` named the firms it backfilled, which is also the fallback every
  * email sign-off already uses: the firm name, or else the advisor's own.
  */
-export async function createFirmWithOwner(values: Omit<NewProvider, 'firmId' | 'role'>): Promise<Provider> {
+export async function createFirmWithOwner({
+  firmName,
+  ...values
+}: Omit<NewProvider, 'firmId' | 'role'> & { firmName?: string | null }): Promise<Provider> {
   return db.transaction(async (tx) => {
     const [firm] = await tx
       .insert(schema.firms)
-      .values({ name: values.firmName?.trim() || values.name })
+      .values({ name: firmName?.trim() || values.name })
       .returning({ id: schema.firms.id });
     const [provider] = await tx
       .insert(schema.providers)

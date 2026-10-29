@@ -193,8 +193,6 @@ describe('event emails', () => {
 /**
  * Who hears about a client in a firm of several advisors (FIRM-BOOK-PLAN F2):
  * the advisor assigned to them, or the whole firm when there is nobody to tell.
- * Client 1A's `provider_id` stays Provider One throughout, so a notice that
- * followed it instead of the assignment would fail here.
  */
 describe('who hears about a client', () => {
   let fx: Fixture;
