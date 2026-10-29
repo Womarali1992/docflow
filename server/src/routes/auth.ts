@@ -1,6 +1,6 @@
 import { type Request, type Response } from 'express';
 import { asyncRouter } from './async-router.js';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, authenticateAnyStage } from '../middleware/auth.js';
@@ -19,7 +19,7 @@ import { enqueueEmail } from '../jobs/mail.js';
 import { clientMe, openSession, providerMe, type AuthState } from '../auth/signin.js';
 import { audit, hashedEmail, ipOf } from '../db/audit.js';
 import { looksLikeToken, tokenState } from '../auth/tokens.js';
-import { findClientByEmail, findProviderByEmail, providerEmailIsTaken } from '../auth/email.js';
+import { findClientsByEmail, findProviderByEmail, providerEmailIsTaken } from '../auth/email.js';
 import { createFirmWithOwner, firmSignOff } from '../db/firms.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
 
@@ -30,11 +30,15 @@ const loginSchema = z.object({
   email: z.string().trim().email().max(NAME_MAX),
   password: z.string().min(1).max(1024),
   kind: z.enum(['provider', 'client']),
+  /* A client's answer to "Which firm?" (F7): the address has an account at more than one. */
+  firmId: z.string().uuid().optional(),
 });
 
 const INVALID = { error: 'Invalid credentials' };
 const DEACTIVATED = { error: 'This account has been deactivated. Contact your advisor.', code: 'deactivated' };
 const DEMO_REFUSED = { error: 'This demo password is not allowed here. Ask your administrator to set a real one.', code: 'demo_password' };
+/* Not a refusal: the password was right for more than one firm's account. */
+const CHOOSE_FIRM = { error: 'You have an account with more than one firm. Which one are you signing in to?', code: 'choose_firm' };
 
 /**
  * Password step. The order matters: the password is checked before any account
@@ -77,7 +81,7 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   }
-  const { email, password, kind } = parsed.data;
+  const { email, password, kind, firmId } = parsed.data;
 
   if (kind === 'provider') {
     const provider = await findProviderByEmail(email);
@@ -105,13 +109,31 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
     const state: AuthState = { stage, me };
     return res.json(state);
   } else {
-    const client = await findClientByEmail(email);
-    if (!client) return await refuseLogin(req, res, email, kind, 'no_such_account');
-    const check = await verifyPassword(password, client.passwordHash);
-    if (!check.ok) return await refuseLogin(req, res, email, kind, 'wrong_password', client.id);
+    /* One address can be a client of several firms (F7). The password decides
+       which account it opens; only when it opens more than one is the person
+       asked which firm, and then only the firms it opened are named. */
+    const candidates = await findClientsByEmail(email, firmId);
+    if (candidates.length === 0) return await refuseLogin(req, res, email, kind, 'no_such_account');
+    const opened: { client: (typeof candidates)[number]; needsRehash: boolean }[] = [];
+    for (const candidate of candidates) {
+      const tried = await verifyPassword(password, candidate.passwordHash);
+      if (tried.ok) opened.push({ client: candidate, needsRehash: tried.needsRehash });
+    }
+    if (opened.length === 0) {
+      return await refuseLogin(req, res, email, kind, 'wrong_password', candidates.length === 1 ? candidates[0].id : null);
+    }
+    if (opened.length > 1) {
+      const firms = await db
+        .select({ id: schema.firms.id, name: schema.firms.name })
+        .from(schema.firms)
+        .where(inArray(schema.firms.id, opened.map((o) => o.client.firmId)))
+        .orderBy(schema.firms.name);
+      return res.status(409).json({ ...CHOOSE_FIRM, firms });
+    }
+    const { client, needsRehash } = opened[0];
     if (isRefusedDemoPassword(password)) return await refuseLogin(req, res, email, kind, 'demo_password', client.id, DEMO_REFUSED);
     if (client.deactivatedAt) return await refuseLogin(req, res, email, kind, 'deactivated', client.id, DEACTIVATED);
-    if (check.needsRehash) {
+    if (needsRehash) {
       await db.update(schema.clients).set({ passwordHash: await hashPassword(password) }).where(eq(schema.clients.id, client.id));
     }
 
@@ -267,8 +289,10 @@ router.post('/password-reset/request', lookupLimiter, async (req, res) => {
       await enqueueEmail({ template: 'password_reset', to: p.email, link: resetLink(token), firmName: await firmSignOff(p.firmId) });
     }
   } else {
-    const c = await findClientByEmail(email);
-    if (c && !c.deactivatedAt && c.passwordHash) {
+    /* One link per firm the address is a client of (F7), each signed by its
+       firm, so the person can tell which account each one resets. */
+    for (const c of await findClientsByEmail(email)) {
+      if (c.deactivatedAt || !c.passwordHash) continue;
       const { token } = await createPasswordReset('client', c.id);
       await enqueueEmail({ template: 'password_reset', to: c.email, link: resetLink(token), firmName: await firmSignOff(c.firmId) });
     }

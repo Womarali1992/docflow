@@ -47,3 +47,20 @@ export function staleVersion(err: unknown): StaleVersion | null {
     currentVersionIds: (err.body.currentVersionIds as string[] | undefined) ?? undefined,
   };
 }
+
+/** A firm a client's password opened an account at, offered by the sign-in's "Which firm?" step. */
+export interface FirmChoice {
+  id: string;
+  name: string;
+}
+
+/**
+ * The firms to choose between when a client's password opened accounts at
+ * more than one (409 `choose_firm`, F7 of the firm book), or null when the
+ * error is anything else. Only the firms the password opened are named.
+ */
+export function chooseFirm(err: unknown): FirmChoice[] | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  if (err.body?.code !== 'choose_firm' || !Array.isArray(err.body.firms)) return null;
+  return err.body.firms as FirmChoice[];
+}

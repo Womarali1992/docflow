@@ -233,11 +233,15 @@ export const api = {
   auth: {
     /** Identity plus session stage; works in every stage so a reload lands on the right screen. */
     me: () => request<AuthState>('/auth/me'),
-    /** Password step. The answer's `stage` is never `active`: a code or an enrollment follows. */
-    login: (email: string, password: string, kind: 'provider' | 'client') =>
+    /**
+     * Password step. The answer's `stage` is never `active`: a code or an enrollment follows.
+     * A client whose password opens accounts at two firms gets 409 `choose_firm` with
+     * `firms`, and signs in again with the one they pick as `firmId` (see `chooseFirm`).
+     */
+    login: (email: string, password: string, kind: 'provider' | 'client', firmId?: string) =>
       request<AuthState>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password, kind }),
+        body: JSON.stringify({ email, password, kind, ...(firmId ? { firmId } : {}) }),
       }),
     logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
     /** Sign out everywhere: every session of the current user, including this one. */

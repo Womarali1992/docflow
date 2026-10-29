@@ -110,11 +110,15 @@ async function seed() {
 
   // An existing client keeps whatever advisor it has: the seed never reassigns.
   for (const { advisor, ...c } of clientSeeds) {
-    const existing = await db.select().from(schema.clients).where(eq(schema.clients.email, c.email));
+    // The same address may be a client of another firm (F7); only this firm's account counts.
+    const existing = await db
+      .select()
+      .from(schema.clients)
+      .where(and(eq(schema.clients.firmId, provider.firmId), eq(schema.clients.emailNormalized, normalizeEmail(c.email))));
     if (existing.length === 0) {
       const [created] = await db
         .insert(schema.clients)
-        // `emailNormalized` is NOT NULL and unique since C5.4; every write path sets it.
+        // `emailNormalized` is NOT NULL and unique within the firm (F7); every write path sets it.
         .values({
           ...c,
           emailNormalized: normalizeEmail(c.email),

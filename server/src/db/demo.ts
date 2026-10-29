@@ -10,6 +10,7 @@ import { ensureStarterTemplates } from '../workflow/starter-templates.js';
 import { notify, notifyAdvisors } from '../notify.js';
 import { recordActivity } from './activity-log.js';
 import { audit } from './audit.js';
+import { normalizeEmail } from '../auth/email.js';
 import type { Document } from './schema.js';
 
 /**
@@ -214,7 +215,11 @@ async function main() {
   let skipped = 0;
 
   for (const spec of PLAN) {
-    const [client] = await db.select().from(schema.clients).where(eq(schema.clients.email, spec.clientEmail));
+    // By firm and address: the same address may be a client of another firm too (F7).
+    const [client] = await db
+      .select()
+      .from(schema.clients)
+      .where(and(eq(schema.clients.firmId, provider.firmId), eq(schema.clients.emailNormalized, normalizeEmail(spec.clientEmail))));
     if (!client) {
       console.log(`- no client ${spec.clientEmail}; skipping "${spec.title}"`);
       continue;
@@ -448,7 +453,7 @@ async function reassignmentHistory(owner: { id: string; name: string; firmId: st
     .select({ id: schema.clients.id, name: schema.clients.name, to: schema.providers.id, toName: schema.providers.name })
     .from(schema.clients)
     .innerJoin(schema.providers, eq(schema.providers.id, schema.clients.assignedProviderId))
-    .where(and(eq(schema.clients.email, 'm.chen@chenco.io'), eq(schema.clients.firmId, owner.firmId)));
+    .where(and(eq(schema.clients.emailNormalized, 'm.chen@chenco.io'), eq(schema.clients.firmId, owner.firmId)));
   if (!client || client.to === owner.id) return;
   const [already] = await db
     .select({ id: schema.auditLog.id })

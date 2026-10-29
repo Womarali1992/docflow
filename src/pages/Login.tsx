@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { getErrorMessage } from '@/utils/errors';
+import { chooseFirm, getErrorMessage, type FirmChoice } from '@/utils/errors';
 import { stagePath } from '@/utils/stage';
 import { I } from '@/components/docflow/icons';
 import '@/components/docflow/styles.css';
@@ -42,10 +42,14 @@ const Login = () => {
   const [password, setPassword] = useState(DEV ? DEV_CREDS[kind].password : '');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /* Set when a client's password opened accounts at more than one firm (F7):
+     the form gives way to "Which firm?" until they pick one or go back. */
+  const [firms, setFirms] = useState<FirmChoice[] | null>(null);
 
   const setKindAndDefaults = (k: Kind) => {
     setKind(k);
     setError(null);
+    setFirms(null);
     try {
       window.localStorage.setItem(KIND_KEY, k);
     } catch {
@@ -60,12 +64,11 @@ const Login = () => {
     }
   };
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const signIn = async (firmId?: string) => {
     setError(null);
     setLoading(true);
     try {
-      const { me, stage } = await login(email, password, kind);
+      const { me, stage } = await login(email, password, kind, firmId);
       try {
         window.localStorage.setItem(KIND_KEY, kind);
       } catch {
@@ -85,10 +88,22 @@ const Login = () => {
         navigate('/portal', { replace: true });
       }
     } catch (err) {
-      setError(getErrorMessage(err));
+      const choices = chooseFirm(err);
+      if (choices) setFirms(choices);
+      else setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void signIn();
+  };
+
+  const back = () => {
+    setFirms(null);
+    setError(null);
   };
 
   return (
@@ -123,74 +138,107 @@ const Login = () => {
             </button>
           </div>
 
-          <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span className="df-muted" style={{ fontSize: 11.5 }}>Email</span>
-              <input
-                className="df-input"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoFocus
-              />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span className="df-muted" style={{ fontSize: 11.5 }}>Password</span>
-              <input
-                className="df-input"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </label>
-
-            {error && (
-              <div
-                className="df-pill df-danger"
-                style={{ alignSelf: 'flex-start', padding: '4px 8px', fontSize: 11.5 }}
-              >
-                {error}
+          {firms ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="df-small">
+                <strong>Which firm?</strong> You have an account with more than one firm. Choose the one you are signing in to.
               </div>
-            )}
-            {error && (
-              <div className="df-small df-muted">
-                {kind === 'provider'
-                  ? 'Signing in to send documents to your accountant? Choose “I’m a client” above.'
-                  : 'Work at the firm? Choose “I work at the firm” above.'}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="df-btn df-primary"
-              style={{ justifyContent: 'center', marginTop: 4 }}
-              disabled={loading}
-            >
-              {loading ? 'Signing in…' : (
-                <>
-                  <I.Send size={13} /> Sign in as {kind === 'provider' ? 'advisor' : 'client'}
-                </>
+              {firms.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="df-btn"
+                  style={{ justifyContent: 'center' }}
+                  disabled={loading}
+                  onClick={() => void signIn(f.id)}
+                >
+                  {f.name}
+                </button>
+              ))}
+              {error && (
+                <div
+                  className="df-pill df-danger"
+                  style={{ alignSelf: 'flex-start', padding: '4px 8px', fontSize: 11.5 }}
+                >
+                  {error}
+                </div>
               )}
-            </button>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Link className="df-link" to="/forgot" style={{ fontSize: 11.5 }}>Forgot your password?</Link>
-            </div>
-
-            {DEV && (
-              <div className="df-muted" style={{ fontSize: 11, marginTop: 4 }}>
-                Demo accounts pre-filled (dev only). Seeded credentials:{' '}
-                {kind === 'provider' ? (
-                  <>provider <span className="df-mono">sarah@meridiancpa.com / password123</span></>
-                ) : (
-                  <>client <span className="df-mono">sarah.johnson@meridian.co / client123</span></>
-                )}. Authenticator code: <span className="df-mono">npm run totp</span> in <span className="df-mono">server/</span> with the
-                secret <span className="df-mono">db:seed</span> printed.
+              <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                <button type="button" className="df-link" style={{ fontSize: 11.5 }} onClick={back} disabled={loading}>
+                  Back
+                </button>
               </div>
-            )}
-          </form>
+            </div>
+          ) : (
+            <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span className="df-muted" style={{ fontSize: 11.5 }}>Email</span>
+                <input
+                  className="df-input"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span className="df-muted" style={{ fontSize: 11.5 }}>Password</span>
+                <input
+                  className="df-input"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </label>
+
+              {error && (
+                <div
+                  className="df-pill df-danger"
+                  style={{ alignSelf: 'flex-start', padding: '4px 8px', fontSize: 11.5 }}
+                >
+                  {error}
+                </div>
+              )}
+              {error && (
+                <div className="df-small df-muted">
+                  {kind === 'provider'
+                    ? 'Signing in to send documents to your accountant? Choose “I’m a client” above.'
+                    : 'Work at the firm? Choose “I work at the firm” above.'}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="df-btn df-primary"
+                style={{ justifyContent: 'center', marginTop: 4 }}
+                disabled={loading}
+              >
+                {loading ? 'Signing in…' : (
+                  <>
+                    <I.Send size={13} /> Sign in as {kind === 'provider' ? 'advisor' : 'client'}
+                  </>
+                )}
+              </button>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <Link className="df-link" to="/forgot" style={{ fontSize: 11.5 }}>Forgot your password?</Link>
+              </div>
+
+              {DEV && (
+                <div className="df-muted" style={{ fontSize: 11, marginTop: 4 }}>
+                  Demo accounts pre-filled (dev only). Seeded credentials:{' '}
+                  {kind === 'provider' ? (
+                    <>provider <span className="df-mono">sarah@meridiancpa.com / password123</span></>
+                  ) : (
+                    <>client <span className="df-mono">sarah.johnson@meridian.co / client123</span></>
+                  )}. Authenticator code: <span className="df-mono">npm run totp</span> in <span className="df-mono">server/</span> with the
+                  secret <span className="df-mono">db:seed</span> printed.
+                </div>
+              )}
+            </form>
+          )}
         </div>
       </div>
     </div>

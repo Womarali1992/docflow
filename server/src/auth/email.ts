@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 
 /**
@@ -12,7 +12,7 @@ import { db, schema } from '../db/client.js';
  *
  * Deliberately conservative: case and surrounding whitespace only. Provider
  * tricks like stripping dots or `+tags` would make two addresses the firm
- * considers different collide, and `clients_email_normalized_key` turns a
+ * considers different collide, and `clients_firm_email_normalized_key` turns a
  * collision into a refused create.
  */
 export function normalizeEmail(email: string): string {
@@ -39,8 +39,23 @@ export async function providerEmailIsTaken(email: string): Promise<boolean> {
   return (await providersWithEmail(email)).length > 0;
 }
 
-/** The client who signs in with this address: `email_normalized` is unique across the install. */
-export async function findClientByEmail(email: string) {
-  const [client] = await db.select().from(schema.clients).where(eq(schema.clients.emailNormalized, normalizeEmail(email)));
-  return client;
+/**
+ * The most client accounts one address is looked up across. Sign-in checks the
+ * password against each, and every check is a bcrypt, so the work one request
+ * can cause is bounded; nobody is a client of this many firms on one install.
+ */
+export const MAX_CLIENT_ACCOUNTS = 10;
+
+/**
+ * Every client account at this address, oldest first: at most one per firm
+ * since F7 (`clients_firm_email_normalized_key`), so the same person can be a
+ * client of two firms. `firmId` narrows it to that firm's account.
+ */
+export async function findClientsByEmail(email: string, firmId?: string) {
+  return db
+    .select()
+    .from(schema.clients)
+    .where(and(eq(schema.clients.emailNormalized, normalizeEmail(email)), firmId ? eq(schema.clients.firmId, firmId) : undefined))
+    .orderBy(asc(schema.clients.createdAt), asc(schema.clients.id))
+    .limit(MAX_CLIENT_ACCOUNTS);
 }

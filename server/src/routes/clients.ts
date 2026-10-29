@@ -137,23 +137,22 @@ const createClientSchema = z.object({
 const NOT_IN_FIRM = { error: 'Choose an active advisor of this firm.', code: 'not_in_firm' };
 
 /**
- * One client per address, the same rule `clients_email_normalized_key` enforces
- * in the database (C5.4). Checked here so the advisor gets a sentence rather
- * than a 500, and caught there as well because two advisors typing at once is a
- * race this check cannot win.
+ * One client per address within a firm, the same rule
+ * `clients_firm_email_normalized_key` enforces in the database (F7). Checked
+ * here so the advisor gets a sentence rather than a 500, and caught there as
+ * well because two advisors typing at once is a race this check cannot win.
  *
- * Deliberately NOT scoped to the calling provider: the index is global, so a
- * per-provider check would pass and the insert would still fail. Answering
- * "already in use" without saying whose keeps one firm from probing another's
- * client list — the pilot has a single advisor, and this stays true if it grows.
+ * Scoped to the firm, like the index: another firm's client at the same
+ * address is a different account, and refusing it would tell this firm who
+ * the other one's clients are.
  */
 const EMAIL_TAKEN = { error: 'A client with that email address already exists.', code: 'email_taken' };
 
-async function emailIsTaken(email: string, exceptId?: string): Promise<boolean> {
+async function emailIsTaken(firmId: string, email: string, exceptId?: string): Promise<boolean> {
   const [row] = await db
     .select({ id: schema.clients.id })
     .from(schema.clients)
-    .where(eq(schema.clients.emailNormalized, normalizeEmail(email)));
+    .where(and(eq(schema.clients.firmId, firmId), eq(schema.clients.emailNormalized, normalizeEmail(email))));
   return Boolean(row) && row.id !== exceptId;
 }
 
@@ -171,7 +170,7 @@ router.post('/', requireProvider, async (req, res) => {
     return res.status(400).json(NOT_IN_FIRM);
   }
 
-  if (await emailIsTaken(email)) return res.status(409).json(EMAIL_TAKEN);
+  if (await emailIsTaken(req.auth!.firmId, email)) return res.status(409).json(EMAIL_TAKEN);
 
   const passwordHash = password ? await hashPassword(password) : null;
   let created: { id: string };
@@ -223,7 +222,7 @@ router.patch('/:id', requireProvider, async (req, res) => {
   if (!existing) return notFound(res);
 
   const { name, email, plan, aum, password } = parsed.data;
-  if (email !== undefined && (await emailIsTaken(email, existing.id))) return res.status(409).json(EMAIL_TAKEN);
+  if (email !== undefined && (await emailIsTaken(existing.firmId, email, existing.id))) return res.status(409).json(EMAIL_TAKEN);
 
   const now = new Date();
   const updates: Partial<typeof schema.clients.$inferInsert> = { updatedAt: now };

@@ -18,7 +18,7 @@ interface AuthContextValue {
   /** Null without a session. Screens are gated on `active`; the other stages own the /mfa routes. */
   stage: SessionStage | null;
   loading: boolean;
-  login: (email: string, password: string, kind: 'provider' | 'client') => Promise<AuthState>;
+  login: (email: string, password: string, kind: 'provider' | 'client', firmId?: string) => Promise<AuthState>;
   /** Takes over a session opened elsewhere (accepting an invitation). */
   adopt: (state: AuthState) => void;
   /** Called by the MFA screens once the server has moved the session to `active`. */
@@ -112,8 +112,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, [queryClient, clearSession]);
 
   const login = useCallback(
-    async (email: string, password: string, kind: 'provider' | 'client') => {
-      const state = await api.auth.login(email, password, kind);
+    async (email: string, password: string, kind: 'provider' | 'client', firmId?: string) => {
+      const state = await api.auth.login(email, password, kind, firmId);
       // A different account may have been signed in here a moment ago.
       dropOtherQueries();
       setAuth(state);

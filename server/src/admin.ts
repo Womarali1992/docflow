@@ -4,12 +4,16 @@
  *
  *   npm run admin -- create-advisor --email a@firm.com --name "Ann Advisor" [--firm "Firm CPA" | --join <firm id>]
  *   npm run admin -- list-firms
- *   npm run admin -- reset-mfa      --kind provider|client --email …
- *   npm run admin -- reset-link     --kind provider|client --email …
- *   npm run admin -- deactivate     --kind provider|client --email …
- *   npm run admin -- reactivate     --kind provider|client --email …
- *   npm run admin -- list-sessions  --kind provider|client --email …
+ *   npm run admin -- reset-mfa      --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- reset-link     --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- deactivate     --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- reactivate     --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- list-sessions  --kind provider|client --email … [--firm <firm id>]
  *   npm run admin -- list-users
+ *
+ * A client's address is unique only within a firm (F7). When it is a client of
+ * several, the account commands stop, list the firms and ask for `--firm`.
+ * Advisor addresses are unique across the install and need no `--firm`.
  *   npm run admin -- unlock
  *
  * Every change is recorded as an activity row ("Administrator (CLI) …") so the
@@ -17,13 +21,13 @@
  */
 import 'dotenv/config';
 import readline from 'node:readline';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, pool, schema } from './db/client.js';
 import { hashPassword, isRefusedDemoPassword, passwordSchema } from './auth/passwords.js';
 import { createPasswordReset, resetLink } from './auth/resets.js';
 import { listLiveSessions, revokeAllSessions } from './auth/sessions.js';
 import { audit } from './db/audit.js';
-import { findClientByEmail, findProviderByEmail, providerEmailIsTaken } from './auth/email.js';
+import { findClientsByEmail, findProviderByEmail, providerEmailIsTaken } from './auth/email.js';
 import { createFirmWithOwner } from './db/firms.js';
 
 type Kind = 'provider' | 'client';
@@ -108,14 +112,32 @@ interface Account {
   deactivatedAt: Date | null;
 }
 
-async function findAccount(kind: Kind, email: string): Promise<Account> {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The account `--kind`, `--email` (and, for a client of several firms, `--firm`) name. */
+async function findAccount(flags: Flags): Promise<Account> {
+  const kind = needKind(flags);
+  const email = need(flags, 'email');
   if (kind === 'provider') {
     const p = await findProviderByEmail(email);
     if (!p) throw new UsageError(`No advisor with email ${email}`);
     return { kind, id: p.id, name: p.name, email: p.email, firmId: p.firmId, deactivatedAt: p.deactivatedAt };
   }
-  const c = await findClientByEmail(email);
-  if (!c) throw new UsageError(`No client with email ${email}`);
+  const firm = flags.firm === undefined ? undefined : need(flags, 'firm');
+  if (firm !== undefined && !UUID.test(firm)) throw new UsageError('--firm needs a firm id (see list-firms)');
+  const found = await findClientsByEmail(email, firm);
+  if (found.length === 0) throw new UsageError(firm ? `No client with email ${email} at firm ${firm}` : `No client with email ${email}`);
+  if (found.length > 1) {
+    const firms = await db
+      .select({ id: schema.firms.id, name: schema.firms.name })
+      .from(schema.firms)
+      .where(inArray(schema.firms.id, found.map((c) => c.firmId)))
+      .orderBy(schema.firms.name);
+    throw new UsageError(
+      `${email} is a client of ${firms.length} firms. Say which with --firm <firm id>:\n` + firms.map((f) => `  ${f.id}  ${f.name}`).join('\n')
+    );
+  }
+  const [c] = found;
   return { kind, id: c.id, name: c.name, email: c.email, firmId: c.firmId, deactivatedAt: c.deactivatedAt };
 }
 
@@ -182,7 +204,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'reset-mfa'(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     await db.delete(schema.mfaTotp).where(and(eq(schema.mfaTotp.userKind, account.kind), eq(schema.mfaTotp.userId, account.id)));
     await db.delete(schema.recoveryCodes).where(and(eq(schema.recoveryCodes.userKind, account.kind), eq(schema.recoveryCodes.userId, account.id)));
     const revoked = await revokeAllSessions(account.kind, account.id);
@@ -191,7 +213,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'reset-link'(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     if (account.deactivatedAt) throw new UsageError(`${account.email} is deactivated; reactivate first`);
     const { token, expiresAt } = await createPasswordReset(account.kind, account.id);
     await record(account, `Administrator (CLI) issued a password reset link for ${account.email}`);
@@ -200,7 +222,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async deactivate(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     const now = new Date();
     if (account.kind === 'provider') {
       await db.update(schema.providers).set({ deactivatedAt: now, updatedAt: now }).where(eq(schema.providers.id, account.id));
@@ -213,7 +235,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async reactivate(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     const now = new Date();
     if (account.kind === 'provider') {
       await db.update(schema.providers).set({ deactivatedAt: null, updatedAt: now }).where(eq(schema.providers.id, account.id));
@@ -225,7 +247,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'list-sessions'(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     const rows = await listLiveSessions(account.kind, account.id);
     if (rows.length === 0) {
       console.log(`No live sessions for ${account.email}.`);
@@ -248,7 +270,17 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
       })
       .from(schema.providers)
       .innerJoin(schema.firms, eq(schema.firms.id, schema.providers.firmId));
-    const clients = await db.select().from(schema.clients);
+    // With the firm: one address can be a client of two (F7).
+    const clients = await db
+      .select({
+        email: schema.clients.email,
+        name: schema.clients.name,
+        passwordHash: schema.clients.passwordHash,
+        deactivatedAt: schema.clients.deactivatedAt,
+        firmName: schema.firms.name,
+      })
+      .from(schema.clients)
+      .innerJoin(schema.firms, eq(schema.firms.id, schema.clients.firmId));
     console.log(`${providers.length} advisor(s):`);
     for (const p of providers) {
       console.log(`  ${p.email}  ${p.name} (${p.firmName}, ${p.role})  ${p.deactivatedAt ? 'DEACTIVATED' : 'active'}`);
@@ -256,7 +288,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
     console.log(`${clients.length} client(s):`);
     for (const c of clients) {
       const state = c.deactivatedAt ? 'DEACTIVATED' : c.passwordHash ? 'can sign in' : 'not invited / no password';
-      console.log(`  ${c.email}  ${c.name}  ${state}`);
+      console.log(`  ${c.email}  ${c.name} (${c.firmName})  ${state}`);
     }
   },
 

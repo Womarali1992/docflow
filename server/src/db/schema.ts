@@ -93,11 +93,13 @@ export const clients = pgTable(
     clientSince: text('client_since'),
     aum: numeric('aum', { precision: 14, scale: 2 }),
     lastActivity: timestamp('last_activity', { withTimezone: true }).defaultNow(),
-    /* lower(trim(email)) — one client per address, enforced. Backfilled and made
-       unique by `0008_contract`; written by `normalizeEmail()` on every create and
-       email change (until C5.4 only the legacy importer set it, which would have
-       left the index enforcing nothing: new rows were all NULL, and NULLs never
-       collide). `email` keeps the address as the client typed it. */
+    /* lower(trim(email)) — one client per address within a firm, enforced.
+       Backfilled and made unique by `0008_contract`, per firm since `0013`
+       (F7): the same person may be a client of two firms. Written by
+       `normalizeEmail()` on every create and email change (until C5.4 only the
+       legacy importer set it, which would have left the index enforcing
+       nothing: new rows were all NULL, and NULLs never collide). `email` keeps
+       the address as the client typed it. */
     emailNormalized: text('email_normalized').notNull(),
     /* Set by the advisor (or the admin CLI); reversible. Sessions are revoked, sign-in refused. */
     deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
@@ -110,7 +112,9 @@ export const clients = pgTable(
     firmIdx: index('clients_firm_idx').on(t.firmId),
     assignedIdx: index('clients_assigned_provider_idx').on(t.assignedProviderId),
     emailIdx: index('clients_email_idx').on(t.email),
-    emailNormalizedKey: uniqueIndex('clients_email_normalized_key').on(t.emailNormalized),
+    firmEmailKey: uniqueIndex('clients_firm_email_normalized_key').on(t.firmId, t.emailNormalized),
+    /* Sign-in and the reset request look an address up across every firm. */
+    emailNormalizedIdx: index('clients_email_normalized_idx').on(t.emailNormalized),
   })
 );
 

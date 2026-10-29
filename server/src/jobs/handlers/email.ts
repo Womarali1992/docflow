@@ -95,7 +95,8 @@ export function render(payload: MailJobPayload): { subject: string; text: string
       return {
         subject: 'Reset your DocFlow password',
         text:
-          `Someone asked to reset the password for your DocFlow portal.\n\n` +
+          // Names the firm: one address can hold an account at two, and get a link for each (F7).
+          `Someone asked to reset the password for your DocFlow account with ${from}.\n\n` +
           `Open this link to choose a new one:\n${payload.link ?? portal}\n\n` +
           `The link works once and expires in 1 hour. If you did not ask for this, you can ignore this message — ` +
           `your password has not changed.` +

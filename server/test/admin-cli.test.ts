@@ -143,6 +143,36 @@ describe('admin CLI', () => {
     expect((await login(fx.provider1.email, PASSWORD, 'provider')).status).toBe(401);
   });
 
+  it('a client of two firms is named with --firm; without it the CLI lists the firms and stops', async () => {
+    await db.insert(schema.clients).values({
+      firmId: fx.provider2.firmId,
+      name: 'Client 1A at Two',
+      email: 'C1A@Example.Test',
+      emailNormalized: 'c1a@example.test',
+      accountId: 'CL-TWIN',
+    });
+
+    const ambiguous = await admin(['deactivate', '--kind', 'client', '--email', fx.client1a.email]);
+    expect(ambiguous.code).toBe(2);
+    expect(ambiguous.stderr).toContain('is a client of 2 firms');
+    expect(ambiguous.stderr).toContain(`${fx.provider1.firmId}  Provider One CPA`);
+    expect(ambiguous.stderr).toContain(`${fx.provider2.firmId}  Provider Two CPA`);
+
+    const named = await admin(['deactivate', '--kind', 'client', '--email', fx.client1a.email, '--firm', fx.provider2.firmId]);
+    expect(named.code, named.stderr).toBe(0);
+    const accounts = await db.select().from(schema.clients).where(eq(schema.clients.emailNormalized, 'c1a@example.test'));
+    expect(accounts.map((c) => [c.firmId, Boolean(c.deactivatedAt)]).sort()).toEqual(
+      [
+        [fx.provider1.firmId, false],
+        [fx.provider2.firmId, true],
+      ].sort()
+    );
+
+    const notAnId = await admin(['deactivate', '--kind', 'client', '--email', fx.client1a.email, '--firm', 'Provider Two CPA']);
+    expect(notAnId.code).toBe(2);
+    expect(notAnId.stderr).toContain('--firm needs a firm id');
+  }, 60_000);
+
   // Six CLI processes in a row: under the full suite this ran right at the 20 s default.
   it('list-sessions and list-users report; unknown commands and bad flags exit 2', async () => {
     await loginAs(fx, 'provider1');
@@ -156,7 +186,7 @@ describe('admin CLI', () => {
     expect(users.stdout).toContain('3 advisor(s)');
     expect(users.stdout).toContain(`${fx.provider1.email}  Provider One (Provider One CPA, owner)  active`);
     expect(users.stdout).toContain('3 client(s)');
-    expect(users.stdout).toContain(`${fx.client1a.email}  Client 1A  can sign in`);
+    expect(users.stdout).toContain(`${fx.client1a.email}  Client 1A (Provider One CPA)  can sign in`);
 
     expect((await admin(['nope'])).code).toBe(2);
     const badKind = await admin(['reset-mfa', '--kind', 'wizard', '--email', fx.provider1.email]);
