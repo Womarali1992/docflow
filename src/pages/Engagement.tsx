@@ -225,7 +225,8 @@ const Engagement: React.FC = () => {
             </div>
           </div>
           <div className="df-section-body">
-            <MoveBar tally={tally(requests)} perspective="advisor" />
+            {/* The columns below carry the counts, so the bar goes without its legend. */}
+            <MoveBar tally={tally(requests)} perspective="advisor" legend={false} />
             <ChecklistTiles
               requests={ordered}
               perspective="advisor"

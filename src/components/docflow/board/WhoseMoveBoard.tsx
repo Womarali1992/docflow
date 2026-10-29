@@ -1,20 +1,19 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import type { DashboardRequestRef, DashboardSummary } from '@/api/types';
 import type { QueueFilter } from '../queue';
-import { TONE_PILL, toneClass, toneOf, type Tone } from '../tone';
-import { useFlip } from './motion';
+import { I } from '../icons';
+import { toneClass } from '../tone';
+import { seenColumn, useBoardMotion } from './motion';
+import { COLUMNS, boardItems, columnTotals, pickRows, type Column } from './rowBoard';
 
-/** How many cards a lane shows before "and N more". */
-const LANE_SIZE = 6;
+/** How many rows the board shows; the rest are a click away in the queue. */
+const ROWS = 8;
 
-type Lane = 'client' | 'firm';
-
-interface Card {
-  item: DashboardRequestRef;
-  lane: Lane;
-  tone: Tone;
-  label: string;
-}
+const COLUMN_TITLE: Record<Column, string> = {
+  client: 'Waiting on client',
+  firm: 'Your move',
+  done: 'Done this week',
+};
 
 interface Props {
   data: DashboardSummary | undefined;
@@ -22,115 +21,112 @@ interface Props {
   clientName: (clientId: string) => string;
   /** Show whose client each line is (the firm-wide view). */
   showAdvisor: boolean;
-  onOpenCard: (item: DashboardRequestRef, lane: Lane) => void;
+  onOpenCard: (item: DashboardRequestRef) => void;
   onOpenList: (filter: QueueFilter) => void;
 }
 
-const formatDue = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-
 /**
- * The firm's queue as two lanes: what is with the clients, and what is with
- * you. A card that changes hands while the page is open (the client uploads,
- * the dashboard refreshes) glides across to the other lane.
+ * The firm's work as the landing page draws it: one row per checklist line,
+ * and its card sitting with whoever has to act next — the client, you, or
+ * nobody, because it is done. When a line moves its card slides along the row:
+ * right when the client sends it and again when you accept it, back left when
+ * you send it back. That includes moves made while you were on another screen,
+ * so accepting a file and coming back here shows it arrive in "Done".
  *
- * Built only from the `GET /dashboard` read the tiles above it count from, so
- * no card can disagree with a number. "Needs your decision" lines are also in
- * the server's waiting bucket (they are still `requested`); here they sit with
- * the advisor, because only the advisor can take one off the list.
+ * Which lines, and in what order, is `rowBoard.ts`; the motion is `motion.ts`.
  */
 const WhoseMoveBoard: React.FC<Props> = ({ data, isPending, clientName, showAdvisor, onOpenCard, onOpenList }) => {
   const root = useRef<HTMLDivElement>(null);
+  /* The rows on screen, so they hold still while the page is open (see pickRows). */
+  const kept = useRef<string[]>([]);
 
-  const lanes = useMemo(() => {
-    if (!data) return { client: [] as Card[], firm: [] as Card[] };
-    const decided = new Set(data.needsDecision.ids);
-    const late = new Set(data.overdue.ids);
-    const client: Card[] = data.waitingOnClients.items
-      .filter((item) => !decided.has(item.id))
-      .map((item): Card => {
-        const tone = toneOf({ status: item.status, overdue: late.has(item.id) });
-        const label =
-          tone === 'sent_back'
-            ? 'Sent back'
-            : tone === 'overdue'
-              ? 'Overdue'
-              : item.dueDate
-                ? `Due ${formatDue(item.dueDate)}`
-                : 'Requested';
-        return { item, lane: 'client', tone, label };
-      });
-    const firm: Card[] = [
-      ...data.needsDecision.items.map((item): Card => ({ item, lane: 'firm', tone: 'decision', label: 'Your decision' })),
-      ...data.readyToReview.items.map((item): Card => ({ item, lane: 'firm', tone: 'with_firm', label: 'To review' })),
-    ].sort((a, b) => a.item.since.getTime() - b.item.since.getTime());
-    return { client, firm };
-  }, [data]);
+  const all = useMemo(() => (data ? boardItems(data) : []), [data]);
+  const totals = useMemo(() => columnTotals(all), [all]);
+  // `kept` is read here on purpose: the rows that were on screen at this render.
+  const rows = useMemo(() => pickRows(all, kept.current, (id) => seenColumn<Column>(id), ROWS), [all]);
+  useEffect(() => {
+    kept.current = rows.map((r) => r.item.id);
+  }, [rows]);
 
-  const shown = { client: lanes.client.slice(0, LANE_SIZE), firm: lanes.firm.slice(0, LANE_SIZE) };
-  useFlip(
-    root,
-    `${shown.client.map((c) => c.item.id).join(',')}|${shown.firm.map((c) => c.item.id).join(',')}`
-  );
+  useBoardMotion(root, rows.map((r) => `${r.item.id}:${r.column}:${r.tone}`).join('|'));
 
-  const lane = (which: Lane) => {
-    const all = lanes[which];
-    const more = all.length - LANE_SIZE;
-    return (
-      <div className={`df-lane df-lane-${which}`}>
-        <div className="df-lane-head">
-          <span className={`df-mdot df-mdot-${which}`} aria-hidden="true" />
-          {which === 'client' ? 'Waiting on clients' : 'Your move'}
-          <span className="df-mono">{isPending ? '—' : all.length}</span>
-        </div>
-        {!isPending && all.length === 0 && (
-          <div className="df-lane-empty">
-            {which === 'client' ? 'Nothing is waiting on a client.' : 'Nothing needs you right now.'}
-          </div>
-        )}
-        <ul className="df-lane-list" aria-label={which === 'client' ? 'Waiting on clients' : 'Your move'}>
-          {shown[which].map(({ item, tone, label }) => (
-            <li key={item.id} data-flip={item.id} data-lane={which}>
-              <button type="button" className={`df-mcard ${toneClass(tone)}`} onClick={() => onOpenCard(item, which)}>
-                <span className="df-mcard-title">{item.title}</span>
-                <span className={`df-pill ${TONE_PILL[tone]}`}>{label}</span>
-                <span className="df-mcard-meta">
-                  {clientName(item.clientId)}
-                  {item.engagementTitle ? ` · ${item.engagementTitle}` : ''}
-                  {showAdvisor ? ` · ${item.advisorName ?? 'Unassigned'}` : ''}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        {more > 0 && (
-          <button
-            type="button"
-            className="df-btn df-sm df-ghost df-lane-more"
-            onClick={() => onOpenList(which === 'client' ? 'waiting' : 'ready')}
-          >
-            And {more} more
-          </button>
-        )}
-      </div>
-    );
-  };
+  const hidden = all.length - rows.length;
 
   return (
-    <div className="df-lanes" ref={root}>
-      {lane('client')}
-      <div className="df-lane-flow" aria-hidden="true">
-        <span title="The client sends it">
-          <svg width="28" height="12" viewBox="0 0 28 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M1 6h25M21 1.5 26 6l-5 4.5" />
-          </svg>
-        </span>
-        <span title="You send it back">
-          <svg width="28" height="12" viewBox="0 0 28 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M27 6H2M7 1.5 2 6l5 4.5" />
-          </svg>
-        </span>
+    <div className="df-kboard" ref={root}>
+      <div className="df-kboard-head" aria-hidden="true">
+        <span />
+        <div className="df-kboard-cols">
+          {COLUMNS.map((c) => (
+            <span key={c} className={`df-kboard-col df-kboard-col-${c}`}>
+              <span className={`df-mdot df-mdot-${c}`} />
+              {COLUMN_TITLE[c]}
+              <span className="df-mono">{isPending ? '—' : totals[c]}</span>
+            </span>
+          ))}
+        </div>
       </div>
-      {lane('firm')}
+
+      {!isPending && rows.length === 0 && (
+        <div className="df-lane-empty">Nothing open, and nothing settled this week.</div>
+      )}
+
+      <ul className="df-krows" aria-label="Whose move, one line per row">
+        {rows.map(({ item, column, tone, label }) => (
+          <li key={item.id} className="df-krow">
+            <div className="df-krow-item">
+              <div className="df-krow-title">{item.title}</div>
+              <div className="df-krow-meta">
+                {clientName(item.clientId)}
+                {item.engagementTitle ? ` · ${item.engagementTitle}` : ''}
+                {showAdvisor ? ` · ${item.advisorName ?? 'Unassigned'}` : ''}
+              </div>
+            </div>
+            <div className="df-krow-track">
+              {COLUMNS.map((c) => (
+                <div key={c} className={`df-kcell df-kcell-${c}`} data-cell={`${item.id}:${c}`}>
+                  {c === column && (
+                    <button
+                      type="button"
+                      className={`df-kcard ${toneClass(tone)}`}
+                      data-card={item.id}
+                      data-col={column}
+                      data-tone={tone}
+                      onClick={() => onOpenCard(item)}
+                      aria-label={`${item.title}, ${clientName(item.clientId)}: ${label}. ${COLUMN_TITLE[column]}.`}
+                    >
+                      {column === 'done' && tone === 'accepted' && (
+                        <span className="df-kcard-check" aria-hidden="true">
+                          <I.Check size={10} strokeWidth={2.8} />
+                        </span>
+                      )}
+                      {label}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {hidden > 0 && (
+        <div className="df-kboard-more">
+          <span>
+            Showing <span className="df-mono">{rows.length}</span> of <span className="df-mono">{all.length}</span>
+          </span>
+          {totals.client > 0 && (
+            <button type="button" className="df-btn df-sm df-ghost" onClick={() => onOpenList('waiting')}>
+              All waiting on clients
+            </button>
+          )}
+          {totals.firm > 0 && (
+            <button type="button" className="df-btn df-sm df-ghost" onClick={() => onOpenList('ready')}>
+              All ready to review
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

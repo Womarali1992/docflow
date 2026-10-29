@@ -37,7 +37,7 @@ const PortalHome: React.FC = () => {
 
   /* The board is this page in miniature: the open work only, in the order the
      page lists it — your next steps, then what is with your accountant, then
-     what is settled — so the first tiles are the cards just below them. A
+     what is settled — so each column reads in the order of its section below. A
      closed year is finished business and has no tile. (`work.requests` arrives
      in checklist order, and the sort is stable, so settled lines keep it.) */
   const board = useMemo(() => {
@@ -92,7 +92,8 @@ const PortalHome: React.FC = () => {
             </div>
           </div>
           <div className="df-section-body">
-            <MoveBar tally={counts} perspective="client" />
+            {/* The columns below carry the counts, so the bar goes without its legend. */}
+            <MoveBar tally={counts} perspective="client" legend={false} />
             <ChecklistTiles requests={board} perspective="client" label="Your checklist" onOpen={openLine} />
           </div>
         </div>

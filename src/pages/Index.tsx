@@ -89,7 +89,7 @@ const Index: React.FC = () => {
         <div className="df-section-head">
           <div>
             <div className="df-section-title">Whose move</div>
-            <div className="df-section-sub">Every open item, sitting with whoever has to act next</div>
+            <div className="df-section-sub">One item per row. Its card sits with whoever acts next, and moves along when that changes.</div>
           </div>
         </div>
         <div className="df-section-body">
