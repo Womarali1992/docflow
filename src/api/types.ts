@@ -409,6 +409,8 @@ export interface DashboardSummary {
   overdue: DashboardBucket<DashboardRequestRef>;
   needsDecision: DashboardBucket<DashboardRequestRef>;
   unreadMessages: DashboardBucket<{ id: string; clientId: string; advisorId?: string | null; advisorName?: string | null }>;
+  /** Accepted or waived in the last week, newest first: the Today board's "Done" column. */
+  recentlyDone: DashboardBucket<DashboardRequestRef>;
 }
 
 export interface SearchParams {

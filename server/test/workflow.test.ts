@@ -862,10 +862,26 @@ describe('the advisor dashboard counts live rows', () => {
     expect(submitted.body.readyToReview.ids).toContain(id);
     expect(submitted.body.waitingOnClients.count).toBe(1);
 
+    expect(submitted.body.recentlyDone.ids).not.toContain(id);
+
     await request(app).post(`/api/requests/${id}/accept`).set('Cookie', advisor).send({ versionId: answer.version.id });
     const accepted = await request(app).get('/api/dashboard').set('Cookie', advisor);
     expect(accepted.body.readyToReview.count).toBe(0);
     expect(accepted.body.waitingOnClients.count).toBe(1);
+    // Accepted lines arrive in "done" rather than vanishing from the board.
+    expect(accepted.body.recentlyDone.ids).toEqual([id]);
+    expect(accepted.body.recentlyDone.items[0]).toMatchObject({ id, status: 'accepted', engagementId: fx.client1a.engagement });
+  });
+
+  it('keeps "recently done" to the last week', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const id = fx.client1a.request;
+    const answer = await submitVersion(id, { kind: 'client', id: fx.client1a.id });
+    await request(app).post(`/api/requests/${id}/accept`).set('Cookie', advisor).send({ versionId: answer.version.id });
+
+    await db.update(schema.requests).set({ updatedAt: new Date(Date.now() - 8 * 86_400_000) }).where(eq(schema.requests.id, id));
+    const res = await request(app).get('/api/dashboard').set('Cookie', advisor);
+    expect(res.body.recentlyDone.count).toBe(0);
   });
 
   it('counts an overdue request in both waiting and overdue', async () => {

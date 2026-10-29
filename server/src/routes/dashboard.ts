@@ -13,6 +13,12 @@
  *                     may take it off the list, so it needs a human.
  *   unreadMessages  — the thread, which is the other way work arrives.
  *
+ * And one that is not a question but an answer: `recentlyDone`, the lines
+ * accepted or waived in the last week, newest first. It is the "Done" column
+ * of the Today board, so a line that was just accepted is seen to arrive there
+ * rather than simply vanish from the queue. "When" is the line's last move
+ * (`updatedAt`), the same clock as `since`.
+ *
  * Each request row carries its `engagementId` so a queue row can open the
  * checklist it came from — without it the queue could only offer "here is a
  * client", which is one click short of the thing that needs doing. Since the
@@ -32,7 +38,7 @@
  * "everyone" shows whose line it is.
  */
 import { asyncRouter } from './async-router.js';
-import { and, asc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
@@ -40,6 +46,9 @@ import { isEffectiveAdvisor } from '../db/firms.js';
 
 const router = asyncRouter();
 router.use(authenticate, requireProvider);
+
+/** How far back "recently done" reaches. */
+const DONE_WINDOW_MS = 7 * 86_400_000;
 
 router.get('/', async (req, res) => {
   const firmId = req.auth!.firmId;
@@ -79,7 +88,7 @@ router.get('/', async (req, res) => {
       .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
       .leftJoin(schema.providers, isEffectiveAdvisor);
 
-  const [ready, waiting, needsDecision, unread] = await Promise.all([
+  const [ready, waiting, needsDecision, unread, done] = await Promise.all([
     lines()
       .where(and(open, eq(schema.requests.status, 'submitted')))
       .orderBy(asc(schema.requests.updatedAt)),
@@ -113,6 +122,15 @@ router.get('/', async (req, res) => {
       .innerJoin(schema.clients, eq(schema.clients.id, schema.messages.clientId))
       .leftJoin(schema.providers, isEffectiveAdvisor)
       .where(and(eq(schema.messages.firmId, firmId), mine, eq(schema.messages.senderKind, 'client'), isNull(schema.messages.readAt))),
+    lines()
+      .where(
+        and(
+          open,
+          inArray(schema.requests.status, ['accepted', 'waived']),
+          gte(schema.requests.updatedAt, new Date(now.getTime() - DONE_WINDOW_MS))
+        )
+      )
+      .orderBy(desc(schema.requests.updatedAt)),
   ]);
 
   /* The file a "ready" row opens: the line's first readable attachment, in
@@ -133,6 +151,7 @@ router.get('/', async (req, res) => {
     overdue: { count: overdue.length, ids: overdue.map((r) => r.id), items: overdue },
     needsDecision: { count: needsDecision.length, ids: needsDecision.map((r) => r.id), items: needsDecision },
     unreadMessages: { count: unread.length, ids: unread.map((m) => m.id), items: unread },
+    recentlyDone: { count: done.length, ids: done.map((r) => r.id), items: done },
   });
 });
 
