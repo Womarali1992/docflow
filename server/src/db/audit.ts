@@ -33,6 +33,13 @@ export type AuditAction =
   | 'client.mfa_reset'
   /* An advisor moved a client's sign-in address (2026-10-28 audit). */
   | 'client.email_changed'
+  /* A client given to another advisor of the firm, or to nobody (FIRM-BOOK-PLAN F5). */
+  | 'client.reassigned'
+  /* The firm's team (F4): an owner invites, deactivates and reactivates advisors. */
+  | 'staff.invited'
+  | 'staff.invitation_accepted'
+  | 'staff.deactivated'
+  | 'staff.reactivated'
   | 'engagement.created'
   | 'engagement.closed'
   /* A whole engagement copied out as a zip — every accepted file and every

@@ -81,6 +81,16 @@ export function render(payload: MailJobPayload): { subject: string; text: string
           `The link works once and expires in 7 days. If it has expired, ask ${from} for a new one.` +
           signoff,
       };
+    /* To an advisor joining the firm (F4): the same shape as a client's invitation. */
+    case 'staff_invitation':
+      return {
+        subject: `You have been invited to join ${from} on DocFlow`,
+        text:
+          `${from} has added you to its DocFlow workspace, where the firm's clients send their documents.\n\n` +
+          `Open this link to choose a password and set up your sign-in code:\n${payload.link ?? portal}\n\n` +
+          `The link works once and expires in 7 days. If it has expired, ask the firm's owner for a new one.` +
+          signoff,
+      };
     case 'password_reset':
       return {
         subject: 'Reset your DocFlow password',

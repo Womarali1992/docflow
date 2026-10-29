@@ -14,7 +14,7 @@
  * These are pure functions with no React in them, so they can be asserted
  * directly in a test.
  */
-import type { Me, SearchParams } from '../types';
+import type { Me, QueueWho, SearchParams } from '../types';
 
 export type Scope = readonly [kind: string, id: string];
 
@@ -65,11 +65,14 @@ export const keys = {
   activities: (s: Scope, params: Record<string, unknown> = {}) => [...s, 'activities', params] as const,
 
   notifications: (s: Scope) => [...s, 'notifications'] as const,
-  dashboard: (s: Scope) => [...s, 'dashboard'] as const,
+  /** Without `who` it is the prefix of both views, which is what every invalidation uses. */
+  dashboard: (s: Scope, who?: QueueWho) => (who ? ([...s, 'dashboard', who] as const) : ([...s, 'dashboard'] as const)),
   search: (s: Scope, params: SearchParams) => [...s, 'search', params] as const,
 
   templates: (s: Scope) => [...s, 'templates'] as const,
   template: (s: Scope, id: string) => [...s, 'templates', id] as const,
 
   ops: (s: Scope) => [...s, 'ops'] as const,
+
+  firm: (s: Scope) => [...s, 'firm'] as const,
 };

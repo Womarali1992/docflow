@@ -64,8 +64,13 @@ describe('admin CLI', () => {
     expect(p).toBeDefined();
     expect(p.firmName).toBe('New Firm CPA');
     expect(p.passwordChangedAt).not.toBeNull();
+    // A new advisor founds a firm of their own and owns it; the firm's id is never theirs.
+    const [firm] = await db.select().from(schema.firms).where(eq(schema.firms.id, p.firmId));
+    expect(firm.name).toBe('New Firm CPA');
+    expect(firm.id).not.toBe(p.id);
+    expect(p.role).toBe('owner');
     // Cost comes from the environment the CLI ran in (4 in tests, 12 on the firm PC).
-    expect(bcrypt.getRounds(p.passwordHash)).toBe(4);
+    expect(bcrypt.getRounds(p.passwordHash!)).toBe(4);
 
     const signin = await login('new@firm.test', 'an-admin-chosen-pass', 'provider');
     expect(signin.status).toBe(200);
@@ -73,7 +78,7 @@ describe('admin CLI', () => {
 
     const log = await adminActivities();
     expect(log).toHaveLength(1);
-    expect(log[0]).toMatchObject({ providerId: p.id, type: 'update', actorKind: null, actorId: null });
+    expect(log[0]).toMatchObject({ firmId: p.firmId, providerId: null, type: 'update', actorKind: null, actorId: null });
     expect(log[0].description).toContain('created advisor account new@firm.test');
   });
 
@@ -107,7 +112,7 @@ describe('admin CLI', () => {
 
     const [entry] = await adminActivities();
     expect(entry.clientId).toBe(fx.client1a.id);
-    expect(entry.providerId).toBe(fx.provider1.id);
+    expect(entry.firmId).toBe(fx.provider1.firmId);
   });
 
   it('deactivate and reactivate an advisor', async () => {
@@ -138,6 +143,7 @@ describe('admin CLI', () => {
     expect((await login(fx.provider1.email, PASSWORD, 'provider')).status).toBe(401);
   });
 
+  // Six CLI processes in a row: under the full suite this ran right at the 20 s default.
   it('list-sessions and list-users report; unknown commands and bad flags exit 2', async () => {
     await loginAs(fx, 'provider1');
     const sessions = await admin(['list-sessions', '--kind', 'provider', '--email', fx.provider1.email]);
@@ -147,7 +153,8 @@ describe('admin CLI', () => {
 
     const users = await admin(['list-users']);
     expect(users.code, users.stderr).toBe(0);
-    expect(users.stdout).toContain('2 advisor(s)');
+    expect(users.stdout).toContain('3 advisor(s)');
+    expect(users.stdout).toContain(`${fx.provider1.email}  Provider One (Provider One CPA, owner)  active`);
     expect(users.stdout).toContain('3 client(s)');
     expect(users.stdout).toContain(`${fx.client1a.email}  Client 1A  can sign in`);
 
@@ -158,5 +165,5 @@ describe('admin CLI', () => {
     const unknownUser = await admin(['deactivate', '--kind', 'client', '--email', 'nobody@example.test']);
     expect(unknownUser.code).toBe(2);
     expect(unknownUser.stderr).toContain('No client');
-  });
+  }, 60_000);
 });

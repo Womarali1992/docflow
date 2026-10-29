@@ -39,7 +39,7 @@ import { correctionsByRequest } from '../workflow/corrections.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, clientOnly, findRequest, notFound, REQUEST_REMOVED } from './scope.js';
-import { notify } from '../notify.js';
+import { notify, notifyAdvisors } from '../notify.js';
 import type { Request as RequestRow } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -143,7 +143,7 @@ async function recordDecision(req: ExpressRequest, input: DecisionInput): Promis
     if (input.decision === 'needs_correction' && input.note) {
       await tx.insert(schema.messages).values({
         clientId: input.request.clientId,
-        providerId: input.request.providerId,
+        firmId: input.request.firmId,
         documentId: decidable.decisions[0]?.documentId ?? null,
         senderKind: 'provider',
         senderId: auth.sub,
@@ -257,7 +257,7 @@ router.post('/:id/accept', async (req, res) => {
     link: '/portal/requests',
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `accepted: ${request.title}`,
@@ -311,7 +311,7 @@ router.post('/:id/request-correction', async (req, res) => {
     link: '/portal',
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `asked for a correction: ${request.title}`,
@@ -352,7 +352,7 @@ router.post('/:id/waive', async (req, res) => {
     meta: { reason: parsed.data.reason },
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `waived: ${request.title}`,
@@ -444,7 +444,7 @@ router.post('/:id/remove', async (req, res) => {
   }
   if (outcome.changed) {
     await recordActivity({
-      providerId: request.providerId,
+      firmId: request.firmId,
       clientId: request.clientId,
       type: 'update',
       description: `removed from the checklist: ${request.title}`,
@@ -475,7 +475,7 @@ router.post('/:id/restore', async (req, res) => {
 
   await auditRequest(req, { action: 'request.restored', targetType: 'request', targetId: request.id, clientId: request.clientId });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `put back on the checklist: ${request.title}`,
@@ -527,16 +527,14 @@ router.post('/:id/respond', async (req, res) => {
     .returning();
 
   // Only the advisor can take a line off the list, so they have to hear about it.
-  await notify({
-    userKind: 'provider',
-    userId: request.providerId,
+  await notifyAdvisors(request.clientId, {
     type: 'request.not_applicable',
     title: `${auth.name} says they do not have: ${request.title}`,
     body: parsed.data.note ?? null,
     link: `/engagements/${request.engagementId}`,
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `said they do not have: ${request.title}`,

@@ -24,22 +24,36 @@
  *
  * Only open engagements count. A closed year is finished business, and its
  * leftover lines used to sit in "waiting on clients" forever.
+ *
+ * `?who=mine` (FIRM-BOOK-PLAN F6) narrows every bucket to the caller's own
+ * clients plus the firm's unassigned ones — until somebody takes those they
+ * are everybody's. `?who=all`, or no `who`, is the whole book. Each row says
+ * whose client it is (`advisorId`, `advisorName`; null when unassigned), so
+ * "everyone" shows whose line it is.
  */
 import { asyncRouter } from './async-router.js';
-import { and, asc, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
+import { isEffectiveAdvisor } from '../db/firms.js';
 
 const router = asyncRouter();
 router.use(authenticate, requireProvider);
 
 router.get('/', async (req, res) => {
-  const providerId = req.auth!.providerId;
+  const firmId = req.auth!.firmId;
   const now = new Date();
+  const who = req.query.who ?? 'all';
+  if (who !== 'all' && who !== 'mine') {
+    return res.status(400).json({ error: 'who is "mine" or "all".', code: 'bad_who' });
+  }
+  /* Read through the left join below: no effective advisor means unassigned. */
+  const mine = who === 'mine' ? or(eq(schema.providers.id, req.auth!.sub), isNull(schema.providers.id)) : undefined;
 
   const open = and(
-    eq(schema.requests.providerId, providerId),
+    eq(schema.requests.firmId, firmId),
+    mine,
     isNull(schema.requests.archivedAt),
     eq(schema.engagements.status, 'open'),
     isNull(schema.engagements.archivedAt)
@@ -54,12 +68,16 @@ router.get('/', async (req, res) => {
     status: schema.requests.status,
     dueDate: schema.requests.dueDate,
     since: schema.requests.updatedAt,
+    advisorId: schema.providers.id,
+    advisorName: schema.providers.name,
   };
   const lines = () =>
     db
       .select(row)
       .from(schema.requests)
-      .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId));
+      .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
+      .leftJoin(schema.providers, isEffectiveAdvisor);
 
   const [ready, waiting, needsDecision, unread] = await Promise.all([
     lines()
@@ -72,6 +90,8 @@ router.get('/', async (req, res) => {
       .select({ ...row, note: schema.requests.clientResponseNote })
       .from(schema.requests)
       .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
+      .leftJoin(schema.providers, isEffectiveAdvisor)
       .where(
         and(
           open,
@@ -83,9 +103,16 @@ router.get('/', async (req, res) => {
       )
       .orderBy(asc(schema.requests.updatedAt)),
     db
-      .select({ id: schema.messages.id, clientId: schema.messages.clientId })
+      .select({
+        id: schema.messages.id,
+        clientId: schema.messages.clientId,
+        advisorId: schema.providers.id,
+        advisorName: schema.providers.name,
+      })
       .from(schema.messages)
-      .where(and(eq(schema.messages.providerId, providerId), eq(schema.messages.senderKind, 'client'), isNull(schema.messages.readAt))),
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.messages.clientId))
+      .leftJoin(schema.providers, isEffectiveAdvisor)
+      .where(and(eq(schema.messages.firmId, firmId), mine, eq(schema.messages.senderKind, 'client'), isNull(schema.messages.readAt))),
   ]);
 
   /* The file a "ready" row opens: the line's first readable attachment, in

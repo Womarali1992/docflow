@@ -19,7 +19,7 @@ export function serializeEngagement(e: Engagement) {
   return {
     id: e.id,
     clientId: e.clientId,
-    providerId: e.providerId,
+    firmId: e.firmId,
     title: e.title,
     kind: e.kind,
     taxYear: e.taxYear,
@@ -101,7 +101,7 @@ export function serializeRequest(
     id: r.id,
     engagementId: r.engagementId,
     clientId: r.clientId,
-    providerId: r.providerId,
+    firmId: r.firmId,
     title: r.title,
     instructions: r.instructions,
     category: r.category,
@@ -180,7 +180,7 @@ export function serializeDocument(doc: Document) {
   return {
     id: doc.id,
     clientId: doc.clientId,
-    providerId: doc.providerId,
+    firmId: doc.firmId,
     name: doc.name,
     mimeType: doc.mimeType,
     sizeBytes: doc.sizeBytes,
@@ -208,7 +208,7 @@ export function serializeDocument(doc: Document) {
 export function serializeTemplate(t: RequestTemplate) {
   return {
     id: t.id,
-    providerId: t.providerId,
+    firmId: t.firmId,
     name: t.name,
     kind: t.kind,
     items: t.items,

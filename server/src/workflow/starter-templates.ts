@@ -51,22 +51,23 @@ export const STARTER_TEMPLATES: Array<{ name: string; kind: 'individual_tax' | '
 ];
 
 /**
- * Creates the starters for a provider that has none of that kind yet. Runs on
- * the first `GET /templates`, so a new advisor never faces an empty screen —
- * and never gets them back once they have been deleted or renamed.
+ * Creates the starters for a firm that has no templates yet. Runs on the first
+ * `GET /templates`, so a new firm never faces an empty screen — and never gets
+ * them back once they have been deleted or renamed. Templates are the firm's:
+ * any of its advisors uses and edits the same list.
  */
-export async function ensureStarterTemplates(providerId: string, now = new Date()): Promise<void> {
+export async function ensureStarterTemplates(firmId: string, now = new Date()): Promise<void> {
   const existing = await db
     .select({ kind: schema.requestTemplates.kind })
     .from(schema.requestTemplates)
-    .where(eq(schema.requestTemplates.providerId, providerId));
-  // Any template at all means this provider has been here before; seeding on top
+    .where(eq(schema.requestTemplates.firmId, firmId));
+  // Any template at all means this firm has been here before; seeding on top
   // of a deliberately cleared list would be the app arguing with the advisor.
   if (existing.length > 0) return;
 
   await db.insert(schema.requestTemplates).values(
     STARTER_TEMPLATES.map((t) => ({
-      providerId,
+      firmId,
       name: t.name,
       kind: t.kind,
       items: t.items,
@@ -79,11 +80,11 @@ export async function ensureStarterTemplates(providerId: string, now = new Date(
 /** Template items → the rows `POST /engagements/:id/requests` inserts. */
 export function itemsToRequests(
   items: TemplateItem[],
-  base: { providerId: string; clientId: string; engagementId: string },
+  base: { firmId: string; clientId: string; engagementId: string },
   now = new Date()
 ) {
   return items.map((item, i) => ({
-    providerId: base.providerId,
+    firmId: base.firmId,
     clientId: base.clientId,
     engagementId: base.engagementId,
     title: item.title,

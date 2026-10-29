@@ -86,7 +86,7 @@ export interface PublishInput {
    */
   visibleDocument?: (documentId: string) => Promise<Document | null>;
   /** Who the file is for, known before the document exists (for the audit line). */
-  context: { clientId: string; providerId: string };
+  context: { clientId: string };
   staged: StagedUpload;
   uploadedByKind: 'provider' | 'client';
   uploadedById: string;

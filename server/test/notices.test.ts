@@ -12,14 +12,14 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { eq, like } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import { db, schema } from '../src/db/client.js';
 import { NOTICE_WINDOW_MS, noticeEmailKey, noticeWindow } from '../src/notify.js';
 import { render } from '../src/jobs/handlers/email.js';
 import type { MailJobPayload } from '../src/jobs/mail.js';
 import { recordNewVersion } from '../src/workflow/versions.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
-import { PDF_BYTES, app, loginAs, request, seedFixture, type Fixture } from './helpers.js';
+import { PDF_BYTES, app, loginAs, request, seedFixture, type Fixture, type ProviderFixture } from './helpers.js';
 
 /** A client's answer on a request's document, through the same path the upload pipeline ends in. */
 async function submitVersion(documentId: string, clientId: string) {
@@ -40,6 +40,14 @@ async function submitVersion(documentId: string, clientId: string) {
 
 async function noticeJobs(kind: 'client' | 'provider', userId: string) {
   return db.select().from(schema.jobs).where(like(schema.jobs.dedupeKey, `notice:${kind}:${userId}:%`));
+}
+
+/** The in-app notices an advisor has been given. */
+async function noticesFor(providerId: string) {
+  return db
+    .select()
+    .from(schema.notifications)
+    .where(and(eq(schema.notifications.userKind, 'provider'), eq(schema.notifications.userId, providerId)));
 }
 
 /** How many windows the instants between `before` and `after` touch: the honest number of emails. */
@@ -179,5 +187,87 @@ describe('event emails', () => {
       .send({ items: [{ title: 'W-2' }] });
     expect(res.status).toBe(201);
     expect(await db.select().from(schema.jobs)).toHaveLength(0);
+  });
+});
+
+/**
+ * Who hears about a client in a firm of several advisors (FIRM-BOOK-PLAN F2):
+ * the advisor assigned to them, or the whole firm when there is nobody to tell.
+ * Client 1A's `provider_id` stays Provider One throughout, so a notice that
+ * followed it instead of the assignment would fail here.
+ */
+describe('who hears about a client', () => {
+  let fx: Fixture;
+  let colleague: ProviderFixture;
+
+  const assign = (clientId: string, providerId: string | null) =>
+    db.update(schema.clients).set({ assignedProviderId: providerId }).where(eq(schema.clients.id, clientId));
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+    colleague = fx.colleague1;
+    process.env.SMTP_URL = 'smtp://user:pass@localhost:1025';
+  });
+
+  afterEach(() => {
+    delete process.env.SMTP_URL;
+  });
+
+  it('tells the assigned advisor and not a colleague', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const upload = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/uploads`)
+      .set('Cookie', client)
+      .attach('file', PDF_BYTES, { filename: 'statement.pdf' });
+    expect([201, 202]).toContain(upload.status);
+
+    expect((await noticesFor(fx.provider1.id)).map((n) => n.type)).toEqual(['upload.received']);
+    expect(await noticeJobs('provider', fx.provider1.id)).toHaveLength(1);
+    expect(await noticesFor(colleague.id)).toHaveLength(0);
+    expect(await noticeJobs('provider', colleague.id)).toHaveLength(0);
+  });
+
+  it('follows the assignment, not the advisor who added the client', async () => {
+    await assign(fx.client1a.id, colleague.id);
+    const client = await loginAs(fx, 'client1a');
+    expect((await request(app).post('/api/messages').set('Cookie', client).send({ content: 'A question' })).status).toBe(201);
+
+    expect((await noticesFor(colleague.id)).map((n) => n.type)).toEqual(['message.new']);
+    const [job] = await noticeJobs('provider', colleague.id);
+    expect((job.payload as MailJobPayload).to).toBe(colleague.email);
+    expect(await noticesFor(fx.provider1.id)).toHaveLength(0);
+  });
+
+  it('tells every active advisor in the firm about an unassigned client, one email each, and nobody in another firm', async () => {
+    await assign(fx.client1a.id, null);
+    const before = new Date();
+    const client = await loginAs(fx, 'client1a');
+    for (const content of ['A question', 'And another']) {
+      expect((await request(app).post('/api/messages').set('Cookie', client).send({ content })).status).toBe(201);
+    }
+    const after = new Date();
+
+    for (const advisor of [fx.provider1, colleague]) {
+      expect((await noticesFor(advisor.id)).filter((n) => n.type === 'message.new')).toHaveLength(2);
+      const jobs = await noticeJobs('provider', advisor.id);
+      expect(jobs).toHaveLength(windowsBetween('provider', before, after));
+      expect((jobs[0].payload as MailJobPayload).to).toBe(advisor.email);
+    }
+    expect(await noticesFor(fx.provider2.id)).toHaveLength(0);
+    expect(await noticeJobs('provider', fx.provider2.id)).toHaveLength(0);
+  });
+
+  it('falls back to the firm when the assigned advisor has been deactivated', async () => {
+    await assign(fx.client1a.id, colleague.id);
+    await db.update(schema.providers).set({ deactivatedAt: new Date() }).where(eq(schema.providers.id, colleague.id));
+    const client = await loginAs(fx, 'client1a');
+    const res = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/respond`)
+      .set('Cookie', client)
+      .send({ kind: 'not_applicable', note: 'No policy this year' });
+    expect(res.status).toBe(200);
+
+    expect((await noticesFor(fx.provider1.id)).map((n) => n.type)).toEqual(['request.not_applicable']);
+    expect(await noticesFor(colleague.id)).toHaveLength(0);
   });
 });

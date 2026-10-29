@@ -38,15 +38,17 @@ describe('ops scripts', () => {
     expect(c.database).toBe('docflow_test');
     expect(Object.keys(c.tables).sort()).toEqual([...TABLES].sort());
     expect(c.tables).toEqual({
-      providers: 2,
+      firms: 2,
+      providers: 3,
       clients: 3,
       documents: 9,
       messages: 2,
       activities: 5,
       sessions: 0,
-      mfa_totp: 5,
+      mfa_totp: 6,
       recovery_codes: 0,
       invitations: 0,
+      staff_invitations: 0,
       password_resets: 0,
       jobs: 0,
       engagements: 3,

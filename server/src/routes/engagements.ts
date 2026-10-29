@@ -106,8 +106,8 @@ router.get('/', async (req, res) => {
   const where =
     auth.kind === 'provider'
       ? clientId
-        ? and(eq(schema.engagements.providerId, auth.providerId), eq(schema.engagements.clientId, clientId))
-        : eq(schema.engagements.providerId, auth.providerId)
+        ? and(eq(schema.engagements.firmId, auth.firmId), eq(schema.engagements.clientId, clientId))
+        : eq(schema.engagements.firmId, auth.firmId)
       : eq(schema.engagements.clientId, auth.sub);
 
   const list = await db.select().from(schema.engagements).where(where).orderBy(desc(schema.engagements.createdAt));
@@ -134,7 +134,7 @@ router.post('/', requireProvider, async (req, res) => {
   const [created] = await db
     .insert(schema.engagements)
     .values({
-      providerId: auth.providerId,
+      firmId: auth.firmId,
       clientId: client.id,
       title: parsed.data.title,
       kind: parsed.data.kind ?? 'other',
@@ -147,7 +147,7 @@ router.post('/', requireProvider, async (req, res) => {
 
   await auditRequest(req, { action: 'engagement.created', targetType: 'engagement', targetId: created.id, clientId: client.id });
   await recordActivity({
-    providerId: auth.providerId,
+    firmId: auth.firmId,
     clientId: client.id,
     type: 'update',
     description: `started engagement: ${created.title}`,
@@ -358,7 +358,7 @@ router.post('/:id/remind', async (req, res) => {
     meta: { items: outcome.items },
   });
   await recordActivity({
-    providerId: engagement.providerId,
+    firmId: engagement.firmId,
     clientId: engagement.clientId,
     type: 'update',
     description: `sent a reminder about ${outcome.items} item${outcome.items === 1 ? '' : 's'}`,
@@ -446,7 +446,11 @@ router.post('/:id/requests', async (req, res) => {
   const nextOrder = (last?.sortOrder ?? -1) + 1;
 
   const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : null;
-  const values = itemsToRequests(items, { providerId: auth.providerId, clientId: engagement.clientId, engagementId: engagement.id }, now).map(
+  const values = itemsToRequests(
+    items,
+    { firmId: auth.firmId, clientId: engagement.clientId, engagementId: engagement.id },
+    now
+  ).map(
     (v, i) => ({
       ...v,
       sortOrder: nextOrder + i,
@@ -477,7 +481,7 @@ router.post('/:id/requests', async (req, res) => {
     link: '/portal',
   });
   await recordActivity({
-    providerId: auth.providerId,
+    firmId: auth.firmId,
     clientId: engagement.clientId,
     type: 'update',
     description: `requested ${created.length} document${created.length === 1 ? '' : 's'}`,

@@ -1,5 +1,6 @@
 import type {
   Activity,
+  Advisor,
   AuthState,
   Client,
   DashboardSummary,
@@ -8,6 +9,7 @@ import type {
   EngagementKind,
   EngagementTree,
   FailedJob,
+  Firm,
   InvitationInfo,
   Message,
   MfaEnrollment,
@@ -15,6 +17,7 @@ import type {
   NotificationList,
   OneTimeLink,
   OpsStatus,
+  QueueWho,
   RequestItem,
   RequestTemplate,
   Review,
@@ -22,6 +25,7 @@ import type {
   SearchResults,
   SessionStage,
   SessionSummary,
+  StaffInvitationInfo,
   TemplateItem,
   TemplateKind,
   UploadResult,
@@ -291,7 +295,7 @@ export const api = {
   clients: {
     list: () => request<Client[]>('/clients'),
     get: (id: string) => request<Client>(`/clients/${id}`),
-    create: (input: { name: string; email: string; accountId?: string; plan?: string; aum?: number | null; password?: string }) =>
+    create: (input: { name: string; email: string; accountId?: string; plan?: string; aum?: number | null; password?: string; assignedAdvisorId?: string | null }) =>
       request<Client>('/clients', {
         method: 'POST',
         body: JSON.stringify(input),
@@ -309,7 +313,34 @@ export const api = {
     resetMfa: (id: string) =>
       request<{ reset: boolean; sessionsRevoked: number }>(`/clients/${id}/mfa-reset`, { method: 'POST' }),
     deactivate: (id: string) => request<Client>(`/clients/${id}/deactivate`, { method: 'POST' }),
+    /** Gives the client to another advisor of the firm, or to nobody (null). */
+    assign: (id: string, advisorId: string | null) =>
+      request<Client>(`/clients/${id}/assign`, { method: 'POST', body: JSON.stringify({ advisorId }) }),
     reactivate: (id: string) => request<Client>(`/clients/${id}/reactivate`, { method: 'POST' }),
+  },
+
+  /** The firm and its advisors; reading is any advisor's, changing the team is an owner's. */
+  firm: {
+    get: () => request<Firm>('/firm'),
+    invite: (input: { name: string; email: string }) =>
+      request<OneTimeLink & { advisor: Advisor }>('/firm/advisors', { method: 'POST', body: JSON.stringify(input) }),
+    resendInvite: (id: string) => request<OneTimeLink>(`/firm/advisors/${id}/invitations`, { method: 'POST' }),
+    /** Ends their sessions; their clients go to `reassignTo`, or are left with the whole firm. */
+    deactivate: (id: string, reassignTo: string | null) =>
+      request<{ advisor: Advisor; clientsMoved: number }>(`/firm/advisors/${id}/deactivate`, {
+        method: 'POST',
+        body: JSON.stringify({ reassignTo }),
+      }),
+    reactivate: (id: string) => request<{ advisor: Advisor }>(`/firm/advisors/${id}/reactivate`, { method: 'POST' }),
+  },
+
+  staffInvitations: {
+    get: (token: string) => request<StaffInvitationInfo>(`/staff-invitations/${encodeURIComponent(token)}`),
+    accept: (token: string, password: string) =>
+      request<AuthState>(`/staff-invitations/${encodeURIComponent(token)}/accept`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
   },
 
   invitations: {
@@ -450,7 +481,8 @@ export const api = {
   },
 
   dashboard: {
-    get: (opts?: ReadOpts) => request<DashboardSummary>('/dashboard', { poll: opts?.poll }),
+    get: (opts?: ReadOpts & { who?: QueueWho }) =>
+      request<DashboardSummary>(opts?.who ? `/dashboard?who=${opts.who}` : '/dashboard', { poll: opts?.poll }),
   },
 
   search: {

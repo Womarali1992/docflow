@@ -78,6 +78,20 @@
       "when": 1788854762190,
       "tag": "0010_worker_heartbeats",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793208682560,
+      "tag": "0011_firms",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793219785606,
+      "tag": "0012_staff",
+      "breakpoints": true
     }
   ]
 }

@@ -449,8 +449,9 @@ describe('password hashing', () => {
       expect(Object.keys(c)).not.toContain('passwordHash');
       expect(Object.keys(c).sort()).toEqual(
         [
-          'accountId', 'aum', 'clientSince', 'createdAt', 'deactivatedAt', 'documentsCount', 'email', 'hasPassword', 'id',
-          'invitePendingUntil', 'lastActivity', 'name', 'pendingUpdates', 'plan', 'providerId', 'unreadMessages', 'updatedAt',
+          'accountId', 'assignedAdvisorId', 'assignedAdvisorName', 'aum', 'clientSince', 'createdAt', 'deactivatedAt',
+          'documentsCount', 'email', 'firmId', 'hasPassword', 'id', 'invitePendingUntil', 'lastActivity', 'name',
+          'pendingUpdates', 'plan', 'unreadMessages', 'updatedAt',
         ].sort()
       );
     }

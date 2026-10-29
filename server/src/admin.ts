@@ -2,7 +2,8 @@
  * Administrator CLI (plan: Security design → Provisioning). Runs on the server
  * console only — there is no admin role in the app.
  *
- *   npm run admin -- create-advisor --email a@firm.com --name "Ann Advisor" [--firm "Firm CPA"]
+ *   npm run admin -- create-advisor --email a@firm.com --name "Ann Advisor" [--firm "Firm CPA" | --join <firm id>]
+ *   npm run admin -- list-firms
  *   npm run admin -- reset-mfa      --kind provider|client --email …
  *   npm run admin -- reset-link     --kind provider|client --email …
  *   npm run admin -- deactivate     --kind provider|client --email …
@@ -16,13 +17,14 @@
  */
 import 'dotenv/config';
 import readline from 'node:readline';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db, pool, schema } from './db/client.js';
 import { hashPassword, isRefusedDemoPassword, passwordSchema } from './auth/passwords.js';
 import { createPasswordReset, resetLink } from './auth/resets.js';
 import { listLiveSessions, revokeAllSessions } from './auth/sessions.js';
 import { audit } from './db/audit.js';
 import { findClientByEmail, findProviderByEmail, providerEmailIsTaken } from './auth/email.js';
+import { createFirmWithOwner } from './db/firms.js';
 
 type Kind = 'provider' | 'client';
 type Flags = Record<string, string | true>;
@@ -102,7 +104,7 @@ interface Account {
   id: string;
   name: string;
   email: string;
-  providerId: string;
+  firmId: string;
   deactivatedAt: Date | null;
 }
 
@@ -110,11 +112,11 @@ async function findAccount(kind: Kind, email: string): Promise<Account> {
   if (kind === 'provider') {
     const p = await findProviderByEmail(email);
     if (!p) throw new UsageError(`No advisor with email ${email}`);
-    return { kind, id: p.id, name: p.name, email: p.email, providerId: p.id, deactivatedAt: p.deactivatedAt };
+    return { kind, id: p.id, name: p.name, email: p.email, firmId: p.firmId, deactivatedAt: p.deactivatedAt };
   }
   const c = await findClientByEmail(email);
   if (!c) throw new UsageError(`No client with email ${email}`);
-  return { kind, id: c.id, name: c.name, email: c.email, providerId: c.providerId, deactivatedAt: c.deactivatedAt };
+  return { kind, id: c.id, name: c.name, email: c.email, firmId: c.firmId, deactivatedAt: c.deactivatedAt };
 }
 
 /**
@@ -126,9 +128,9 @@ async function findAccount(kind: Kind, email: string): Promise<Account> {
  * a shell on the machine; that one is append-only and cannot be edited, which
  * is exactly what a "reset someone's two-step verification" line needs to be.
  */
-async function record(account: Pick<Account, 'kind' | 'id' | 'providerId'>, description: string) {
+async function record(account: Pick<Account, 'kind' | 'id' | 'firmId'>, description: string) {
   await db.insert(schema.activities).values({
-    providerId: account.providerId,
+    firmId: account.firmId,
     clientId: account.kind === 'client' ? account.id : null,
     type: 'update',
     description,
@@ -153,17 +155,30 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
     const email = need(flags, 'email');
     const name = need(flags, 'name');
     const firm = typeof flags.firm === 'string' ? flags.firm.trim() : null;
+    /* --join seats the account in an existing firm as an advisor (FIRM-BOOK-PLAN
+       F4); without it the account founds a firm of its own and owns it. */
+    const join = typeof flags.join === 'string' ? flags.join.trim() : null;
+    if (flags.join !== undefined && !join) throw new UsageError('--join needs a firm id (see list-firms)');
+    if (firm && join) throw new UsageError('Use --firm to found a new firm or --join to add to one, not both');
+    const [joined] = join
+      ? await db.select({ id: schema.firms.id, name: schema.firms.name }).from(schema.firms).where(eq(schema.firms.id, join)).catch(() => [])
+      : [];
+    if (join && !joined) throw new UsageError(`No firm with id ${join} (see list-firms)`);
     if (await providerEmailIsTaken(email)) throw new UsageError(`An advisor with email ${email} already exists`);
 
     const password = await passwordFromEnvOrPrompt();
     checkPassword(password);
     const passwordHash = await hashPassword(password);
-    const [created] = await db
-      .insert(schema.providers)
-      .values({ name, email, passwordHash, firmName: firm, role: 'advisor', passwordChangedAt: new Date() })
-      .returning({ id: schema.providers.id });
-    await record({ kind: 'provider', id: created.id, providerId: created.id }, `Administrator (CLI) created advisor account ${email}`);
-    console.log(`Created advisor ${name} <${email}>${firm ? ` at ${firm}` : ''}. The first sign-in sets up two-step verification.`);
+    const values = { name, email, passwordHash, passwordChangedAt: new Date() };
+    const created = joined
+      ? (await db.insert(schema.providers).values({ ...values, firmId: joined.id, role: 'advisor' }).returning())[0]
+      : await createFirmWithOwner({ ...values, firmName: firm });
+    await record(
+      { kind: 'provider', id: created.id, firmId: created.firmId },
+      `Administrator (CLI) created advisor account ${email}`
+    );
+    const at = joined?.name ?? firm;
+    console.log(`Created advisor ${name} <${email}>${at ? ` at ${at}` : ''}. The first sign-in sets up two-step verification.`);
   },
 
   async 'reset-mfa'(flags) {
@@ -223,17 +238,40 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'list-users'() {
-    const providers = await db.select().from(schema.providers);
+    const providers = await db
+      .select({
+        email: schema.providers.email,
+        name: schema.providers.name,
+        role: schema.providers.role,
+        deactivatedAt: schema.providers.deactivatedAt,
+        firmName: schema.firms.name,
+      })
+      .from(schema.providers)
+      .innerJoin(schema.firms, eq(schema.firms.id, schema.providers.firmId));
     const clients = await db.select().from(schema.clients);
     console.log(`${providers.length} advisor(s):`);
     for (const p of providers) {
-      console.log(`  ${p.email}  ${p.name}${p.firmName ? ` (${p.firmName})` : ''}  ${p.deactivatedAt ? 'DEACTIVATED' : 'active'}`);
+      console.log(`  ${p.email}  ${p.name} (${p.firmName}, ${p.role})  ${p.deactivatedAt ? 'DEACTIVATED' : 'active'}`);
     }
     console.log(`${clients.length} client(s):`);
     for (const c of clients) {
       const state = c.deactivatedAt ? 'DEACTIVATED' : c.passwordHash ? 'can sign in' : 'not invited / no password';
       console.log(`  ${c.email}  ${c.name}  ${state}`);
     }
+  },
+
+  async 'list-firms'() {
+    const firms = await db
+      .select({
+        id: schema.firms.id,
+        name: schema.firms.name,
+        advisors: sql<number>`(SELECT COUNT(*)::int FROM ${schema.providers} p WHERE p.firm_id = ${schema.firms}."id")`,
+        clients: sql<number>`(SELECT COUNT(*)::int FROM ${schema.clients} c WHERE c.firm_id = ${schema.firms}."id")`,
+      })
+      .from(schema.firms)
+      .orderBy(schema.firms.name);
+    console.log(`${firms.length} firm(s):`);
+    for (const f of firms) console.log(`  ${f.id}  ${f.name}  ${f.advisors} advisor(s), ${f.clients} client(s)`);
   },
 
   async unlock() {

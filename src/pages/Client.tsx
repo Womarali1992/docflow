@@ -12,6 +12,7 @@ import { SkeletonRows } from '@/components/docflow/Skeleton';
 import { isMissing } from '@/utils/errors';
 import LoadError from '@/components/docflow/LoadError';
 import { EditClientDialog } from '@/components/docflow/EditDetailsDialogs';
+import AssignAdvisor from '@/components/docflow/AssignAdvisor';
 
 /**
  * One client's page: their engagements, what each is waiting on, the thread,
@@ -99,6 +100,7 @@ const Client: React.FC = () => {
               <span>{client.email}</span>
               <span className="df-dot-sep" />
               <span className="df-live">Active {formatRelative(client.lastActivity)}</span>
+              <AssignAdvisor client={client} />
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useClients } from '@/api/queries';
+import { activeAdvisors, useClients, useFirm } from '@/api/queries';
+import { useAuth } from '@/context/AuthContext';
 import type { Client } from '@/api/types';
 import { ACCESS_LABEL, accessState, type AccessState } from '@/utils/clientAccess';
 import { downloadCsv } from '@/utils/csv';
@@ -17,10 +18,16 @@ import LoadError from '@/components/docflow/LoadError';
  * access is derived from the account fields rather than guessed. An advisor
  * should be able to see, in one pass down the page, who is waiting on them and
  * who has never been able to sign in.
+ *
+ * Once a firm has a second advisor (FIRM-BOOK-PLAN F5) each row says whose
+ * client it is, and Mine / Everyone / Unassigned narrows the list in the
+ * browser: the endpoint already returns the whole book. "Mine" includes the
+ * unassigned, because until somebody takes them they are everybody's.
  */
 
 type Sort = 'activity' | 'name' | 'attention';
 type Filter = 'all' | 'attention' | 'no_access';
+type Who = 'everyone' | 'mine' | 'unassigned';
 
 const SORT_LABEL: Record<Sort, string> = {
   activity: 'Recent activity',
@@ -46,7 +53,17 @@ const lacksAccess = (state: AccessState) => state === 'not_invited' || state ===
 
 const Clients: React.FC = () => {
   const navigate = useNavigate();
-  const { data: clients = [], isPending, error, refetch } = useClients();
+  const { data: book = [], isPending, error, refetch } = useClients();
+  const { me } = useAuth();
+  const { data: firm } = useFirm();
+  // One advisor is the whole firm: there is nobody else's client to tell apart.
+  const shared = activeAdvisors(firm).length > 1;
+  const [who, setWho] = useState<Who>('everyone');
+  const clients = useMemo(() => {
+    if (!shared || who === 'everyone') return book;
+    if (who === 'unassigned') return book.filter((c) => c.assignedAdvisorId === null);
+    return book.filter((c) => c.assignedAdvisorId === null || c.assignedAdvisorId === me?.id);
+  }, [book, shared, who, me?.id]);
 
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<Sort>('activity');
@@ -82,11 +99,12 @@ const Clients: React.FC = () => {
   const exportCsv = () =>
     downloadCsv(
       'clients',
-      ['Name', 'Email', 'Account', 'Portal access', 'Pending', 'Unread', 'Documents', 'Last activity'],
+      ['Name', 'Email', 'Account', 'Advisor', 'Portal access', 'Pending', 'Unread', 'Documents', 'Last activity'],
       visible.map((c) => [
         c.name,
         c.email,
         c.accountId,
+        c.assignedAdvisorName ?? '',
         ACCESS_LABEL[accessState(c)].label,
         c.pendingUpdates,
         c.unreadMessages,
@@ -132,6 +150,13 @@ const Clients: React.FC = () => {
             </button>
           </div>
           <div className="df-right" style={{ gap: 6 }}>
+            {shared && (
+              <div className="df-seg" role="tablist" aria-label="Whose clients">
+                <button className={who === 'mine' ? 'df-active' : ''} onClick={() => setWho('mine')}>Mine</button>
+                <button className={who === 'everyone' ? 'df-active' : ''} onClick={() => setWho('everyone')}>Everyone</button>
+                <button className={who === 'unassigned' ? 'df-active' : ''} onClick={() => setWho('unassigned')}>Unassigned</button>
+              </div>
+            )}
             <input
               className="df-input df-sm"
               placeholder="Search name, email or account…"
@@ -151,10 +176,10 @@ const Clients: React.FC = () => {
         <div className="df-list">
           {isPending && <SkeletonRows rows={5} label="Loading clients" />}
           {error && !isPending && <LoadError what="your clients" onRetry={() => refetch()} />}
-          {!isPending && !error && clients.length === 0 && (
+          {!isPending && !error && book.length === 0 && (
             <div className="df-empty">No clients yet. “New client” adds one and hands you an invitation link.</div>
           )}
-          {!isPending && !error && clients.length > 0 && visible.length === 0 && (
+          {!isPending && !error && book.length > 0 && visible.length === 0 && (
             <div className="df-empty">No client matches that.</div>
           )}
 
@@ -176,9 +201,11 @@ const Clients: React.FC = () => {
                   <div className="df-name">{c.name}</div>
                   <div className="df-meta">
                     {c.email} · <span className="df-mono">{c.accountId}</span> · {c.documentsCount} document{c.documentsCount === 1 ? '' : 's'} · active {formatRelative(c.lastActivity)}
+                    {shared && c.assignedAdvisorName ? ` · ${c.assignedAdvisorName}` : ''}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {shared && !c.assignedAdvisorId && <span className="df-pill df-plain">Unassigned</span>}
                   {access !== 'active' && <span className={'df-pill ' + pill.cls}>{pill.label}</span>}
                   {c.pendingUpdates > 0 && <span className="df-pill df-warn">{c.pendingUpdates} pending</span>}
                   {c.unreadMessages > 0 && <span className="df-pill df-accent">{c.unreadMessages} unread</span>}

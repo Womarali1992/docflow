@@ -290,7 +290,7 @@ describe('the daily problems digest', () => {
 
     const first = await runOpsDigest({ today: '2026-09-08' });
     expect(first.problems.length).toBeGreaterThan(0);
-    // Two advisors in the fixture; both are on call, neither is deactivated.
+    // Two owners in the fixture; both are on call, neither is deactivated.
     expect(first.recipients).toBe(2);
     expect(first.emailsQueued).toBe(2);
 
@@ -299,6 +299,16 @@ describe('the daily problems digest', () => {
     expect(again.emailsQueued).toBe(0);
     const mail = await db.select().from(schema.jobs).where(sql`${schema.jobs.type} = 'email'`);
     expect(mail).toHaveLength(2);
+  });
+
+  it('goes to owners only: staff did not ask to hear about backups', async () => {
+    await beat('worker-1', new Date(Date.now() - 60 * 60_000));
+    // The fixture's colleague1 is an advisor in provider 1's firm, not an owner.
+
+    const result = await runOpsDigest({ today: '2026-09-08' });
+    expect(result.recipients).toBe(2);
+    const mail = await db.select().from(schema.jobs).where(sql`${schema.jobs.type} = 'email'`);
+    expect(mail.map((j) => (j.payload as { to: string }).to).sort()).toEqual([fx.provider1.email, fx.provider2.email].sort());
   });
 
   it('leaves a deactivated advisor off the list', async () => {

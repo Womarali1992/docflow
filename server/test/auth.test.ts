@@ -24,6 +24,11 @@ describe('auth', () => {
       expect(on.body).toMatchObject({ stage: 'mfa_enroll', me: { kind: 'provider', email: body.email, firmName: body.firmName } });
       expect(on.body.me).not.toHaveProperty('passwordHash');
       expect(on.headers['set-cookie']).toBeDefined();
+      // The walk-in founds a firm of their own and owns it.
+      const [p] = await db.select().from(schema.providers).where(eq(schema.providers.id, on.body.me.id));
+      const [firm] = await db.select().from(schema.firms).where(eq(schema.firms.id, p.firmId));
+      expect(firm.name).toBe('Walk-in CPA');
+      expect(p.role).toBe('owner');
 
       const duplicate = await request(app).post('/api/auth/signup-provider').send(body);
       expect(duplicate.status).toBe(409);

@@ -14,20 +14,25 @@
 | Step | Commit | Status | Id | Notes |
 |---|---|---|---|---|
 | F0 | `docs(plan): firm book + assignment` | DONE | | go-ahead 2026-10-28; the five questions answered (see the end) |
-| F0b | `fix(auth): a client signs in whatever case they type` | DONE | | 2026-10-29; clients by `email_normalized`, advisors by `lower(trim(email))` (exact spelling breaks a case-only tie); padded addresses trimmed by the schema; reset link goes to the address on file; admin CLI and advisor signup follow. Server 831 / 24 files |
-| F1 | `feat(schema): a firm owns the book (expand)` | pending | | migration `0011_firms`, additive + backfill |
-| F2 | `feat(notify): advisor notices go to the assigned advisor, or the whole firm` | pending | | no schema change |
-| F3 | `feat(tenant): the firm is the tenant` | pending | | every scope check; authz matrix gains `colleague1` |
-| F4 | `feat(team): an owner invites advisors into the firm` | pending | | migration `0012_staff` |
-| F5 | `feat(clients): every client has an advisor, and can be reassigned` | pending | | no schema change |
-| F6 | `feat(queue): mine or everyone` | pending | | no schema change |
+| F0b | `fix(auth): a client signs in whatever case they type` | DONE | `3253dca` | 2026-10-29; clients by `email_normalized`, advisors by `lower(trim(email))` (exact spelling breaks a case-only tie); padded addresses trimmed by the schema; reset link goes to the address on file; admin CLI and advisor signup follow. Server 831 / 24 files |
+| F1 | `feat(schema): a firm owns the book (expand)` | DONE (one commit with F1–F6, F8) | | 2026-10-29; migration `0011_firms`, additive + backfill. Tenant `firm_id` cascades from `firms` like `provider_id` does from `providers`; `providers.firm_id` does not. New advisors (CLI, signup, seed, fixtures) found a firm through `createFirmWithOwner` and own it. Reads of the now-nullable `provider_id` carry a `!` until F2/F3 replace them. `firms` joins the backup manifest's table count. New `test/firms.test.ts`. Server 833 / 25 files. Dev DB migrated; all three checks 0 (1 firm "Meridian CPA", its advisor now owner) |
+| F2 | `feat(notify): advisor notices go to the assigned advisor, or the whole firm` | DONE (one commit with F1–F6, F8) | | 2026-10-29; `advisorsFor` / `notifyAdvisors` in `notify.ts`, the six sites and demo's two moved. Firm name from `firms.name` (new `firmSignOff` in `db/firms.ts` for emails; `providerMe`/`clientMe` join it; login and signup answer through them). A client's `providerName` is the assigned active advisor, else the firm. Invite page names the inviter (`invitations.created_by_id`). Digest to owners only. `admin list-users` shows firm and role. Tests: 4 in `notices.test.ts`, 2 in `firms.test.ts`, 1 in `ops.test.ts` (helper `insertColleague`) |
+| F3 | `feat(tenant): the firm is the tenant` | DONE (one commit with F1–F6, F8) | | 2026-10-29; every scope check and list by `firm_id`; `providerId` gone from `AuthPayload`, serialized rows carry `firmId`; `provider_id` is written by nothing and read only by migrations. Fixture gains `colleague1` (advisor in firm 1, no clients), a 7th actor in the matrix with provider 1's answers. Client DTO `assignedAdvisorId/Name`. Full suite 915 / 922: the 7 were tests naming `provider1` alone, the fixture's table counts and a CLI test at its 20 s limit, all fixed (matrix 578 / 578) |
+| F4 | `feat(team): an owner invites advisors into the firm` | DONE (one commit with F1–F6, F8) | | 2026-10-29; migration `0012_staff` (`providers.password_hash` nullable, `staff_invitations`); `auth/staff-invitations.ts`, `routes/firm.ts`, `routes/staff-invitations.ts`, mail template `staff_invitation`, `providerMe.role`. **Deviation:** `GET /api/firm` is readable by every advisor of the firm (F5's picker and F6's toggle need the team); every change is owner-only. A firm keeps an owner because an owner cannot deactivate themselves. One rule for who looks after a client, `isEffectiveAdvisor` in `db/firms.ts` (same firm, active, has joined), used by notices, portal, directory and queue. No password reset for an advisor who has not joined. Admin CLI `create-advisor --join <firm id>`, `list-firms`. Frontend `FirmCard` in Settings, `/staff-invite/:token`. Dev DB migrated |
+| F5 | `feat(clients): every client has an advisor, and can be reassigned` | DONE (one commit with F1–F6, F8) | | 2026-10-29; `POST /clients/:id/assign`, `POST /clients` takes `assignedAdvisorId`; `workflow/assignment.ts` (audit `client.reassigned` in the transaction, activity line, in-app `client.assigned` notice). Frontend: Advisor on the client page, Mine / Everyone / Unassigned on the directory, Advisor in New client and the CSV |
+| F6 | `feat(queue): mine or everyone` | DONE (one commit with F1–F6, F8) | | 2026-10-29; `GET /dashboard?who=mine\|all` (default all, 400 `bad_who`), rows carry `advisorId/advisorName`. Frontend `useQueueWho` + `WhoToggle` on the queue, Work and Review; defaults to mine once the firm has two advisors who have joined |
 | F7 | `feat(clients): a client's address is unique within the firm` | **PARKED** (Q1) | | until a second firm exists on this install; its sign-in case fix moved to F0b |
-| F8 | `chore(seed): a two-advisor firm to demo` | pending | | |
+| F8 | `chore(seed): a two-advisor firm to demo` | DONE (one commit with F1–F6, F8) | | 2026-10-29; seed adds James Okafor and splits the clients as planned (new clients only); demo picks the firm by the seed owner's email and writes Michael Chen's reassignment once. Dev DB reseeded: James added, its clients kept their advisor |
 | F9 | `chore(db): contract the provider-as-tenant columns` | **PARKED** (Q5), only on your word | | destructive migration `0014` (`0013` if F7 stays parked) |
 
 Baseline before F1: server 818 tests at `0000029`; 831 / 24 files with F0b on top of `2c4e365`
 (2026-10-29, this run also covers the withdraw commit). Frontend: typecheck clean, eslint 0 errors / 9 warnings, vitest
 55 / 8 files, build clean.
+
+F1–F6 and F8 were built in one working tree and land as one commit, because the steps edit the
+same files and an in-between commit would never have been tested on its own. Final run
+(2026-10-29): server 969 / 969, 26 files (824 s, alone on `docflow_test`), both typechecks clean;
+frontend typecheck clean, eslint 0 errors / 9 warnings, vitest 55 / 8 files, build clean.
 
 Every step runs the full server suite **alone** (`npx vitest run` in `server/`, about 11 min,
 nothing else touching `docflow_test`) and the four frontend gates before its commit.

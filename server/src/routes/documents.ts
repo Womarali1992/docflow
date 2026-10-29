@@ -31,7 +31,7 @@ import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
 import { contentDisposition } from '../files/filename.js';
 import { serializeDocument, serializeReview } from './serialize.js';
-import { notify } from '../notify.js';
+import { notify, notifyAdvisors } from '../notify.js';
 import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, isId, notFound } from './scope.js';
 import { decidableVersion, lockDocument, refusalBody, type Tx } from '../workflow/publish.js';
 import { attachmentsForRequest } from '../workflow/attachments.js';
@@ -70,7 +70,7 @@ router.get('/', async (req, res) => {
 
   const conditions =
     auth.kind === 'provider'
-      ? [eq(schema.documents.providerId, auth.providerId)]
+      ? [eq(schema.documents.firmId, auth.firmId)]
       : [
           eq(schema.documents.clientId, auth.sub),
           // Deliverables appear only once shared; everything else is theirs already.
@@ -210,7 +210,7 @@ router.post('/:id/share', async (req, res) => {
   });
   await auditRequest(req, { action: 'document.shared', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
   await recordActivity({
-    providerId: doc.providerId,
+    firmId: doc.firmId,
     clientId: doc.clientId,
     type: 'document',
     description: `shared ${updated.displayName ?? updated.name}`,
@@ -366,16 +366,14 @@ router.post('/:id/withdraw', async (req, res) => {
   }
   if (outcome.changed) {
     const name = outcome.document.displayName ?? outcome.document.name;
-    await notify({
-      userKind: 'provider',
-      userId: outcome.document.providerId,
+    await notifyAdvisors(outcome.document.clientId, {
       type: 'upload.withdrawn',
       title: `${auth.name} withdrew ${name}`,
       body: 'They sent it by mistake. It is archived on their file.',
       link: outcome.document.engagementId ? `/engagements/${outcome.document.engagementId}` : null,
     });
     await recordActivity({
-      providerId: outcome.document.providerId,
+      firmId: outcome.document.firmId,
       clientId: outcome.document.clientId,
       type: 'document',
       description: `withdrew: ${name}`,
@@ -484,7 +482,7 @@ router.post('/', async (req, res) => {
 
   if (auth.kind === 'provider') {
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, data.clientId));
-    if (!c || c.providerId !== auth.providerId) return notFound(res);
+    if (!c || c.firmId !== auth.firmId) return notFound(res);
   } else if (data.clientId !== auth.sub) {
     return notFound(res);
   }
@@ -501,7 +499,7 @@ router.post('/', async (req, res) => {
     .insert(schema.documents)
     .values({
       clientId: data.clientId,
-      providerId: auth.providerId,
+      firmId: auth.firmId,
       name: data.name,
       displayName: data.name,
       category,
@@ -516,7 +514,7 @@ router.post('/', async (req, res) => {
     .returning();
 
   await recordActivity({
-    providerId: auth.providerId,
+    firmId: auth.firmId,
     clientId: doc.clientId,
     type: 'document',
     description: `added ${doc.name}`,

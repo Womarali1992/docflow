@@ -27,9 +27,10 @@
  * failed is a small problem; a 500 on "add items" because the notice failed is
  * a bigger one.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { db, schema } from './db/client.js';
 import { appBaseUrl } from './auth/tokens.js';
+import { isEffectiveAdvisor } from './db/firms.js';
 import { isMailConfigured, queueEmail, type MailTemplate } from './jobs/mail.js';
 
 export type NotificationType =
@@ -49,7 +50,9 @@ export type NotificationType =
   /* The scanner never answered for one file; it needs a person (System status). */
   | 'scan.stuck'
   | 'request.not_applicable'
-  | 'message.new';
+  | 'message.new'
+  /* Another advisor gave you a client (F5). In-app only: nothing has arrived yet. */
+  | 'client.assigned';
 
 export interface NotificationInput {
   userKind: 'provider' | 'client';
@@ -118,20 +121,21 @@ async function recipientOf(input: NotificationInput): Promise<{ to: string; firm
         email: schema.clients.email,
         passwordHash: schema.clients.passwordHash,
         deactivatedAt: schema.clients.deactivatedAt,
-        firmName: schema.providers.firmName,
+        firmName: schema.firms.name,
       })
       .from(schema.clients)
-      .innerJoin(schema.providers, eq(schema.providers.id, schema.clients.providerId))
+      .innerJoin(schema.firms, eq(schema.firms.id, schema.clients.firmId))
       .where(eq(schema.clients.id, input.userId));
     if (!row || row.deactivatedAt || !row.passwordHash) return null;
-    return { to: row.email, firmName: row.firmName ?? undefined };
+    return { to: row.email, firmName: row.firmName };
   }
   const [row] = await db
-    .select({ email: schema.providers.email, deactivatedAt: schema.providers.deactivatedAt, firmName: schema.providers.firmName })
+    .select({ email: schema.providers.email, deactivatedAt: schema.providers.deactivatedAt, firmName: schema.firms.name })
     .from(schema.providers)
+    .innerJoin(schema.firms, eq(schema.firms.id, schema.providers.firmId))
     .where(eq(schema.providers.id, input.userId));
   if (!row || row.deactivatedAt) return null;
-  return { to: row.email, firmName: row.firmName ?? undefined };
+  return { to: row.email, firmName: row.firmName };
 }
 
 async function emailFor(input: NotificationInput, now: Date): Promise<void> {
@@ -172,6 +176,52 @@ export async function notify(input: NotificationInput, options: NotifyOptions = 
   } catch (err) {
     console.error('[notify] could not queue the email for a notification:', err instanceof Error ? err.message : err);
   }
+}
+
+/**
+ * Who hears about a client's upload, message or answer (FIRM-BOOK-PLAN F2).
+ *
+ * The advisor assigned to the client, while that account can still sign in.
+ * Otherwise every advisor in the client's firm who can: an unassigned client, or
+ * one whose advisor has left, is never shouted into a void. Colleagues are not
+ * told about clients who are someone else's; covering for one is what the
+ * queue's "everyone" view is for.
+ */
+export async function advisorsFor(clientId: string): Promise<string[]> {
+  const [client] = await db
+    .select({ firmId: schema.clients.firmId, assignedId: schema.providers.id })
+    .from(schema.clients)
+    .leftJoin(schema.providers, isEffectiveAdvisor)
+    .where(eq(schema.clients.id, clientId));
+  if (!client) return [];
+  if (client.assignedId) return [client.assignedId];
+  const firm = await db
+    .select({ id: schema.providers.id })
+    .from(schema.providers)
+    .where(
+      and(eq(schema.providers.firmId, client.firmId), isNull(schema.providers.deactivatedAt), isNotNull(schema.providers.passwordHash))
+    );
+  return firm.map((p) => p.id);
+}
+
+/**
+ * `notify()` for each of the client's advisors (`advisorsFor`). One call per
+ * recipient, so each gets their own in-app row and their own coalesced email
+ * under their own key.
+ */
+export async function notifyAdvisors(
+  clientId: string,
+  notice: Omit<NotificationInput, 'userKind' | 'userId'>,
+  options: NotifyOptions = {}
+): Promise<void> {
+  let recipients: string[];
+  try {
+    recipients = await advisorsFor(clientId);
+  } catch (err) {
+    console.error('[notify] could not find who to tell:', err instanceof Error ? err.message : err);
+    return;
+  }
+  for (const userId of recipients) await notify({ ...notice, userKind: 'provider', userId }, options);
 }
 
 /** One insert for a batch; same swallow-your-own-errors rule. In-app only — its one caller emails for itself. */

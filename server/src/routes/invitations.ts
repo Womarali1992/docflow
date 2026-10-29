@@ -41,11 +41,10 @@ async function resolve(token: string): Promise<{ ok: true; value: Resolved } | {
   const [client] = await db.select().from(schema.clients).where(eq(schema.clients.id, invitation.clientId));
   // A client deactivated after the link went out: the link is simply not valid any more.
   if (!client || client.deactivatedAt) return { ok: false, ...STATE_RESPONSES.missing };
-  const [provider] = await db
-    .select({ name: schema.providers.name, firmName: schema.providers.firmName })
-    .from(schema.providers)
-    .where(eq(schema.providers.id, client.providerId));
-  return { ok: true, value: { invitation, client, providerName: provider?.name ?? '', firmName: provider?.firmName ?? null } };
+  // Who sent the link: in a shared book that need not be the client's own advisor.
+  const [inviter] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, invitation.createdById));
+  const [firm] = await db.select({ name: schema.firms.name }).from(schema.firms).where(eq(schema.firms.id, client.firmId));
+  return { ok: true, value: { invitation, client, providerName: inviter?.name ?? '', firmName: firm?.name ?? null } };
 }
 
 /* What the invite page shows before asking for a password: who invited whom. */

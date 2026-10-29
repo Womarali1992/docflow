@@ -80,3 +80,19 @@ export function useDeactivateClient() {
 export function useReactivateClient() {
   return useClientMutation<string, Client>((id) => api.clients.reactivate(id), (id) => id);
 }
+
+/** Another advisor of the firm looks after this client now; the activity line and their notice follow. */
+export function useAssignClient() {
+  const queryClient = useQueryClient();
+  const scope = useScope();
+  return useMutation({
+    mutationFn: (input: { id: string; advisorId: string | null }) => api.clients.assign(input.id, input.advisorId),
+    onSuccess: (_result, input) => {
+      queryClient.invalidateQueries({ queryKey: keys.clients(scope) });
+      queryClient.invalidateQueries({ queryKey: keys.client(scope, input.id) });
+      queryClient.invalidateQueries({ queryKey: keys.firm(scope) });
+      queryClient.invalidateQueries({ queryKey: keys.dashboard(scope) });
+      queryClient.invalidateQueries({ queryKey: keys.activities(scope).slice(0, 3) });
+    },
+  });
+}

@@ -9,7 +9,9 @@ import { createInvitation, dropUnusedInvitations, invitationLink } from '../auth
 import { hashPassword, passwordSchema } from '../auth/passwords.js';
 import { normalizeEmail } from '../auth/email.js';
 import { createPasswordReset, resetLink } from '../auth/resets.js';
-import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
+import { enqueueEmail } from '../jobs/mail.js';
+import { firmSignOff } from '../db/firms.js';
+import { activeAdvisorInFirm, announceReassignments, reassignClients } from '../workflow/assignment.js';
 import { NAME_MAX } from '../security/limits.js';
 import { auditRequest, hashedEmail } from '../db/audit.js';
 
@@ -27,7 +29,20 @@ router.use(authenticate);
 function clientColumns(viewerKind: 'provider' | 'client') {
   return {
     id: schema.clients.id,
-    providerId: schema.clients.providerId,
+    firmId: schema.clients.firmId,
+    /* Who looks after the client, as `advisorsFor` sees it (`isEffectiveAdvisor`):
+       an assignment to an advisor who has since been deactivated reads as none,
+       because the firm is who hears about this client now. */
+    assignedAdvisorId: sql<string | null>`(
+      SELECT p.id FROM ${schema.providers} p
+      WHERE p.id = ${schema.clients}."assigned_provider_id" AND p.firm_id = ${schema.clients}."firm_id"
+        AND p.deactivated_at IS NULL AND p.password_hash IS NOT NULL
+    )`.as('assigned_advisor_id'),
+    assignedAdvisorName: sql<string | null>`(
+      SELECT p.name FROM ${schema.providers} p
+      WHERE p.id = ${schema.clients}."assigned_provider_id" AND p.firm_id = ${schema.clients}."firm_id"
+        AND p.deactivated_at IS NULL AND p.password_hash IS NOT NULL
+    )`.as('assigned_advisor_name'),
     name: schema.clients.name,
     email: schema.clients.email,
     accountId: schema.clients.accountId,
@@ -78,10 +93,10 @@ async function loadClientRow(id: string, viewerKind: 'provider' | 'client') {
   return client ?? null;
 }
 
-/** The advisor's own client, or null (the caller answers 404 — out-of-scope ids look missing). */
+/** A client of the advisor's firm, or null (the caller answers 404 — out-of-scope ids look missing). */
 async function ownClient(req: Request, id: string) {
   const [existing] = await db.select().from(schema.clients).where(eq(schema.clients.id, id));
-  if (!existing || existing.providerId !== req.auth!.providerId) return null;
+  if (!existing || existing.firmId !== req.auth!.firmId) return null;
   return existing;
 }
 
@@ -91,7 +106,7 @@ router.get('/', requireProvider, async (req, res) => {
   const list = await db
     .select(clientColumns('provider'))
     .from(schema.clients)
-    .where(eq(schema.clients.providerId, req.auth!.providerId));
+    .where(eq(schema.clients.firmId, req.auth!.firmId));
   res.json(list);
 });
 
@@ -100,9 +115,9 @@ router.get('/:id', async (req, res) => {
   const client = await loadClientRow(req.params.id, auth.kind);
   if (!client) return notFound(res);
 
-  // Provider can only see their own clients; client can only see themselves.
+  // An advisor sees their firm's clients; a client sees only themselves.
   // Out-of-scope ids are indistinguishable from missing ones.
-  if (auth.kind === 'provider' && client.providerId !== auth.providerId) return notFound(res);
+  if (auth.kind === 'provider' && client.firmId !== auth.firmId) return notFound(res);
   if (auth.kind === 'client' && client.id !== auth.sub) return notFound(res);
   res.json(client);
 });
@@ -114,7 +129,12 @@ const createClientSchema = z.object({
   plan: z.string().optional(),
   aum: z.number().nonnegative().nullable().optional(),
   password: passwordSchema.optional(),
+  /* Who looks after them; the advisor adding the client unless said otherwise, null for nobody yet. */
+  assignedAdvisorId: z.string().uuid().nullable().optional(),
 });
+
+/* Says nothing about other firms: an id from elsewhere is refused exactly like a made-up one. */
+const NOT_IN_FIRM = { error: 'Choose an active advisor of this firm.', code: 'not_in_firm' };
 
 /**
  * One client per address, the same rule `clients_email_normalized_key` enforces
@@ -146,6 +166,10 @@ router.post('/', requireProvider, async (req, res) => {
   const parsed = createClientSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
   const { name, email, accountId, plan, aum, password } = parsed.data;
+  const assignedProviderId = parsed.data.assignedAdvisorId === undefined ? req.auth!.sub : parsed.data.assignedAdvisorId;
+  if (assignedProviderId && !(await activeAdvisorInFirm(req.auth!.firmId, assignedProviderId))) {
+    return res.status(400).json(NOT_IN_FIRM);
+  }
 
   if (await emailIsTaken(email)) return res.status(409).json(EMAIL_TAKEN);
 
@@ -155,7 +179,8 @@ router.post('/', requireProvider, async (req, res) => {
     [created] = await db
       .insert(schema.clients)
       .values({
-        providerId: req.auth!.providerId,
+        firmId: req.auth!.firmId,
+        assignedProviderId,
         name,
         email,
         emailNormalized: normalizeEmail(email),
@@ -240,17 +265,6 @@ router.patch('/:id', requireProvider, async (req, res) => {
 
 const DEACTIVATED = { error: 'This client is deactivated. Reactivate them first.', code: 'deactivated' };
 
-/**
- * For the email sign-off, so a notice says who it is from without naming anything
- * else. Skipped entirely while no mail server is configured — the whole pilot runs
- * that way today, and this would be a query per invitation for nothing.
- */
-async function firmNameFor(providerId: string): Promise<string | undefined> {
-  if (!isMailConfigured()) return undefined;
-  const [p] = await db.select({ firmName: schema.providers.firmName, name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, providerId));
-  return p?.firmName ?? p?.name ?? undefined;
-}
-
 /* A fresh invitation link (replaces any unused one). The email is queued when a mail
    server is configured; the link comes back either way so onboarding never depends on it. */
 router.post('/:id/invitations', requireProvider, async (req, res) => {
@@ -271,7 +285,7 @@ router.post('/:id/invitations', requireProvider, async (req, res) => {
     template: 'invitation',
     to: existing.email,
     link,
-    firmName: await firmNameFor(req.auth!.providerId),
+    firmName: await firmSignOff(req.auth!.firmId),
   });
   res.status(201).json({ link, expiresAt, emailQueued });
 });
@@ -291,7 +305,7 @@ router.post('/:id/password-reset', requireProvider, async (req, res) => {
     template: 'password_reset',
     to: existing.email,
     link,
-    firmName: await firmNameFor(req.auth!.providerId),
+    firmName: await firmSignOff(req.auth!.firmId),
   });
   res.json({ link, expiresAt, emailQueued });
 });
@@ -349,6 +363,30 @@ router.post('/:id/deactivate', requireProvider, async (req, res) => {
     clientId: existing.id,
     meta: { sessionsRevoked: revoked },
   });
+  res.json(await loadClientRow(existing.id, 'provider'));
+});
+
+const assignSchema = z.object({ advisorId: z.string().uuid().nullable() });
+
+/**
+ * Gives the client to another advisor of the firm, or to nobody (FIRM-BOOK-PLAN
+ * F5). Any advisor of the firm may: the book is shared, and every move is
+ * audited and shows on the client's activity. Assigning the advisor they
+ * already have is a 200 that records nothing, because nothing happened.
+ */
+router.post('/:id/assign', requireProvider, async (req, res) => {
+  const auth = req.auth!;
+  const parsed = assignSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
+  const existing = await ownClient(req, req.params.id);
+  if (!existing) return notFound(res);
+  const { advisorId } = parsed.data;
+  if (advisorId && !(await activeAdvisorInFirm(auth.firmId, advisorId))) return res.status(400).json(NOT_IN_FIRM);
+
+  const moves = await db.transaction((tx) =>
+    reassignClients(tx, req, { firmId: auth.firmId, clientIds: [existing.id], toId: advisorId, reason: 'assigned' })
+  );
+  await announceReassignments(moves, { firmId: auth.firmId, kind: 'provider', id: auth.sub, name: auth.name });
   res.json(await loadClientRow(existing.id, 'provider'));
 });
 

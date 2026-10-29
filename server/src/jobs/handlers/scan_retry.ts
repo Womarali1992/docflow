@@ -30,7 +30,7 @@ import { absPathForKey, discardStaged } from '../../files/store.js';
 import { scanFile, scanRequired } from '../../files/scan.js';
 import { audit } from '../../db/audit.js';
 import { lockDocument, publishVersion, quarantineVersion } from '../../workflow/publish.js';
-import { notify } from '../../notify.js';
+import { notify, notifyAdvisors } from '../../notify.js';
 import type { Document } from '../../db/schema.js';
 
 /** What the two notices need to say which file they mean. */
@@ -76,9 +76,7 @@ export async function scanRetryJob(job: Job): Promise<void> {
        a person does. */
     const file = job.attempts >= job.maxAttempts ? await whoseFile(document) : null;
     if (file && document) {
-      await notify({
-        userKind: 'provider',
-        userId: document.providerId,
+      await notifyAdvisors(document.clientId, {
         type: 'scan.stuck',
         title: `${file.clientName}’s ${file.name} could not be checked`,
         body: 'The virus scanner did not answer. Retry it from System status once the scanner is running.',
@@ -118,9 +116,7 @@ export async function scanRetryJob(job: Job): Promise<void> {
         body: 'It did not pass the security check and was removed. Please send it again, ideally from a different device.',
         link: '/portal',
       });
-      await notify({
-        userKind: 'provider',
-        userId: document.providerId,
+      await notifyAdvisors(document.clientId, {
         type: 'upload.quarantined',
         title: `${file.clientName}’s ${file.name} failed the virus check`,
         body: 'The file was removed and the client has been asked to send it again.',

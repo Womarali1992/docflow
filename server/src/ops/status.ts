@@ -89,11 +89,11 @@ export interface OpsStatus {
 }
 
 /** Free and total bytes on the volume that holds the documents. */
-async function storage(providerId: string | null): Promise<StorageStatus> {
+async function storage(firmId: string | null): Promise<StorageStatus> {
   const root = dataRoot();
   const [top, nearQuota] = await Promise.all([
-    providerId ? topClientsByStorage(providerId) : Promise.resolve([]),
-    clientsNearQuota(providerId),
+    firmId ? topClientsByStorage(firmId) : Promise.resolve([]),
+    clientsNearQuota(firmId),
   ]);
   const shared = { perClientQuotaBytes: maxClientStorageBytes(), topClients: top, clientsNearQuota: nearQuota };
   try {
@@ -248,17 +248,17 @@ async function migrations(): Promise<ReleaseStatus['migrations']> {
 /**
  * Everything the panel shows, in one read.
  *
- * `providerId` scopes the per-client storage rows to one advisor's own clients.
- * The digest has no advisor to scope to and passes none, which is why every
+ * `firmId` scopes the per-client storage rows to the asking advisor's firm.
+ * The digest has no firm to scope to and passes none, which is why every
  * other field here is about the machine rather than about a tenant.
  */
-export async function collectOpsStatus(providerId: string | null = null): Promise<OpsStatus> {
+export async function collectOpsStatus(firmId: string | null = null): Promise<OpsStatus> {
   const [jobs, failedList, worker, scan, disk, backup, live, migrationState] = await Promise.all([
     queueStats(),
     failedJobs(),
     workerStatus(),
     scanner(),
-    storage(providerId),
+    storage(firmId),
     backups(),
     health(),
     migrations(),

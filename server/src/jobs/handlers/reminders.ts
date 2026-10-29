@@ -46,8 +46,7 @@ interface DueRow {
   requestId: string;
   clientId: string;
   clientEmail: string;
-  providerId: string;
-  firmName: string | null;
+  firmName: string;
   dueDate: Date | null;
 }
 
@@ -69,15 +68,14 @@ export async function runReminders(options: ReminderOptions = {}): Promise<Remin
       clientId: schema.requests.clientId,
       clientEmail: schema.clients.email,
       deactivatedAt: schema.clients.deactivatedAt,
-      providerId: schema.requests.providerId,
-      firmName: schema.providers.firmName,
+      firmName: schema.firms.name,
       dueDate: schema.requests.dueDate,
       required: schema.requests.required,
       askedAt: schema.requests.updatedAt,
     })
     .from(schema.requests)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
-    .innerJoin(schema.providers, eq(schema.providers.id, schema.requests.providerId))
+    .innerJoin(schema.firms, eq(schema.firms.id, schema.requests.firmId))
     .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId))
     .where(
       and(
@@ -104,7 +102,6 @@ export async function runReminders(options: ReminderOptions = {}): Promise<Remin
       requestId: r.requestId,
       clientId: r.clientId,
       clientEmail: r.clientEmail,
-      providerId: r.providerId,
       firmName: r.firmName,
       dueDate: r.dueDate,
     }));
@@ -126,7 +123,7 @@ export async function runReminders(options: ReminderOptions = {}): Promise<Remin
 
   for (const [clientId, items] of byClient) {
     const queued = await enqueueEmail(
-      { template: 'needs_attention', to: items[0].clientEmail, firmName: items[0].firmName ?? undefined },
+      { template: 'needs_attention', to: items[0].clientEmail, firmName: items[0].firmName },
       { dedupeKey: `reminder:${clientId}:${today}` }
     );
     if (queued) emailsQueued += 1;
@@ -191,9 +188,9 @@ export async function remindNow(engagement: Engagement, options: ReminderOptions
   if (already) return { ok: false, code: 'already_reminded' };
 
   const [client] = await db
-    .select({ email: schema.clients.email, firmName: schema.providers.firmName })
+    .select({ email: schema.clients.email, firmName: schema.firms.name })
     .from(schema.clients)
-    .innerJoin(schema.providers, eq(schema.providers.id, schema.clients.providerId))
+    .innerJoin(schema.firms, eq(schema.firms.id, schema.clients.firmId))
     .where(eq(schema.clients.id, engagement.clientId));
 
   await notifyMany([
@@ -208,7 +205,7 @@ export async function remindNow(engagement: Engagement, options: ReminderOptions
   ]);
   const emailQueued = client
     ? await enqueueEmail(
-        { template: 'needs_attention', to: client.email, firmName: client.firmName ?? undefined },
+        { template: 'needs_attention', to: client.email, firmName: client.firmName },
         { dedupeKey: `reminder:${engagement.clientId}:${today}` }
       )
     : false;

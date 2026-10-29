@@ -383,7 +383,7 @@ describe('a client withdrawing a file', () => {
       .insert(schema.documents)
       .values({
         clientId: line.clientId,
-        providerId: line.providerId,
+        firmId: line.firmId,
         engagementId: line.engagementId,
         requestId,
         kind: 'client_upload',

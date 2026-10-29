@@ -4,7 +4,7 @@ import type { Me } from '../types';
 
 const advisor: Me = { kind: 'provider', id: 'p1', name: 'A', email: 'a@example.com' };
 const otherAdvisor: Me = { kind: 'provider', id: 'p2', name: 'B', email: 'b@example.com' };
-const client: Me = { kind: 'client', id: 'c1', name: 'C', email: 'c@example.com', providerId: 'p1' };
+const client: Me = { kind: 'client', id: 'c1', name: 'C', email: 'c@example.com', firmId: 'f1' };
 
 describe('scopeOf', () => {
   it('is the signed-in identity', () => {
@@ -44,6 +44,12 @@ describe('keys', () => {
     expect(isPrefixOf(keys.documents(s), keys.documentList(s, { clientId: 'c1' }))).toBe(true);
     expect(isPrefixOf(keys.engagements(s), keys.engagement(s, 'e1'))).toBe(true);
     expect(isPrefixOf(keys.engagements(s), keys.engagementList(s, 'c1'))).toBe(true);
+
+    // Every "something changed" invalidates `keys.dashboard(s)`: it has to reach
+    // the Mine and the Everyone view of the queue alike (F6).
+    expect(isPrefixOf(keys.dashboard(s), keys.dashboard(s, 'mine'))).toBe(true);
+    expect(isPrefixOf(keys.dashboard(s), keys.dashboard(s, 'all'))).toBe(true);
+    expect(keys.dashboard(s, 'mine')).not.toEqual(keys.dashboard(s, 'all'));
 
     // A document's key is not a prefix of an unrelated document's.
     expect(isPrefixOf(keys.document(s, 'd1'), keys.document(s, 'd2'))).toBe(false);

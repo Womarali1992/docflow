@@ -78,10 +78,10 @@ export const NEAR_QUOTA_RATIO = 0.8;
  * is rejected mid-tax-season phones the firm, and by then the fix (archive what
  * has been dealt with) takes longer than the call.
  *
- * `providerId` scopes it to one advisor's clients; the digest asks about the
- * whole box and passes none.
+ * `firmId` scopes it to one firm's clients; the digest asks about the whole
+ * box and passes none.
  */
-export async function clientsNearQuota(providerId: string | null = null, ratio = NEAR_QUOTA_RATIO): Promise<number> {
+export async function clientsNearQuota(firmId: string | null = null, ratio = NEAR_QUOTA_RATIO): Promise<number> {
   /* Whole bytes: the SUM is a bigint, and Postgres refuses to compare it with
      the fraction 0.8 of a quota produces. */
   const threshold = Math.floor(maxClientStorageBytes() * ratio);
@@ -90,8 +90,8 @@ export async function clientsNearQuota(providerId: string | null = null, ratio =
     .from(schema.documentVersions)
     .innerJoin(schema.documents, eq(schema.documents.id, schema.documentVersions.documentId))
     .where(
-      providerId
-        ? and(eq(schema.documents.providerId, providerId), ne(schema.documentVersions.scanStatus, 'infected'))
+      firmId
+        ? and(eq(schema.documents.firmId, firmId), ne(schema.documentVersions.scanStatus, 'infected'))
         : ne(schema.documentVersions.scanStatus, 'infected')
     )
     .groupBy(schema.documents.clientId)
@@ -100,7 +100,7 @@ export async function clientsNearQuota(providerId: string | null = null, ratio =
 }
 
 /** The clients using the most space, for the ops panel. Ids and bytes only. */
-export async function topClientsByStorage(providerId: string, limit = 3) {
+export async function topClientsByStorage(firmId: string, limit = 3) {
   const rows = await db
     .select({
       clientId: schema.documents.clientId,
@@ -108,7 +108,7 @@ export async function topClientsByStorage(providerId: string, limit = 3) {
     })
     .from(schema.documentVersions)
     .innerJoin(schema.documents, eq(schema.documents.id, schema.documentVersions.documentId))
-    .where(and(eq(schema.documents.providerId, providerId), ne(schema.documentVersions.scanStatus, 'infected')))
+    .where(and(eq(schema.documents.firmId, firmId), ne(schema.documentVersions.scanStatus, 'infected')))
     .groupBy(schema.documents.clientId)
     .orderBy(sql`SUM(${schema.documentVersions.sizeBytes}) DESC`)
     .limit(limit);

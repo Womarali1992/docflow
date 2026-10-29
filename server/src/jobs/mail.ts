@@ -21,6 +21,7 @@ import type { Job } from '../db/schema.js';
  */
 export const MAIL_TEMPLATES = [
   'invitation',
+  'staff_invitation',
   'password_reset',
   'new_item',
   'needs_attention',

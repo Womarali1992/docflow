@@ -44,7 +44,7 @@ router.get('/', async (req, res) => {
   /* -------------------------------------------------------------- documents */
   const docScope =
     auth.kind === 'provider'
-      ? [eq(schema.documents.providerId, auth.providerId), ...(clientIdParam ? [eq(schema.documents.clientId, clientIdParam)] : [])]
+      ? [eq(schema.documents.firmId, auth.firmId), ...(clientIdParam ? [eq(schema.documents.clientId, clientIdParam)] : [])]
       : [
           eq(schema.documents.clientId, auth.sub),
           or(eq(schema.documents.kind, 'client_upload'), isNull(schema.documents.kind), isNotNull(schema.documents.sharedAt))!,
@@ -81,7 +81,7 @@ router.get('/', async (req, res) => {
   /* --------------------------------------------------------------- requests */
   const reqScope =
     auth.kind === 'provider'
-      ? [eq(schema.requests.providerId, auth.providerId), ...(clientIdParam ? [eq(schema.requests.clientId, clientIdParam)] : [])]
+      ? [eq(schema.requests.firmId, auth.firmId), ...(clientIdParam ? [eq(schema.requests.clientId, clientIdParam)] : [])]
       : [eq(schema.requests.clientId, auth.sub)];
 
   const reqConditions = [...reqScope, isNull(schema.requests.archivedAt)];

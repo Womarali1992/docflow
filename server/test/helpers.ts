@@ -1,7 +1,9 @@
 /**
- * Shared test fixtures: two providers, three clients (two under provider 1, one
- * under provider 2), and for every client one uploaded file, one open request
- * and one advisor deliverable. Recreated before every test by the caller.
+ * Shared test fixtures: two firms, each founded by its owner (provider 1 and 2),
+ * a second advisor in firm 1 with no clients of their own (colleague 1), three
+ * clients (two assigned to provider 1, one to provider 2), and for every client
+ * one uploaded file, one open request and one advisor deliverable. Recreated
+ * before every test by the caller.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -16,6 +18,7 @@ import { db, schema } from '../src/db/client.js';
 import { encryptSecret } from '../src/auth/crypto.js';
 import { generateCode } from '../src/auth/mfa.js';
 import { normalizeEmail } from '../src/auth/email.js';
+import { createFirmWithOwner } from '../src/db/firms.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
 
 export { app };
@@ -100,19 +103,21 @@ export const PDF_BYTES = Buffer.from(
   '%PDF-1.4\n% docflow test fixture\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n'
 );
 
-export const ACTORS = ['provider1', 'provider2', 'client1a', 'client1b', 'client2a', 'anonymous'] as const;
+export const ACTORS = ['provider1', 'colleague1', 'provider2', 'client1a', 'client1b', 'client2a', 'anonymous'] as const;
 export type Actor = (typeof ACTORS)[number];
 export type LoggedInActor = Exclude<Actor, 'anonymous'>;
 
 export interface ProviderFixture {
   id: string;
+  /* The firm this advisor founded: never equal to `id` (see `0011_firms`). */
+  firmId: string;
   email: string;
 }
 
 export interface ClientFixture {
   id: string;
   email: string;
-  providerId: string;
+  firmId: string;
   /** A file the client uploaded (folder "Uploads", has bytes on disk + version 1). */
   upload: string;
   /** An open request from the advisor (no file yet). The request row shares this id. */
@@ -129,6 +134,8 @@ export interface ClientFixture {
 
 export interface Fixture {
   provider1: ProviderFixture;
+  /** An advisor in provider 1's firm with no clients assigned: proves the book is shared. */
+  colleague1: ProviderFixture;
   provider2: ProviderFixture;
   client1a: ClientFixture;
   client1b: ClientFixture;
@@ -139,12 +146,9 @@ export interface Fixture {
 export const docIds = (c: ClientFixture): string[] => [c.upload, c.request, c.deliverable];
 
 async function insertProvider(name: string, email: string): Promise<ProviderFixture> {
-  const [p] = await db
-    .insert(schema.providers)
-    .values({ name, email, passwordHash: PASSWORD_HASH, firmName: `${name} CPA`, role: 'advisor' })
-    .returning({ id: schema.providers.id });
+  const p = await createFirmWithOwner({ name, email, passwordHash: PASSWORD_HASH, firmName: `${name} CPA` });
   await db.insert(schema.activities).values({
-    providerId: p.id,
+    firmId: p.firmId,
     type: 'update',
     description: 'seeded provider activity',
     actorKind: 'provider',
@@ -152,7 +156,17 @@ async function insertProvider(name: string, email: string): Promise<ProviderFixt
     actorName: name,
   });
   await enrollMfa('provider', p.id);
-  return { id: p.id, email };
+  return { id: p.id, firmId: p.firmId, email };
+}
+
+/** A second advisor in an existing firm, with the fixture password and MFA secret. */
+export async function insertColleague(firmId: string, name: string, email: string): Promise<ProviderFixture> {
+  const [p] = await db
+    .insert(schema.providers)
+    .values({ firmId, name, email, passwordHash: PASSWORD_HASH, role: 'advisor' })
+    .returning({ id: schema.providers.id });
+  await enrollMfa('provider', p.id);
+  return { id: p.id, firmId, email };
 }
 
 /**
@@ -198,7 +212,8 @@ async function insertClient(
   const [c] = await db
     .insert(schema.clients)
     .values({
-      providerId: provider.id,
+      firmId: provider.firmId,
+      assignedProviderId: provider.id,
       name,
       email,
       emailNormalized: normalizeEmail(email),
@@ -216,7 +231,7 @@ async function insertClient(
   const [engagement] = await db
     .insert(schema.engagements)
     .values({
-      providerId: provider.id,
+      firmId: provider.firmId,
       clientId: c.id,
       title: `${tag} 2026 Individual Tax Return`,
       kind: 'individual_tax',
@@ -232,7 +247,7 @@ async function insertClient(
   // The checklist line behind the requested document; same id, as the import did.
   await db.insert(schema.requests).values({
     id: req,
-    providerId: provider.id,
+    firmId: provider.firmId,
     clientId: c.id,
     engagementId: engagement.id,
     title: `${tag} Insurance Policy`,
@@ -248,7 +263,7 @@ async function insertClient(
     {
       id: upload,
       clientId: c.id,
-      providerId: provider.id,
+      firmId: provider.firmId,
       name: `${tag} Bank Statement.pdf`,
       displayName: `${tag} Bank Statement.pdf`,
       category: 'Uploads',
@@ -261,7 +276,7 @@ async function insertClient(
     {
       id: req,
       clientId: c.id,
-      providerId: provider.id,
+      firmId: provider.firmId,
       name: `${tag} Insurance Policy`,
       displayName: `${tag} Insurance Policy`,
       category: 'Documents',
@@ -272,7 +287,7 @@ async function insertClient(
     {
       id: deliverable,
       clientId: c.id,
-      providerId: provider.id,
+      firmId: provider.firmId,
       name: `${tag} Tax Return Draft.pdf`,
       displayName: `${tag} Tax Return Draft.pdf`,
       category: 'Reports',
@@ -295,7 +310,7 @@ async function insertClient(
   );
 
   await db.insert(schema.activities).values({
-    providerId: provider.id,
+    firmId: provider.firmId,
     clientId: c.id,
     type: 'document',
     description: 'seeded client activity',
@@ -307,7 +322,7 @@ async function insertClient(
   return {
     id: c.id,
     email,
-    providerId: provider.id,
+    firmId: provider.firmId,
     upload,
     request: req,
     deliverable,
@@ -317,9 +332,10 @@ async function insertClient(
   };
 }
 
-/** Two providers, three clients, and for each client an upload, an open request and a deliverable. */
+/** Two firms, three advisors, three clients, and for each client an upload, an open request and a deliverable. */
 export async function seedFixture(): Promise<Fixture> {
   const provider1 = await insertProvider('Provider One', 'p1@example.test');
+  const colleague1 = await insertColleague(provider1.firmId, 'Colleague One', 'colleague1@example.test');
   const provider2 = await insertProvider('Provider Two', 'p2@example.test');
   const client1a = await insertClient(provider1, 'Client 1A', 'c1a@example.test', '1A');
   const client1b = await insertClient(provider1, 'Client 1B', 'c1b@example.test', '1B');
@@ -329,7 +345,7 @@ export async function seedFixture(): Promise<Fixture> {
     .insert(schema.messages)
     .values({
       clientId: client1a.id,
-      providerId: provider1.id,
+      firmId: provider1.firmId,
       senderKind: 'client',
       senderId: client1a.id,
       senderName: 'Client 1A',
@@ -340,7 +356,7 @@ export async function seedFixture(): Promise<Fixture> {
     .insert(schema.messages)
     .values({
       clientId: client1a.id,
-      providerId: provider1.id,
+      firmId: provider1.firmId,
       senderKind: 'provider',
       senderId: provider1.id,
       senderName: 'Provider One',
@@ -350,6 +366,7 @@ export async function seedFixture(): Promise<Fixture> {
 
   return {
     provider1,
+    colleague1,
     provider2,
     client1a,
     client1b,
@@ -362,6 +379,8 @@ export function credentials(fx: Fixture, actor: LoggedInActor): { kind: 'provide
   switch (actor) {
     case 'provider1':
       return { kind: 'provider', email: fx.provider1.email };
+    case 'colleague1':
+      return { kind: 'provider', email: fx.colleague1.email };
     case 'provider2':
       return { kind: 'provider', email: fx.provider2.email };
     case 'client1a':
@@ -384,6 +403,7 @@ export function selfClient(fx: Fixture, actor: Actor): ClientFixture | null {
 /** The provider an actor *is*, or null for clients / anonymous. */
 export function selfProvider(fx: Fixture, actor: Actor): ProviderFixture | null {
   if (actor === 'provider1') return fx.provider1;
+  if (actor === 'colleague1') return fx.colleague1;
   if (actor === 'provider2') return fx.provider2;
   return null;
 }

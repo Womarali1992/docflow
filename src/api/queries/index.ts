@@ -22,6 +22,7 @@ export {
   useResetClientMfa,
   useDeactivateClient,
   useReactivateClient,
+  useAssignClient,
 } from './clients';
 export {
   useEngagements,
@@ -66,7 +67,15 @@ export {
 export { useMessages, useSendMessage, useMarkThreadRead } from './messages';
 export { useActivities } from './activities';
 export { useNotifications, useMarkNotificationsRead } from './notifications';
-export { useDashboard } from './dashboard';
+export { useDashboard, useQueueWho } from './dashboard';
 export { useSearch } from './search';
 export { useTemplates, useTemplate, useCreateTemplate, useUpdateTemplate, useArchiveTemplate } from './templates';
 export { useOpsStatus, useRetryJob } from './ops';
+export {
+  useFirm,
+  activeAdvisors,
+  useInviteAdvisor,
+  useResendAdvisorInvite,
+  useDeactivateAdvisor,
+  useReactivateAdvisor,
+} from './firm';

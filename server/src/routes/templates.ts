@@ -35,13 +35,13 @@ const templateSchema = z.object({
 });
 
 router.get('/', async (req, res) => {
-  const providerId = req.auth!.providerId;
-  await ensureStarterTemplates(providerId);
+  const firmId = req.auth!.firmId;
+  await ensureStarterTemplates(firmId);
 
   const list = await db
     .select()
     .from(schema.requestTemplates)
-    .where(and(eq(schema.requestTemplates.providerId, providerId), isNull(schema.requestTemplates.archivedAt)))
+    .where(and(eq(schema.requestTemplates.firmId, firmId), isNull(schema.requestTemplates.archivedAt)))
     .orderBy(asc(schema.requestTemplates.name));
   res.json(list.map(serializeTemplate));
 });
@@ -54,7 +54,7 @@ router.post('/', async (req, res) => {
   const [created] = await db
     .insert(schema.requestTemplates)
     .values({
-      providerId: req.auth!.providerId,
+      firmId: req.auth!.firmId,
       name: parsed.data.name,
       kind: parsed.data.kind ?? 'custom',
       items: parsed.data.items,

@@ -55,7 +55,7 @@ router.get('/', async (req, res) => {
   const clientId = req.query.clientId as string | undefined;
 
   if (auth.kind === 'provider') {
-    const conditions = [eq(schema.activities.providerId, auth.providerId)];
+    const conditions = [eq(schema.activities.firmId, auth.firmId)];
     if (clientId) conditions.push(eq(schema.activities.clientId, clientId));
     const list = await db
       .select()

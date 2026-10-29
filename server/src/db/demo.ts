@@ -7,7 +7,9 @@ import { makePlaceholderPdf } from './placeholder-pdf.js';
 import { ensureKeyDir, newStorageKey } from '../files/store.js';
 import { recordNewVersion } from '../workflow/versions.js';
 import { ensureStarterTemplates } from '../workflow/starter-templates.js';
-import { notify } from '../notify.js';
+import { notify, notifyAdvisors } from '../notify.js';
+import { recordActivity } from './activity-log.js';
+import { audit } from './audit.js';
 import type { Document } from './schema.js';
 
 /**
@@ -29,6 +31,7 @@ import type { Document } from './schema.js';
  * shared and one is still private.
  */
 
+const SEED_OWNER_EMAIL = 'sarah@meridiancpa.com';
 const day = 86_400_000;
 const ago = (days: number) => new Date(Date.now() - days * day);
 const ahead = (days: number) => new Date(Date.now() + days * day);
@@ -195,15 +198,17 @@ async function main() {
     process.exit(1);
   }
 
-  const [provider] = await db.select().from(schema.providers).limit(1);
+  /* The seed's owner names the firm. Any advisor would do while there was one;
+     with two, "the first one" is whichever the database returns. */
+  const [provider] = await db.select().from(schema.providers).where(eq(schema.providers.email, SEED_OWNER_EMAIL));
   if (!provider) {
-    console.error('No advisor in this database. Run `npm run db:seed` first.');
+    console.error(`No advisor ${SEED_OWNER_EMAIL} in this database. Run \`npm run db:seed\` first.`);
     process.exit(1);
   }
   console.log(`Advisor: ${provider.name} <${provider.email}>`);
 
   // The templates screen seeds itself on first read; do it now so it is not empty.
-  await ensureStarterTemplates(provider.id);
+  await ensureStarterTemplates(provider.firmId);
 
   let made = 0;
   let skipped = 0;
@@ -229,7 +234,7 @@ async function main() {
     const [engagement] = await db
       .insert(schema.engagements)
       .values({
-        providerId: provider.id,
+        firmId: provider.firmId,
         clientId: client.id,
         title: spec.title,
         kind: spec.kind,
@@ -254,7 +259,7 @@ async function main() {
       const [request] = await db
         .insert(schema.requests)
         .values({
-          providerId: provider.id,
+          firmId: provider.firmId,
           clientId: client.id,
           engagementId: engagement.id,
           title: item.title,
@@ -279,7 +284,7 @@ async function main() {
           .insert(schema.documents)
           .values({
             clientId: client.id,
-            providerId: provider.id,
+            firmId: provider.firmId,
             engagementId: engagement.id,
             requestId: request.id,
             kind: 'client_upload',
@@ -348,9 +353,7 @@ async function main() {
             updatedAt: ago(2),
           })
           .where(eq(schema.requests.id, request.id));
-        await notify({
-          userKind: 'provider',
-          userId: provider.id,
+        await notifyAdvisors(client.id, {
           type: 'request.not_applicable',
           title: `${client.name} says they do not have: ${item.title}`,
           body: item.state.note,
@@ -366,7 +369,7 @@ async function main() {
         .insert(schema.documents)
         .values({
           clientId: client.id,
-          providerId: provider.id,
+          firmId: provider.firmId,
           engagementId: engagement.id,
           kind: 'deliverable',
           displayName: deliverable.name,
@@ -407,7 +410,7 @@ async function main() {
       const at = ago(message.daysAgo);
       await db.insert(schema.messages).values({
         clientId: client.id,
-        providerId: provider.id,
+        firmId: provider.firmId,
         senderKind: message.from,
         senderId: message.from === 'client' ? client.id : provider.id,
         senderName: message.from === 'client' ? client.name : provider.name,
@@ -416,9 +419,7 @@ async function main() {
         createdAt: at,
       });
       if (message.from === 'client' && !message.read) {
-        await notify({
-          userKind: 'provider',
-          userId: provider.id,
+        await notifyAdvisors(client.id, {
           type: 'message.new',
           title: `New message from ${client.name}`,
           link: `/clients/${client.id}`,
@@ -429,10 +430,52 @@ async function main() {
     made += 1;
   }
 
+  await reassignmentHistory(provider);
+
   console.log('');
   console.log(`Done: ${made} engagement(s) created, ${skipped} already existed.`);
   console.log('Sign in as the advisor and look at / (the queue), a client, an engagement, /review/<id>, /templates.');
   console.log('Then sign in as a client for /portal.');
+}
+
+/**
+ * One move in Michael Chen's history, so the client page shows what a
+ * reassignment looks like: the owner gave him to James Okafor. Written once,
+ * and only while he is James's.
+ */
+async function reassignmentHistory(owner: { id: string; name: string; firmId: string }) {
+  const [client] = await db
+    .select({ id: schema.clients.id, name: schema.clients.name, to: schema.providers.id, toName: schema.providers.name })
+    .from(schema.clients)
+    .innerJoin(schema.providers, eq(schema.providers.id, schema.clients.assignedProviderId))
+    .where(and(eq(schema.clients.email, 'm.chen@chenco.io'), eq(schema.clients.firmId, owner.firmId)));
+  if (!client || client.to === owner.id) return;
+  const [already] = await db
+    .select({ id: schema.auditLog.id })
+    .from(schema.auditLog)
+    .where(and(eq(schema.auditLog.action, 'client.reassigned'), eq(schema.auditLog.clientId, client.id)));
+  if (already) return;
+
+  await audit({
+    action: 'client.reassigned',
+    targetType: 'client',
+    targetId: client.id,
+    clientId: client.id,
+    actorKind: 'provider',
+    actorId: owner.id,
+    meta: { fromId: owner.id, toId: client.to, reason: 'assigned' },
+  });
+  await recordActivity({
+    firmId: owner.firmId,
+    clientId: client.id,
+    type: 'update',
+    description: `Reassigned to ${client.toName} (was ${owner.name})`,
+    actorKind: 'provider',
+    actorId: owner.id,
+    actorName: owner.name,
+    targetId: client.id,
+  });
+  console.log(`+ ${client.name}: reassigned to ${client.toName}`);
 }
 
 main()

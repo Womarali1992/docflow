@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   useClient,
   useDashboard,
+  useQueueWho,
   useDocument,
   useDocumentVersions,
   useEngagements,
@@ -52,7 +53,9 @@ const Review: React.FC = () => {
   const { data: request = null } = useRequest(doc?.requestId ?? undefined);
   const { data: client } = useClient(doc?.clientId);
   const { data: engagements = [] } = useEngagements({ clientId: doc?.clientId });
-  const { data: dashboard } = useDashboard();
+  // Next / previous page through the queue as it opens by default: "mine" in a shared book.
+  const queueWho = useQueueWho();
+  const { data: dashboard } = useDashboard({ who: queueWho.who, ready: queueWho.ready });
 
   const share = useShareDocument();
   const unshare = useUnshareDocument();

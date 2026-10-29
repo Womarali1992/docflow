@@ -15,11 +15,12 @@ import {
 } from '../auth/sessions.js';
 import { hashPassword, isRefusedDemoPassword, passwordSchema, verifyPassword } from '../auth/passwords.js';
 import { completePasswordReset, createPasswordReset, findPasswordReset, resetLink, setPassword } from '../auth/resets.js';
-import { enqueueEmail, isMailConfigured } from '../jobs/mail.js';
-import { clientMe, openSession, providerMe, type AuthState, type Me } from '../auth/signin.js';
+import { enqueueEmail } from '../jobs/mail.js';
+import { clientMe, openSession, providerMe, type AuthState } from '../auth/signin.js';
 import { audit, hashedEmail, ipOf } from '../db/audit.js';
 import { looksLikeToken, tokenState } from '../auth/tokens.js';
 import { findClientByEmail, findProviderByEmail, providerEmailIsTaken } from '../auth/email.js';
+import { createFirmWithOwner, firmSignOff } from '../db/firms.js';
 import { NAME_MAX, loginEmailLimiter, loginIpLimiter, lookupLimiter } from '../security/limits.js';
 
 const router = asyncRouter();
@@ -99,7 +100,8 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
       ip: ipOf(req),
       meta: { stage },
     });
-    const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
+    const me = await providerMe(provider.id);
+    if (!me) return res.status(404).json({ error: 'Not found' });
     const state: AuthState = { stage, me };
     return res.json(state);
   } else {
@@ -113,17 +115,9 @@ router.post('/login', loginIpLimiter, loginEmailLimiter, async (req, res) => {
       await db.update(schema.clients).set({ passwordHash: await hashPassword(password) }).where(eq(schema.clients.id, client.id));
     }
 
-    const [prov] = await db.select({ name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, client.providerId));
-
     const stage = await openSession(req, res, 'client', client.id);
-    const me: Me = {
-      kind: 'client',
-      id: client.id,
-      name: client.name,
-      email: client.email,
-      providerId: client.providerId,
-      providerName: prov?.name ?? null,
-    };
+    const me = await clientMe(client.id);
+    if (!me) return res.status(404).json({ error: 'Not found' });
     const state: AuthState = { stage, me };
     return res.json(state);
   }
@@ -152,13 +146,11 @@ router.post('/signup-provider', async (req, res) => {
   if (await providerEmailIsTaken(email)) return res.status(409).json({ error: 'Email already registered' });
 
   const passwordHash = await hashPassword(password);
-  const [provider] = await db
-    .insert(schema.providers)
-    .values({ name, email, passwordHash, firmName, role: 'advisor', passwordChangedAt: new Date() })
-    .returning();
+  const provider = await createFirmWithOwner({ name, email, passwordHash, firmName, passwordChangedAt: new Date() });
 
   const stage = await openSession(req, res, 'provider', provider.id);
-  const me: Me = { kind: 'provider', id: provider.id, name: provider.name, email: provider.email, firmName: provider.firmName };
+  const me = await providerMe(provider.id);
+  if (!me) return res.status(404).json({ error: 'Not found' });
   const state: AuthState = { stage, me };
   res.status(201).json(state);
 });
@@ -270,19 +262,15 @@ router.post('/password-reset/request', lookupLimiter, async (req, res) => {
 
   if (kind === 'provider') {
     const p = await findProviderByEmail(email);
-    if (p && !p.deactivatedAt) {
+    if (p && !p.deactivatedAt && p.passwordHash) {
       const { token } = await createPasswordReset('provider', p.id);
-      await enqueueEmail({ template: 'password_reset', to: p.email, link: resetLink(token), firmName: p.firmName ?? undefined });
+      await enqueueEmail({ template: 'password_reset', to: p.email, link: resetLink(token), firmName: await firmSignOff(p.firmId) });
     }
   } else {
     const c = await findClientByEmail(email);
     if (c && !c.deactivatedAt && c.passwordHash) {
       const { token } = await createPasswordReset('client', c.id);
-      // Only worth a second query when there is a mail server to send it through.
-      const [p] = isMailConfigured()
-        ? await db.select({ firmName: schema.providers.firmName, name: schema.providers.name }).from(schema.providers).where(eq(schema.providers.id, c.providerId))
-        : [undefined];
-      await enqueueEmail({ template: 'password_reset', to: c.email, link: resetLink(token), firmName: p?.firmName ?? p?.name ?? undefined });
+      await enqueueEmail({ template: 'password_reset', to: c.email, link: resetLink(token), firmName: await firmSignOff(c.firmId) });
     }
   }
   res.status(202).json({ ok: true });

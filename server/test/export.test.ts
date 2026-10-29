@@ -32,7 +32,7 @@ async function freshEngagement(fx: Fixture) {
   const [row] = await db
     .insert(schema.engagements)
     .values({
-      providerId: fx.provider1.id,
+      firmId: fx.provider1.firmId,
       clientId: fx.client1a.id,
       title: '2026 Individual Tax Return',
       kind: 'individual_tax',
@@ -50,7 +50,7 @@ async function acceptedRequest(
   const [request_] = await db
     .insert(schema.requests)
     .values({
-      providerId: fx.provider1.id,
+      firmId: fx.provider1.firmId,
       clientId: fx.client1a.id,
       engagementId,
       title: opts.title,
@@ -62,7 +62,7 @@ async function acceptedRequest(
   const [doc] = await db
     .insert(schema.documents)
     .values({
-      providerId: fx.provider1.id,
+      firmId: fx.provider1.firmId,
       clientId: fx.client1a.id,
       engagementId,
       requestId: request_.id,
@@ -113,7 +113,7 @@ async function deliverable(fx: Fixture, engagementId: string, name: string, shar
   const [doc] = await db
     .insert(schema.documents)
     .values({
-      providerId: fx.provider1.id,
+      firmId: fx.provider1.firmId,
       clientId: fx.client1a.id,
       engagementId,
       name,
@@ -163,7 +163,7 @@ describe('what the archive contains', () => {
     await db
       .insert(schema.requests)
       .values({
-        providerId: fx.provider1.id,
+        firmId: fx.provider1.firmId,
         clientId: fx.client1a.id,
         engagementId: engagement.id,
         title: 'Still waiting',
@@ -190,7 +190,7 @@ describe('what the archive contains', () => {
     const [second] = await db
       .insert(schema.documents)
       .values({
-        providerId: fx.provider1.id,
+        firmId: fx.provider1.firmId,
         clientId: fx.client1a.id,
         engagementId: engagement.id,
         requestId: first.request.id,

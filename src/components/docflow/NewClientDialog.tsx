@@ -3,7 +3,8 @@ import Modal from './Modal';
 import LinkModal, { type OneTimeLinkView } from './LinkModal';
 import { invitationHint } from './linkHints';
 import { I } from './icons';
-import { useCreateClient, useInviteClient } from '@/api/queries';
+import { activeAdvisors, useCreateClient, useFirm, useInviteClient } from '@/api/queries';
+import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import type { Client } from '@/api/types';
@@ -23,13 +24,19 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
   const { toast } = useToast();
   const createClient = useCreateClient();
   const inviteClient = useInviteClient();
+  const { me } = useAuth();
+  const { data: firm } = useFirm();
+  // Hidden while the firm has one advisor: a new client is theirs.
+  const advisors = activeAdvisors(firm);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  /* '' = the advisor creating the client, which is also the server's default. */
+  const [advisorId, setAdvisorId] = useState('');
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<Client | null>(null);
   const [invite, setInvite] = useState<OneTimeLinkView | null>(null);
 
-  const reset = () => { setName(''); setEmail(''); };
+  const reset = () => { setName(''); setEmail(''); setAdvisorId(''); };
   const close = () => { reset(); onClose(); };
 
   const finish = () => {
@@ -47,6 +54,7 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
       const c = await createClient.mutateAsync({
         name: name.trim(),
         email: email.trim(),
+        ...(advisorId ? { assignedAdvisorId: advisorId === 'none' ? null : advisorId } : {}),
       });
       toast({ title: 'Client created', description: `${c.name} was added.` });
       setCreated(c);
@@ -98,6 +106,18 @@ const NewClientDialog: React.FC<Props> = ({ open, onClose, onCreated }) => {
             <span className="df-field-label">Email</span>
             <input className="df-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="jane@example.com" />
           </label>
+          {advisors.length > 1 && (
+            <label className="df-field">
+              <span className="df-field-label">Advisor</span>
+              <select className="df-input" value={advisorId} onChange={(e) => setAdvisorId(e.target.value)}>
+                <option value="">Me</option>
+                {advisors.filter((a) => a.id !== me?.id).map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+                <option value="none">Nobody yet</option>
+              </select>
+            </label>
+          )}
           <div className="df-muted" style={{ fontSize: 12 }}>
             The client chooses their own password from the invitation link; nothing to type here.
           </div>

@@ -43,7 +43,7 @@ import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
 import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound, REQUEST_REMOVED } from './scope.js';
 import { type Tx } from '../workflow/publish.js';
-import { notify } from '../notify.js';
+import { notifyAdvisors } from '../notify.js';
 import type { Document } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -58,7 +58,6 @@ const router = asyncRouter();
 /** Who this upload is for, known before any document row exists. */
 interface UploadContext {
   clientId: string;
-  providerId: string;
 }
 
 /**
@@ -207,9 +206,7 @@ async function finish(
 
   // The advisor hears about a client's upload; their own deliverable is not news.
   if (auth.kind === 'client') {
-    await notify({
-      userKind: 'provider',
-      userId: document.providerId,
+    await notifyAdvisors(document.clientId, {
       type: 'upload.received',
       title: `${auth.name} sent ${document.displayName ?? document.name}`,
       body: outcome.status === 202 ? 'It is being checked before it can be opened.' : null,
@@ -217,7 +214,7 @@ async function finish(
     });
   }
   await recordActivity({
-    providerId: document.providerId,
+    firmId: document.firmId,
     clientId: document.clientId,
     type: 'document',
     description: `${label}: ${document.displayName ?? document.name}`,
@@ -302,7 +299,7 @@ async function documentForRequest(
     .insert(schema.documents)
     .values({
       clientId: request.clientId,
-      providerId: request.providerId,
+      firmId: request.firmId,
       engagementId: request.engagementId,
       requestId: request.id,
       kind: 'client_upload',
@@ -343,7 +340,7 @@ router.post(
         if (req.auth!.kind !== 'client') {
           return res.status(403).json({ error: 'Only the client uploads against a request.', code: 'client_only' });
         }
-        const context = { clientId: request.clientId, providerId: request.providerId };
+        const context = { clientId: request.clientId };
         const replacing = await replaceTargetOf(req, request.id);
         if (replacing === 'invalid') {
           return badRequest(
@@ -394,7 +391,7 @@ async function documentForEngagement(
     .insert(schema.documents)
     .values({
       clientId: engagement.clientId,
-      providerId: engagement.providerId,
+      firmId: engagement.firmId,
       engagementId: engagement.id,
       kind,
       displayName: filename,
@@ -422,7 +419,7 @@ router.post(
           return badRequest(res, 'This engagement is closed. Ask your accountant to reopen it.', 'engagement_closed');
         }
 
-        const context = { clientId: engagement.clientId, providerId: engagement.providerId };
+        const context = { clientId: engagement.clientId };
         if (await settledBeforeBytes(req, res, context)) return;
         res.locals.engagement = engagement;
         res.locals.context = context;
@@ -460,7 +457,7 @@ router.post(
         if (!doc) return notFound(res);
         if (!mayAddVersion(doc, req.auth!.kind)) return advisorOnly(res);
         if (doc.archivedAt) return badRequest(res, 'This document is archived.', 'archived');
-        const context = { clientId: doc.clientId, providerId: doc.providerId };
+        const context = { clientId: doc.clientId };
         if (await settledBeforeBytes(req, res, context)) return;
         res.locals.document = doc;
         res.locals.context = context;
