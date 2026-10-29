@@ -11,6 +11,7 @@ import Modal from '../Modal';
 import AskDialog from './AskDialog';
 import { WithdrawDialog } from './WithdrawFile';
 import { clientRequestState } from './requestState';
+import { toneClass, toneOf } from '../tone';
 
 /**
  * One thing the client still has to do.
@@ -96,7 +97,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
   };
 
   return (
-    <div className="df-step">
+    <div id={`line-${request.id}`} className={`df-step ${toneClass(toneOf(request))}`}>
       <div className="df-step-head">
         <div style={{ minWidth: 0 }}>
           <div className="df-step-title">{request.title}</div>

@@ -17,7 +17,8 @@ const ClientLayout: React.FC = () => {
 
   /* One look. The floating theme/density picker this used to carry was a
      design-review tool that shipped to every screen (2026-10-28 audit). */
-  const rootClass = ['df-root', 'df-theme-sand', drawerOpen ? 'df-drawer-open' : ''].filter(Boolean).join(' ');
+  /* `df-portal` lets the stylesheet colour things from the client's side (see "Line colours"). */
+  const rootClass = ['df-root', 'df-theme-sand', 'df-portal', drawerOpen ? 'df-drawer-open' : ''].filter(Boolean).join(' ');
 
   return (
     <div className={rootClass}>

@@ -12,6 +12,7 @@ import type { RequestAttachment, RequestItem } from '@/api/types';
  */
 export type ClientRequestState =
   | 'waiting_on_you'
+  | 'answered'
   | 'submitted'
   | 'checking'
   | 'accepted'
@@ -61,14 +62,20 @@ export function clientRequestState(request: RequestItem, attachments: RequestAtt
       return {
         state: 'checking',
         label: 'Received, being checked',
-        cls: 'df-warn',
+        /* Green like every line with the accountant: to the client, their part is done. */
+        cls: 'df-ok',
         note:
           attachments.length > 1
             ? `Your files are with your accountant. ${checking} of ${attachments.length} are still being checked — they become readable once that finishes, and there is nothing more to do.`
             : 'Your file is with your accountant. It becomes readable once the security check finishes — nothing more to do.',
       };
     }
-    return { state: 'submitted', label: 'Submitted', cls: 'df-info' };
+    return { state: 'submitted', label: 'Submitted', cls: 'df-ok' };
+  }
+  /* "I don't have this" is an answer: the line stays on the list (a file can
+     still be sent) but the next move is the accountant's. */
+  if (request.clientResponseKind) {
+    return { state: 'answered', label: 'Told your accountant', cls: 'df-ok' };
   }
   return { state: 'waiting_on_you', label: 'Waiting on you', cls: 'df-warn' };
 }

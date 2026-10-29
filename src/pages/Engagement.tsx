@@ -12,6 +12,9 @@ import Uploads from '@/components/docflow/engagement/Uploads';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
 import LoadError from '@/components/docflow/LoadError';
 import { EditEngagementDialog } from '@/components/docflow/EditDetailsDialogs';
+import ChecklistTiles from '@/components/docflow/board/ChecklistTiles';
+import MoveBar from '@/components/docflow/board/MoveBar';
+import { tally } from '@/components/docflow/board/whoseMove';
 
 /**
  * The engagement workspace — one piece of work, start to finish.
@@ -41,6 +44,8 @@ const Engagement: React.FC = () => {
   const remindClient = useRemindClient();
   const [tab, setTab] = useState<Tab>('checklist');
   const [editOpen, setEditOpen] = useState(false);
+  /* A tile picked on the board; `seq` lets the same tile be picked twice. */
+  const [focus, setFocus] = useState<{ id: string; seq: number } | null>(null);
 
   const client = useClient(data?.engagement.clientId);
 
@@ -51,6 +56,15 @@ const Engagement: React.FC = () => {
       uploads: docs.filter((d) => d.kind !== 'deliverable'),
     };
   }, [data]);
+
+  /* The board shows the lines in the checklist's own order. */
+  const ordered = useMemo(
+    () =>
+      [...(data?.requests ?? [])].sort(
+        (a, b) => a.sortOrder - b.sortOrder || a.createdAt.getTime() - b.createdAt.getTime()
+      ),
+    [data]
+  );
 
   if (isPending) {
     return (
@@ -199,14 +213,47 @@ const Engagement: React.FC = () => {
         <Kpi label="To review" value={toReview} tone={toReview > 0 ? 'df-info' : undefined} hint="Client has sent something" />
         <Kpi label="With the client" value={withClient} tone={withClient > 0 ? 'df-warn' : undefined} hint="Waiting on them" />
         <Kpi label="Overdue" value={overdue} tone={overdue > 0 ? 'df-danger' : undefined} hint="Past the due date" />
-        <Kpi label="Needs decision" value={needsDecision} tone={needsDecision > 0 ? 'df-warn' : undefined} hint="“I don’t have this”" />
+        <Kpi label="Needs decision" value={needsDecision} tone={needsDecision > 0 ? 'df-info' : undefined} hint="“I don’t have this”" />
       </div>
+
+      {requests.length > 0 && (
+        <div className="df-section">
+          <div className="df-section-head">
+            <div>
+              <div className="df-section-title">At a glance</div>
+              <div className="df-section-sub">Every item and whose move it is. Pick one to go to its line.</div>
+            </div>
+          </div>
+          <div className="df-section-body">
+            <MoveBar tally={tally(requests)} perspective="advisor" />
+            <ChecklistTiles
+              requests={ordered}
+              perspective="advisor"
+              label="Checklist at a glance"
+              onOpen={(r) => {
+                setTab('checklist');
+                setFocus((f) => ({ id: r.id, seq: (f?.seq ?? 0) + 1 }));
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="df-two-col">
         <div style={{ minWidth: 0 }}>
           <div className="df-seg" role="tablist" style={{ marginBottom: 12 }}>
             {tabs.map((t) => (
-              <button key={t.id} className={tab === t.id ? 'df-active' : ''} onClick={() => setTab(t.id)} role="tab" aria-selected={tab === t.id}>
+              <button
+                key={t.id}
+                className={tab === t.id ? 'df-active' : ''}
+                /* Forget a board pick, or coming back to the checklist would jump to it again. */
+                onClick={() => {
+                  setTab(t.id);
+                  setFocus(null);
+                }}
+                role="tab"
+                aria-selected={tab === t.id}
+              >
                 {t.label} <span className="df-mono" style={{ opacity: 0.6 }}>{t.count}</span>
               </button>
             ))}
@@ -220,6 +267,7 @@ const Engagement: React.FC = () => {
               requests={requests}
               removed={data.removedRequests ?? []}
               documents={data.documents}
+              focus={focus}
             />
           )}
           {tab === 'uploads' && <Uploads documents={uploads} requests={requests} />}

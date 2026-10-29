@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { useDashboard, useQueueWho } from '@/api/queries';
+import { useClients, useDashboard, useQueueWho } from '@/api/queries';
 import WhoToggle from '@/components/docflow/WhoToggle';
 import { I } from '@/components/docflow/icons';
 import ActivityFeed from '@/components/docflow/ActivityFeed';
 import { QUEUE_TITLE, type QueueFilter } from '@/components/docflow/queue';
+import WhoseMoveBoard from '@/components/docflow/board/WhoseMoveBoard';
+import { toneClass } from '@/components/docflow/tone';
 
 /**
  * The advisor's home: what is waiting, and whose move it is.
@@ -25,6 +27,12 @@ const Index: React.FC = () => {
   const { me } = useAuth();
   const { who, setWho, shared, ready } = useQueueWho();
   const { data, isPending, error } = useDashboard({ who, ready });
+  const { data: clients = [] } = useClients();
+
+  const clientName = useMemo(() => {
+    const map = new Map(clients.map((c) => [c.id, c.name]));
+    return (id: string) => map.get(id) ?? 'Client';
+  }, [clients]);
 
   const headerName = me?.kind === 'provider' ? me.name : '';
   const firmName = me?.kind === 'provider' ? me.firmName : null;
@@ -77,6 +85,33 @@ const Index: React.FC = () => {
         ))}
       </div>
 
+      <div className="df-section">
+        <div className="df-section-head">
+          <div>
+            <div className="df-section-title">Whose move</div>
+            <div className="df-section-sub">Every open item, sitting with whoever has to act next</div>
+          </div>
+        </div>
+        <div className="df-section-body">
+          <WhoseMoveBoard
+            data={data}
+            isPending={isPending}
+            clientName={clientName}
+            showAdvisor={shared && who === 'all'}
+            onOpenCard={(item) =>
+              navigate(
+                item.documentId
+                  ? `/review/${item.documentId}`
+                  : item.engagementId
+                    ? `/engagements/${item.engagementId}`
+                    : `/clients/${item.clientId}`
+              )
+            }
+            onOpenList={open}
+          />
+        </div>
+      </div>
+
       <div className="df-grid-2-aside">
         <div className="df-section">
           <div className="df-section-head">
@@ -98,7 +133,7 @@ const Index: React.FC = () => {
               <div className="df-empty">Nothing waiting on a decision from you.</div>
             )}
             {needsDecision?.items.slice(0, 6).map((item) => (
-              <div key={item.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+              <div key={item.id} className={`df-row ${toneClass('decision')}`} style={{ gridTemplateColumns: '1fr auto' }}>
                 <div style={{ minWidth: 0 }}>
                   <div className="df-name">{item.title}</div>
                   {item.note && <div className="df-meta">“{item.note}”</div>}

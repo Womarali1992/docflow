@@ -1,9 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { EngagementDocument, RequestItem } from '@/api/types';
 import { useRestoreRequest, useUpdateRequest } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
+import { revealLine } from '../board/motion';
 import ChecklistItem from './ChecklistItem';
 import AddItemsDialog from './AddItemsDialog';
 
@@ -25,6 +26,8 @@ interface Props {
   /** Lines taken off the checklist, kept so one can be put back. */
   removed: RequestItem[];
   documents: EngagementDocument[];
+  /** A line picked on the board above: shown (whatever the filter) and brought into view. `seq` repeats a pick. */
+  focus?: { id: string; seq: number } | null;
 }
 
 /**
@@ -35,13 +38,28 @@ interface Props {
  * rather than swapping two values, because an imported checklist can arrive
  * with every `sortOrder` set to zero and swapping would do nothing at all.
  */
-const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, requests, removed }) => {
+const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, requests, removed, focus }) => {
   const { toast } = useToast();
   const updateRequest = useUpdateRequest();
   const restore = useRestoreRequest();
   const [filter, setFilter] = useState<Filter>('all');
   const [addOpen, setAddOpen] = useState(false);
   const [showRemoved, setShowRemoved] = useState(false);
+
+  /* The filter may be hiding the line, so show everything first and look for
+     it once that has rendered. */
+  useEffect(() => {
+    if (!focus) return;
+    setFilter('all');
+    let retry = 0;
+    const frame = window.requestAnimationFrame(() => {
+      if (!revealLine(`line-${focus.id}`)) retry = window.setTimeout(() => revealLine(`line-${focus.id}`), 80);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(retry);
+    };
+  }, [focus]);
 
   const ordered = useMemo(
     () => [...requests].sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.getTime() - b.createdAt.getTime()),

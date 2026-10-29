@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { RequestItem, RequestStatus } from '@/api/types';
+import type { RequestItem } from '@/api/types';
 import { useAcceptRequest, useRemoveRequest, useReopenRequest, useRequestCorrection, useUpdateRequest, useWaiveRequest } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
 import ReasonDialog from '../ReasonDialog';
+import { STATUS_PILL, toneClass, toneOf } from '../tone';
 
 /**
  * One checklist line, and every decision that can be made about it.
@@ -18,15 +19,6 @@ import ReasonDialog from '../ReasonDialog';
  * while nothing has been sent for the line; after that the line is part of the
  * record and waiving is the way to close it.
  */
-
-const STATUS_PILL: Record<RequestStatus, { label: string; cls: string }> = {
-  requested: { label: 'Requested', cls: 'df-warn' },
-  submitted: { label: 'Submitted', cls: 'df-info' },
-  in_review: { label: 'In review', cls: 'df-info' },
-  needs_correction: { label: 'Needs correction', cls: 'df-danger' },
-  accepted: { label: 'Accepted', cls: 'df-ok' },
-  waived: { label: 'Waived', cls: 'df-plain' },
-};
 
 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const toDateInput = (d: Date | null) => (d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '');
@@ -166,7 +158,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   }
 
   return (
-    <div className="df-row" style={{ gridTemplateColumns: 'auto 1fr auto', alignItems: 'flex-start', gap: 10 }}>
+    <div id={`line-${request.id}`} className={`df-row ${toneClass(toneOf(request))}`} style={{ gridTemplateColumns: 'auto 1fr auto', alignItems: 'flex-start', gap: 10 }}>
       {editable ? (
         <div className="df-reorder">
           <button className="df-icon-btn df-sm" aria-label="Move up" disabled={first || busy} onClick={() => onMove(-1)}>
@@ -228,7 +220,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {request.overdue && <span className="df-pill df-danger">Overdue</span>}
-          {needsDecision && <span className="df-pill df-warn">Needs decision</span>}
+          {needsDecision && <span className="df-pill df-info">Needs decision</span>}
           <span className={'df-pill ' + pill.cls}>{pill.label}</span>
         </div>
 

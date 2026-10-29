@@ -4,6 +4,7 @@ import type { RequestItem } from '@/api/types';
 import RequestCard from '@/components/docflow/portal/RequestCard';
 import { clientRequestState } from '@/components/docflow/portal/requestState';
 import { WithdrawableFiles } from '@/components/docflow/portal/WithdrawFile';
+import { toneClass, toneOf } from '@/components/docflow/tone';
 
 /**
  * Every item on the client's list, including the ones that are finished.
@@ -66,7 +67,7 @@ const PortalRequests: React.FC = () => {
               if (step) return <RequestCard key={request.id} step={step} />;
               const state = clientRequestState(request, request.attachments);
               return (
-                <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+                <div key={request.id} className={`df-row ${toneClass(toneOf(request))}`} style={{ gridTemplateColumns: '1fr auto' }}>
                   <div style={{ minWidth: 0 }}>
                     <div className="df-name">{request.title}</div>
                     {state.note ? (

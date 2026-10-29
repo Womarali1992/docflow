@@ -5,6 +5,7 @@ import WhoToggle from '@/components/docflow/WhoToggle';
 import { I } from '@/components/docflow/icons';
 import { QUEUE_EXPLAIN, QUEUE_FILTERS, QUEUE_TITLE, isQueueFilter, type QueueFilter } from '@/components/docflow/queue';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
+import { isPastDue, toneClass, toneOf } from '@/components/docflow/tone';
 
 /**
  * One tile of the home queue, opened out into a list.
@@ -132,10 +133,13 @@ const Work: React.FC = () => {
                     : item.engagementId
                       ? `/engagements/${item.engagementId}`
                       : `/clients/${item.clientId}`;
+                const late = isPastDue(item);
+                /* A "needs your decision" line is still `requested` on the server, but it is the advisor's move. */
+                const tone = filter === 'needs_decision' ? 'decision' : toneOf({ status: item.status, overdue: late });
                 return (
                   <div
                     key={item.id}
-                    className="df-row df-clickable"
+                    className={`df-row df-clickable ${toneClass(tone)}`}
                     style={{ gridTemplateColumns: '1fr auto auto' }}
                     onClick={() => navigate(target)}
                     role="link"
@@ -156,8 +160,8 @@ const Work: React.FC = () => {
                     </div>
                     <div style={{ display: 'flex', gap: 4 }}>
                       {shared && !item.advisorId && <span className="df-pill df-plain">Unassigned</span>}
-                      {filter === 'overdue' && <span className="df-pill df-danger">Overdue</span>}
-                      {filter !== 'ready' && item.status === 'needs_correction' && <span className="df-pill df-warn">Sent back</span>}
+                      {late && <span className="df-pill df-danger">Overdue</span>}
+                      {filter !== 'ready' && item.status === 'needs_correction' && <span className="df-pill df-danger">Sent back</span>}
                     </div>
                     <button className="df-btn df-sm df-ghost" onClick={(e) => { e.stopPropagation(); navigate(target); }}>
                       {filter === 'ready' && item.documentId ? 'Review' : 'Open'}

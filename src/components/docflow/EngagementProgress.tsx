@@ -1,12 +1,14 @@
 import React from 'react';
 import type { EngagementCounts } from '@/api/types';
+import MoveBar from './board/MoveBar';
 
 /**
- * How far through a checklist an engagement is.
+ * How far through a checklist an engagement is, and whose move the rest is.
  *
  * "Done" means the advisor has finished with a line — accepted it, or waived it
  * with a reason. A submitted document is not progress until someone has looked
- * at it, which is exactly the distinction the advisor is trying to see.
+ * at it, which is exactly the distinction the advisor is trying to see: the
+ * bar shows it as blue (with you), not green.
  */
 const EngagementProgress: React.FC<{ counts?: EngagementCounts | null }> = ({ counts }) => {
   if (!counts || counts.total === 0) {
@@ -14,20 +16,14 @@ const EngagementProgress: React.FC<{ counts?: EngagementCounts | null }> = ({ co
   }
 
   const done = counts.accepted + counts.waived;
-  const pct = Math.round((done / counts.total) * 100);
 
   return (
     <div>
-      <div
-        className="df-progress"
-        role="progressbar"
-        aria-valuenow={pct}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={`${done} of ${counts.total} items settled`}
-      >
-        <span className="df-progress-fill" style={{ width: `${pct}%` }} />
-      </div>
+      <MoveBar
+        tally={{ client: counts.outstanding, firm: counts.submitted, done, total: counts.total }}
+        perspective="advisor"
+        legend={false}
+      />
       <div className="df-meta" style={{ marginTop: 4 }}>
         <span className="df-mono">{done}</span> of <span className="df-mono">{counts.total}</span> settled
       </div>

@@ -4,6 +4,7 @@ import { useClients, useSearch } from '@/api/queries';
 import type { RequestStatus } from '@/api/types';
 import { I } from '@/components/docflow/icons';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
+import { STATUS_PILL, toneClass, toneOf } from '@/components/docflow/tone';
 
 /**
  * Search across the firm's file: documents and checklist lines together,
@@ -23,15 +24,6 @@ const STATUS_OPTIONS: { value: RequestStatus | ''; label: string }[] = [
   { value: 'accepted', label: 'Accepted' },
   { value: 'waived', label: 'Waived' },
 ];
-
-const STATUS_PILL: Record<RequestStatus, { label: string; cls: string }> = {
-  requested: { label: 'Requested', cls: 'df-warn' },
-  submitted: { label: 'Submitted', cls: 'df-info' },
-  in_review: { label: 'In review', cls: 'df-info' },
-  needs_correction: { label: 'Needs correction', cls: 'df-danger' },
-  accepted: { label: 'Accepted', cls: 'df-ok' },
-  waived: { label: 'Waived', cls: 'df-plain' },
-};
 
 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
@@ -196,15 +188,13 @@ const DocumentsPage: React.FC = () => {
             ))}
 
             {data && data.requests.length > 0 && (
-              <div className="df-row" style={{ gridTemplateColumns: '1fr', background: 'var(--df-panel-2)' }}>
-                <div className="df-field-label" style={{ margin: 0 }}>Checklist items</div>
-              </div>
+              <div className="df-field-label" style={{ margin: '8px 4px 0' }}>Checklist items</div>
             )}
 
             {data?.requests.map((r) => (
               <div
                 key={r.id}
-                className="df-row df-clickable"
+                className={`df-row df-clickable ${toneClass(toneOf(r))}`}
                 style={{ gridTemplateColumns: '1fr 160px auto' }}
                 onClick={() => navigate(`/engagements/${r.engagementId}`)}
                 role="link"

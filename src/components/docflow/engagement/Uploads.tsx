@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { EngagementDocument, RequestItem } from '@/api/types';
 import { I } from '../icons';
+import { STATUS_PILL, toneClass, toneOf } from '../tone';
 
 interface Props {
   documents: EngagementDocument[];
@@ -31,7 +32,7 @@ const SCAN_NOTE: Record<string, string> = {
  */
 const Uploads: React.FC<Props> = ({ documents, requests }) => {
   const navigate = useNavigate();
-  const requestTitle = new Map(requests.map((r) => [r.id, r.title]));
+  const requestById = new Map(requests.map((r) => [r.id, r]));
 
   return (
     <div className="df-section">
@@ -47,10 +48,12 @@ const Uploads: React.FC<Props> = ({ documents, requests }) => {
         {documents.map((doc) => {
           const version = doc.currentVersion;
           const note = version && version.scanStatus !== 'clean' ? SCAN_NOTE[version.scanStatus] : null;
+          /* A file is coloured by the line it answers: what the advisor did with it. */
+          const line = doc.requestId ? requestById.get(doc.requestId) : undefined;
           return (
             <div
               key={doc.id}
-              className="df-row df-clickable"
+              className={`df-row df-clickable${line ? ` ${toneClass(toneOf(line))}` : ''}`}
               style={{ gridTemplateColumns: '1fr auto auto', alignItems: 'center' }}
               onClick={() => navigate(`/review/${doc.id}`)}
               role="link"
@@ -60,7 +63,7 @@ const Uploads: React.FC<Props> = ({ documents, requests }) => {
               <div style={{ minWidth: 0 }}>
                 <div className="df-name">{doc.displayName ?? doc.name}</div>
                 <div className="df-meta">
-                  {doc.requestId && requestTitle.has(doc.requestId) ? <>for “{requestTitle.get(doc.requestId)}” · </> : null}
+                  {line ? <>for “{line.title}” · </> : null}
                   {version ? <>v{version.versionNo} · {formatBytes(version.sizeBytes)} · </> : null}
                   {doc.uploadedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </div>
@@ -69,6 +72,7 @@ const Uploads: React.FC<Props> = ({ documents, requests }) => {
               <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
                 {version?.available === false && <span className="df-pill df-warn">Not readable</span>}
                 {doc.archivedAt && <span className="df-pill df-plain">Archived</span>}
+                {line && <span className={'df-pill ' + STATUS_PILL[line.status].cls}>{STATUS_PILL[line.status].label}</span>}
               </div>
               <button className="df-btn df-sm df-ghost" onClick={(e) => { e.stopPropagation(); navigate(`/review/${doc.id}`); }}>
                 <I.Doc size={12} /> Open

@@ -23,6 +23,7 @@ import AttachmentSwitcher from '@/components/docflow/review/AttachmentSwitcher';
 import Organization from '@/components/docflow/review/Organization';
 import LoadError from '@/components/docflow/LoadError';
 import { queueNeighbours } from '@/components/docflow/queue';
+import { STATUS_PILL } from '@/components/docflow/tone';
 
 /**
  * The review workspace: the document on the left, everything you need to decide
@@ -34,14 +35,6 @@ import { queueNeighbours } from '@/components/docflow/queue';
  * general conversation the client has to scroll.
  */
 
-const STATUS_PILL: Record<string, { label: string; cls: string }> = {
-  requested: { label: 'Requested', cls: 'df-warn' },
-  submitted: { label: 'Submitted', cls: 'df-info' },
-  in_review: { label: 'In review', cls: 'df-info' },
-  needs_correction: { label: 'Needs correction', cls: 'df-danger' },
-  accepted: { label: 'Accepted', cls: 'df-ok' },
-  waived: { label: 'Waived', cls: 'df-plain' },
-};
 
 const Review: React.FC = () => {
   const { documentId } = useParams<{ documentId: string }>();

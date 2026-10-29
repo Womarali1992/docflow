@@ -1,12 +1,18 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useClientWork } from '@/api/queries/portal';
+import type { RequestItem } from '@/api/types';
 import { I } from '@/components/docflow/icons';
 import RequestCard from '@/components/docflow/portal/RequestCard';
 import { clientRequestState } from '@/components/docflow/portal/requestState';
 import { WithdrawableFiles } from '@/components/docflow/portal/WithdrawFile';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
+import ChecklistTiles from '@/components/docflow/board/ChecklistTiles';
+import MoveBar from '@/components/docflow/board/MoveBar';
+import { revealLine } from '@/components/docflow/board/motion';
+import { tally } from '@/components/docflow/board/whoseMove';
+import { toneClass, toneOf } from '@/components/docflow/tone';
 
 /**
  * Your next steps.
@@ -27,8 +33,29 @@ const PortalHome: React.FC = () => {
 
   const firstName = me?.name?.split(' ')[0] ?? 'there';
   const advisorName = me?.kind === 'client' ? me.providerName : null;
-  const { done, total } = work.progress;
-  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+  const { total } = work.progress;
+
+  /* The board is this page in miniature: the open work only, in the order the
+     page lists it — your next steps, then what is with your accountant, then
+     what is settled — so the first tiles are the cards just below them. A
+     closed year is finished business and has no tile. (`work.requests` arrives
+     in checklist order, and the sort is stable, so settled lines keep it.) */
+  const board = useMemo(() => {
+    const openWork = new Set(work.engagements.filter((e) => e.status !== 'closed').map((e) => e.id));
+    const place = new Map<string, number>();
+    work.steps.forEach((s, i) => place.set(s.request.id, i));
+    work.withAdvisor.forEach(({ request }, i) => place.set(request.id, work.steps.length + i));
+    const last = Number.MAX_SAFE_INTEGER;
+    return work.requests
+      .filter((r) => openWork.has(r.engagementId))
+      .sort((a, b) => (place.get(a.id) ?? last) - (place.get(b.id) ?? last));
+  }, [work.engagements, work.requests, work.steps, work.withAdvisor]);
+  const counts = tally(board);
+
+  /* A line still on this page is scrolled to; a settled one lives on "All items". */
+  const openLine = (request: RequestItem) => {
+    if (!revealLine(`line-${request.id}`)) navigate('/portal/requests');
+  };
 
   return (
     <div className="df-page">
@@ -53,16 +80,20 @@ const PortalHome: React.FC = () => {
         </div>
       </div>
 
-      {total > 0 && (
+      {counts.total > 0 && (
         <div className="df-section">
+          <div className="df-section-head">
+            <div>
+              <div className="df-section-title">Your checklist</div>
+              <div className="df-section-sub">
+                <span className="df-mono">{counts.done}</span> of <span className="df-mono">{counts.total}</span> settled
+                by your accountant{counts.done === counts.total ? ' — everything is in.' : ''}
+              </div>
+            </div>
+          </div>
           <div className="df-section-body">
-            <div className="df-progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-              <span className="df-progress-fill" style={{ width: `${pct}%` }} />
-            </div>
-            <div className="df-meta" style={{ marginTop: 6 }}>
-              <span className="df-mono">{done}</span> of <span className="df-mono">{total}</span> settled by your
-              accountant{done === total ? ' — everything is in.' : ''}
-            </div>
+            <MoveBar tally={counts} perspective="client" />
+            <ChecklistTiles requests={board} perspective="client" label="Your checklist" onOpen={openLine} />
           </div>
         </div>
       )}
@@ -101,7 +132,12 @@ const PortalHome: React.FC = () => {
             {work.withAdvisor.map(({ request }) => {
               const state = clientRequestState(request, request.attachments);
               return (
-                <div key={request.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
+                <div
+                  key={request.id}
+                  id={`line-${request.id}`}
+                  className={`df-row ${toneClass(toneOf(request))}`}
+                  style={{ gridTemplateColumns: '1fr auto' }}
+                >
                   <div style={{ minWidth: 0 }}>
                     <div className="df-name">{request.title}</div>
                     <div className="df-meta">

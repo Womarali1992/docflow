@@ -82,4 +82,10 @@ describe('what the client is told about a line with several files', () => {
     const requested = { status: 'requested', overdue: false } as unknown as RequestItem;
     expect(clientRequestState(requested, []).state).toBe('waiting_on_you');
   });
+
+  it('counts "I don’t have this" as answered, and green like everything with the accountant', () => {
+    const answered = { status: 'requested', overdue: false, clientResponseKind: 'not_applicable' } as unknown as RequestItem;
+    expect(clientRequestState(answered, [])).toMatchObject({ state: 'answered', cls: 'df-ok' });
+    expect(clientRequestState(submitted, [attachment(1, 'ready')]).cls).toBe('df-ok');
+  });
 });
