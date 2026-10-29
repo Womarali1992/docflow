@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useClients, useDashboard } from '@/api/queries';
+import { useClients, useDashboard, useQueueWho } from '@/api/queries';
+import WhoToggle from '@/components/docflow/WhoToggle';
 import { I } from '@/components/docflow/icons';
 import { QUEUE_EXPLAIN, QUEUE_FILTERS, QUEUE_TITLE, isQueueFilter, type QueueFilter } from '@/components/docflow/queue';
 import { SkeletonRows } from '@/components/docflow/Skeleton';
@@ -11,15 +12,25 @@ import { SkeletonRows } from '@/components/docflow/Skeleton';
  * The rows come from the same `GET /dashboard` read the tiles were counted
  * from, so opening a tile can never show a different number than the tile did.
  * There is no second query and no client-side filtering of a bigger list: the
- * server decides what is in each bucket, once.
+ * server decides what is in each bucket, once. The same goes for Mine /
+ * Everyone (F6): `?who=` is sent to the server, never applied here.
  */
 
 const formatDate = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
+/** "today", "yesterday", "3 days ago" — how long a line has been sitting. */
+const ago = (d: Date) => {
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return `${days} days ago`;
+};
+
 const Work: React.FC = () => {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const { data, isPending } = useDashboard();
+  const { who, setWho, shared, ready } = useQueueWho();
+  const { data, isPending } = useDashboard({ who, ready });
   const { data: clients = [] } = useClients();
 
   const filter: QueueFilter = isQueueFilter(params.get('filter')) ? (params.get('filter') as QueueFilter) : 'ready';
@@ -75,12 +86,26 @@ const Work: React.FC = () => {
               <button
                 key={f}
                 className={filter === f ? 'df-active' : ''}
-                onClick={() => setParams({ filter: f }, { replace: true })}
+                onClick={() =>
+                  setParams(
+                    (current) => {
+                      const out = new URLSearchParams(current);
+                      out.set('filter', f);
+                      return out;
+                    },
+                    { replace: true }
+                  )
+                }
               >
                 {QUEUE_TITLE[f]} <span className="df-mono" style={{ opacity: 0.6 }}>{counts[f]}</span>
               </button>
             ))}
           </div>
+          {shared && (
+            <div className="df-right">
+              <WhoToggle who={who} onChange={setWho} />
+            </div>
+          )}
         </div>
 
         <div className="df-list">
@@ -92,7 +117,7 @@ const Work: React.FC = () => {
                 <div key={m.id} className="df-row" style={{ gridTemplateColumns: '1fr auto' }}>
                   <div style={{ minWidth: 0 }}>
                     <div className="df-name">{clientName(m.clientId)}</div>
-                    <div className="df-meta">Unread message</div>
+                    <div className="df-meta">Unread message{shared ? ` · ${m.advisorName ?? 'Unassigned'}` : ''}</div>
                   </div>
                   <button className="df-btn df-sm df-ghost" onClick={() => navigate(`/clients/${m.clientId}`)}>
                     <I.Msg size={12} /> Open thread
@@ -100,7 +125,13 @@ const Work: React.FC = () => {
                 </div>
               ))
             : (requestBucket?.items ?? []).map((item) => {
-                const target = item.engagementId ? `/engagements/${item.engagementId}` : `/clients/${item.clientId}`;
+                /* A line ready to review opens on its file; anything else opens its checklist. */
+                const target =
+                  filter === 'ready' && item.documentId
+                    ? `/review/${item.documentId}`
+                    : item.engagementId
+                      ? `/engagements/${item.engagementId}`
+                      : `/clients/${item.clientId}`;
                 return (
                   <div
                     key={item.id}
@@ -115,13 +146,21 @@ const Work: React.FC = () => {
                       <div className="df-name">{item.title}</div>
                       <div className="df-meta">
                         {clientName(item.clientId)}
-                        {item.dueDate ? <> · due {formatDate(item.dueDate)}</> : null}
+                        {item.engagementTitle ? <> · {item.engagementTitle}</> : null}
+                        {filter === 'ready' && item.since ? <> · sent {ago(item.since)}</> : null}
+                        {filter !== 'ready' && item.dueDate ? <> · due {formatDate(item.dueDate)}</> : null}
+                        {filter !== 'ready' && !item.dueDate && item.since ? <> · asked {ago(item.since)}</> : null}
+                        {shared && who === 'all' && item.advisorName ? <> · {item.advisorName}</> : null}
                       </div>
                       {item.note && <div className="df-note">“{item.note}”</div>}
                     </div>
-                    <div>{filter === 'overdue' && <span className="df-pill df-danger">Overdue</span>}</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {shared && !item.advisorId && <span className="df-pill df-plain">Unassigned</span>}
+                      {filter === 'overdue' && <span className="df-pill df-danger">Overdue</span>}
+                      {filter !== 'ready' && item.status === 'needs_correction' && <span className="df-pill df-warn">Sent back</span>}
+                    </div>
                     <button className="df-btn df-sm df-ghost" onClick={(e) => { e.stopPropagation(); navigate(target); }}>
-                      Open
+                      {filter === 'ready' && item.documentId ? 'Review' : 'Open'}
                     </button>
                   </div>
                 );

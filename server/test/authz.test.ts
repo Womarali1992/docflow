@@ -1,7 +1,7 @@
 /**
  * Authorization matrix for every current API route.
  *
- * Each case lists the expected status for all six actors, following
+ * Each case lists the expected status for every actor, following
  * docs/CPA-PILOT-PLAN.md: cross-tenant ids are 404 (never 403), clients cannot
  * review, delete or overwrite advisor material, storage paths are never
  * serialized. If a later commit knowingly breaks a case, list the actor in
@@ -39,8 +39,14 @@ interface Case {
   check?: (res: Response, fx: Fixture, actor: Actor) => void | Promise<void>;
 }
 
+/**
+ * `colleague1` is an advisor in provider 1's firm with no client of their own
+ * (FIRM-BOOK-PLAN F3). The book is the firm's, so they get provider 1's answer
+ * everywhere; a case that differs says so with `{ ...S(...), colleague1: n }`.
+ */
 const S = (p1: number, p2: number, c1a: number, c1b: number, c2a: number, anon: number): Statuses => ({
   provider1: p1,
+  colleague1: p1,
   provider2: p2,
   client1a: c1a,
   client1b: c1b,
@@ -49,6 +55,9 @@ const S = (p1: number, p2: number, c1a: number, c1b: number, c2a: number, anon: 
 });
 
 const CLIENTS: Actor[] = ['client1a', 'client1b', 'client2a'];
+
+/** An advisor of firm 1: the book they see is the firm's, whoever the clients are assigned to. */
+const inFirm1 = (actor: Actor) => actor === 'provider1' || actor === 'colleague1';
 
 const attachPdf = (t: Test) =>
   t.attach('file', PDF_BYTES, { filename: 'upload.pdf', contentType: 'application/pdf' });
@@ -193,7 +202,7 @@ const cases: Case[] = [
     expect: S(200, 200, 403, 403, 403, 401),
     check: (res, fx, actor) => {
       const ids = (res.body as { id: string }[]).map((c) => c.id).sort();
-      const expected = actor === 'provider1' ? [fx.client1a.id, fx.client1b.id] : [fx.client2a.id];
+      const expected = inFirm1(actor) ? [fx.client1a.id, fx.client1b.id] : [fx.client2a.id];
       expect(ids).toEqual(expected.sort());
       for (const c of res.body) expect(c).not.toHaveProperty('passwordHash');
     },
@@ -220,6 +229,12 @@ const cases: Case[] = [
     check: (res) => expect(res.body.link).toMatch(/\/reset\/[A-Za-z0-9_-]{43}$/),
   },
   {
+    name: 'POST /api/clients/:id/mfa-reset (own client)',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/mfa-reset`),
+    expect: S(200, 404, 403, 403, 403, 401),
+    check: (res) => expect(res.body.reset).toBe(true),
+  },
+  {
     name: 'POST /api/clients/:id/deactivate (own client)',
     req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/deactivate`),
     expect: S(200, 404, 403, 403, 403, 401),
@@ -238,7 +253,11 @@ const cases: Case[] = [
     name: 'POST /api/clients',
     req: () => request(app).post('/api/clients').send({ name: 'New Client', email: 'new.client@example.test' }),
     expect: S(201, 201, 403, 403, 403, 401),
-    check: (res, fx, actor) => expect(res.body.providerId).toBe(selfProvider(fx, actor)!.id),
+    check: (res, fx, actor) => {
+      expect(res.body.firmId).toBe(selfProvider(fx, actor)!.firmId);
+      // A new client is the creating advisor's to look after.
+      expect(res.body.assignedAdvisorId).toBe(selfProvider(fx, actor)!.id);
+    },
   },
   {
     name: 'PATCH /api/clients/:id',
@@ -254,7 +273,7 @@ const cases: Case[] = [
     check: (res, fx, actor) => {
       const ids = (res.body as { id: string }[]).map((d) => d.id).sort();
       const expected =
-        actor === 'provider1'
+        inFirm1(actor)
           ? [...docIds(fx.client1a), ...docIds(fx.client1b)]
           : actor === 'provider2'
             ? docIds(fx.client2a)
@@ -335,7 +354,7 @@ const cases: Case[] = [
     expect: S(201, 404, 201, 404, 404, 401),
     check: (res, fx) => {
       expect(res.body.clientId).toBe(fx.client1a.id);
-      expect(res.body.providerId).toBe(fx.provider1.id);
+      expect(res.body.firmId).toBe(fx.provider1.firmId);
       expect(res.body.hasFile).toBe(false);
       // The contracted shape: none of the columns 0008_contract dropped.
       for (const gone of ['storagePath', 'folder', 'isRequested', 'status', 'type', 'size', 'url']) {
@@ -379,7 +398,7 @@ const cases: Case[] = [
     expect: S(200, 404, 200, 200, 200, 401),
     check: (res, fx, actor) => {
       const list = res.body as { id: string; clientId: string }[];
-      if (actor === 'provider1' || actor === 'client1a') {
+      if (inFirm1(actor) || actor === 'client1a') {
         expect(list.map((m) => m.id).sort()).toEqual(
           [fx.messages.fromClient1a, fx.messages.fromProvider1].sort()
         );
@@ -402,7 +421,7 @@ const cases: Case[] = [
     check: (res, fx, actor) => {
       const self = selfClient(fx, actor);
       expect(res.body.clientId).toBe(self ? self.id : fx.client1a.id);
-      expect(res.body.providerId).toBe(self ? self.providerId : fx.provider1.id);
+      expect(res.body.firmId).toBe(self ? self.firmId : fx.provider1.firmId);
     },
   },
   {
@@ -410,8 +429,9 @@ const cases: Case[] = [
     req: (fx) => request(app).patch('/api/messages/read').send({ clientId: fx.client1a.id }),
     expect: S(200, 404, 200, 200, 200, 401),
     check: (res, _fx, actor) => {
-      // Only the two parties of client1a's thread have anything to mark.
-      const expected = actor === 'provider1' || actor === 'client1a' ? 1 : 0;
+      // Only the two sides of client1a's thread have anything to mark, and the
+      // advisor's side is the whole firm: a colleague opening it reads it too.
+      const expected = inFirm1(actor) || actor === 'client1a' ? 1 : 0;
       expect(res.body.updated).toBe(expected);
     },
   },
@@ -422,12 +442,12 @@ const cases: Case[] = [
     req: () => request(app).get('/api/activities'),
     expect: S(200, 200, 200, 200, 200, 401),
     check: (res, fx, actor) => {
-      const list = res.body as { providerId: string; clientId: string | null }[];
+      const list = res.body as { firmId: string; clientId: string | null }[];
       expect(list.length).toBeGreaterThan(0);
       const provider = selfProvider(fx, actor);
       const client = selfClient(fx, actor);
       for (const a of list) {
-        if (provider) expect(a.providerId).toBe(provider.id);
+        if (provider) expect(a.firmId).toBe(provider.firmId);
         if (client) expect(a.clientId).toBe(client.id);
       }
     },
@@ -458,10 +478,10 @@ const cases: Case[] = [
     req: () => request(app).get('/api/engagements'),
     expect: S(200, 200, 200, 200, 200, 401),
     check: (res, fx, actor) => {
-      const rows = res.body as Array<{ id: string; clientId: string; providerId: string }>;
+      const rows = res.body as Array<{ id: string; clientId: string; firmId: string }>;
       const self = selfClient(fx, actor);
       if (self) expect(rows.every((r) => r.clientId === self.id)).toBe(true);
-      else expect(rows.every((r) => r.providerId === selfProvider(fx, actor)!.id)).toBe(true);
+      else expect(rows.every((r) => r.firmId === selfProvider(fx, actor)!.firmId)).toBe(true);
     },
   },
   {
@@ -496,6 +516,13 @@ const cases: Case[] = [
     req: (fx) => request(app).post(`/api/engagements/${fx.client1a.engagement}/reopen`),
     expect: S(200, 404, 403, 404, 404, 401),
     check: (res) => expect(res.body.status).toBe('open'),
+  },
+  {
+    /* The fixture engagement has one open line, so the owner's press is a real reminder. */
+    name: 'POST /api/engagements/:id/remind',
+    req: (fx) => request(app).post(`/api/engagements/${fx.client1a.engagement}/remind`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.items).toBe(1),
   },
   {
     name: 'POST /api/engagements/:id/requests (explicit items)',
@@ -542,6 +569,19 @@ const cases: Case[] = [
     req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/reopen`),
     expect: S(200, 404, 403, 404, 404, 401),
     check: (res) => expect(res.body.status).toBe('requested'),
+  },
+  {
+    // The seeded request has no file on it yet, so it can come off the checklist.
+    name: 'POST /api/requests/:id/remove (nothing sent yet)',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/remove`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).not.toBeNull(),
+  },
+  {
+    name: 'POST /api/requests/:id/restore',
+    req: (fx) => request(app).post(`/api/requests/${fx.client1a.request}/restore`),
+    expect: S(200, 404, 403, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).toBeNull(),
   },
   {
     // The mirror image of the advisor verbs: the client answers, the advisor cannot answer for them.
@@ -618,6 +658,13 @@ const cases: Case[] = [
     check: (res) => expect(res.body.archivedAt).not.toBeNull(),
   },
   {
+    // The client's own verb: the seeded request's document is on the checklist and undecided.
+    name: 'POST /api/documents/:id/withdraw (the client takes back a file)',
+    req: (fx) => request(app).post(`/api/documents/${fx.client1a.request}/withdraw`),
+    expect: S(403, 404, 200, 404, 404, 401),
+    check: (res) => expect(res.body.archivedAt).not.toBeNull(),
+  },
+  {
     name: 'POST /api/documents/:id/unarchive',
     req: (fx) => request(app).post(`/api/documents/${fx.client1a.upload}/unarchive`),
     expect: S(200, 404, 403, 404, 404, 401),
@@ -686,7 +733,7 @@ const cases: Case[] = [
     expect: S(202, 404, 202, 404, 404, 401),
     check: (res, fx, actor) => {
       // An advisor filing into an engagement is producing a deliverable.
-      expect(res.body.document.kind).toBe(actor === 'provider1' ? 'deliverable' : 'client_upload');
+      expect(res.body.document.kind).toBe(inFirm1(actor) ? 'deliverable' : 'client_upload');
     },
   },
   {
@@ -707,10 +754,10 @@ const cases: Case[] = [
     req: () => request(app).get('/api/templates'),
     expect: S(200, 200, 403, 403, 403, 401),
     check: (res, fx, actor) => {
-      const rows = res.body as Array<{ providerId: string; kind: string; items: unknown[] }>;
+      const rows = res.body as Array<{ firmId: string; kind: string; items: unknown[] }>;
       expect(rows).toHaveLength(2);
       expect(rows.map((r) => r.kind).sort()).toEqual(['business_tax', 'individual_tax']);
-      expect(rows.every((r) => r.providerId === selfProvider(fx, actor)!.id)).toBe(true);
+      expect(rows.every((r) => r.firmId === selfProvider(fx, actor)!.firmId)).toBe(true);
       expect(rows.every((r) => r.items.length >= 10)).toBe(true);
     },
   },
@@ -730,7 +777,7 @@ const cases: Case[] = [
     expect: S(200, 200, 403, 403, 403, 401),
     check: (res, fx, actor) => {
       // provider1 has two clients, provider2 one — each with one open request.
-      const expected = actor === 'provider1' ? 2 : 1;
+      const expected = inFirm1(actor) ? 2 : 1;
       expect(res.body.waitingOnClients.count).toBe(expected);
       expect(res.body.readyToReview.count).toBe(0);
       expect(res.body.overdue.count).toBe(0);
@@ -759,6 +806,51 @@ const cases: Case[] = [
     req: () => request(app).post('/api/notifications/read').send({}),
     expect: S(200, 200, 200, 200, 200, 401),
     check: (res) => expect(res.body).toEqual({ ok: true, marked: 0 }),
+  },
+
+  /* --------------------------------------------------- firm and team (F4/F5) */
+  {
+    // Reading the team is any advisor's: the Advisor pickers and the queue toggle need it.
+    name: 'GET /api/firm',
+    req: () => request(app).get('/api/firm'),
+    expect: S(200, 200, 403, 403, 403, 401),
+    check: (res, fx, actor) => {
+      const self = selfProvider(fx, actor)!;
+      expect(res.body.id).toBe(self.firmId);
+      const ids = (res.body.advisors as { id: string }[]).map((a) => a.id).sort();
+      expect(ids).toEqual(inFirm1(actor) ? [fx.provider1.id, fx.colleague1.id].sort() : [fx.provider2.id]);
+      expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|tokenHash/);
+    },
+  },
+  {
+    // Changing the team is an owner's; provider 2 owns firm 2 and invites into it.
+    name: 'POST /api/firm/advisors',
+    req: () => request(app).post('/api/firm/advisors').send({ name: 'New Advisor', email: 'new.advisor@example.test' }),
+    expect: { ...S(201, 201, 403, 403, 403, 401), colleague1: 403 },
+    check: (res, fx, actor) => {
+      expect(res.body.advisor).toMatchObject({ role: 'advisor', hasPassword: false });
+      expect(res.body.link).toContain('/staff-invite/');
+      expect(selfProvider(fx, actor)).not.toBeNull();
+    },
+  },
+  {
+    // A colleague is 403 before the id is looked at; another firm's owner gets 404, never 403.
+    name: 'POST /api/firm/advisors/:id/deactivate',
+    req: (fx) => request(app).post(`/api/firm/advisors/${fx.colleague1.id}/deactivate`).send({ reassignTo: null }),
+    expect: { ...S(200, 404, 403, 403, 403, 401), colleague1: 403 },
+    check: (res) => expect(res.body.advisor.deactivatedAt).not.toBeNull(),
+  },
+  {
+    name: 'POST /api/firm/advisors/:id/reactivate',
+    req: (fx) => request(app).post(`/api/firm/advisors/${fx.colleague1.id}/reactivate`),
+    expect: { ...S(200, 404, 403, 403, 403, 401), colleague1: 403 },
+  },
+  {
+    // Any advisor of the firm may move a client (Q2).
+    name: 'POST /api/clients/:id/assign',
+    req: (fx) => request(app).post(`/api/clients/${fx.client1a.id}/assign`).send({ advisorId: fx.colleague1.id }),
+    expect: S(200, 404, 403, 403, 403, 401),
+    check: (res, fx) => expect(res.body.assignedAdvisorId).toBe(fx.colleague1.id),
   },
 
   /* ----------------------------------------------------------------- ops */

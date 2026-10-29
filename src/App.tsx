@@ -52,6 +52,7 @@ const App = () => (
         <Route path="/mfa" element={<MfaGate stage="preauth"><Mfa /></MfaGate>} />
         <Route path="/mfa/enroll" element={<MfaGate stage="mfa_enroll"><MfaEnroll /></MfaGate>} />
         <Route path="/invite/:token" element={<Invite />} />
+        <Route path="/staff-invite/:token" element={<Invite kind="staff" />} />
         <Route path="/forgot" element={<Forgot />} />
         <Route path="/reset/:token" element={<Reset />} />
 

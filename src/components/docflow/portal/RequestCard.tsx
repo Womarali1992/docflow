@@ -9,6 +9,7 @@ import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
 import Modal from '../Modal';
 import AskDialog from './AskDialog';
+import { WithdrawDialog } from './WithdrawFile';
 import { clientRequestState } from './requestState';
 
 /**
@@ -23,6 +24,10 @@ import { clientRequestState } from './requestState';
  * Uploading goes through the queue (C4.2): several files at once, each with its
  * own progress, cancel and — when one is refused — its own sentence explaining
  * why, without losing the ones that worked.
+ *
+ * A file sent by mistake can be withdrawn until the accountant has ruled on it.
+ * After that it is part of their decision, and Replace is the way to send a
+ * better copy.
  */
 
 const BUCKET_PILL: Record<PortalStep['bucket'], { label: string; cls: string } | null> = {
@@ -46,6 +51,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
   const attachments = request.attachments;
   const { toast } = useToast();
   const respond = useRespondToRequest();
+  const [withdrawing, setWithdrawing] = useState<RequestAttachment | null>(null);
   const queue = useUploadQueue();
   const fileRef = useRef<HTMLInputElement | null>(null);
   const cameraRef = useRef<HTMLInputElement | null>(null);
@@ -62,6 +68,7 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
   const [naNote, setNaNote] = useState('');
 
   const bucketPill = BUCKET_PILL[step.bucket];
+  const refused = attachments.filter((a) => a.state === 'refused');
   const status = clientRequestState(request, attachments);
 
   /** Opens the picker with (or without) a replacement target set first. */
@@ -131,18 +138,36 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
               </div>
               {attachment.state === 'checking' ? (
                 <span className="df-pill df-warn">Being checked</span>
+              ) : attachment.state === 'refused' ? (
+                <span className="df-pill df-danger">Not accepted</span>
               ) : (
                 <span className="df-pill df-ok">Sent</span>
               )}
               <button
-                className="df-btn df-sm df-ghost"
+                className={'df-btn df-sm ' + (attachment.state === 'refused' ? 'df-primary' : 'df-ghost')}
                 onClick={() => choose(attachment, fileRef)}
                 title={`Send a corrected copy of ${attachment.displayName}`}
               >
-                Replace
+                {attachment.state === 'refused' ? 'Send again' : 'Replace'}
               </button>
+              {!attachment.decided && (
+                <button
+                  className="df-btn df-sm df-ghost"
+                  onClick={() => setWithdrawing(attachment)}
+                  title={`Take back ${attachment.displayName}`}
+                >
+                  Withdraw
+                </button>
+              )}
             </div>
           ))}
+        </div>
+      )}
+      {refused.length > 0 && (
+        <div className="df-note df-note-warn">
+          {refused.length === 1
+            ? `${refused[0].displayName} was not accepted: it did not pass the security check and was removed. Please send it again — from a different device if you can.`
+            : `${refused.length} of your files were not accepted: they did not pass the security check and were removed. Please send them again — from a different device if you can.`}
         </div>
       )}
       {alreadySaid && (
@@ -196,6 +221,8 @@ const RequestCard: React.FC<{ step: PortalStep }> = ({ step }) => {
           </button>
         )}
       </div>
+
+      <WithdrawDialog file={withdrawing} lastOne={attachments.length === 1} onClose={() => setWithdrawing(null)} />
 
       <AskDialog open={askOpen} onClose={() => setAskOpen(false)} about={request.title} documentId={attachments[0]?.documentId} />
 

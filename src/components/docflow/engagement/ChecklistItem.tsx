@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RequestItem, RequestStatus } from '@/api/types';
-import { useAcceptRequest, useReopenRequest, useRequestCorrection, useUpdateRequest, useWaiveRequest } from '@/api/queries';
+import { useAcceptRequest, useRemoveRequest, useReopenRequest, useRequestCorrection, useUpdateRequest, useWaiveRequest } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
@@ -14,7 +14,9 @@ import ReasonDialog from '../ReasonDialog';
  * is no "Accept" on a line nothing has been submitted against, because the
  * server answers that with `nothing_submitted` and a disabled-looking button
  * that fails is worse than no button. Waiving asks for a reason and correcting
- * asks for a note, because both are refused without one.
+ * asks for a note, because both are refused without one. Remove is offered only
+ * while nothing has been sent for the line; after that the line is part of the
+ * record and waiving is the way to close it.
  */
 
 const STATUS_PILL: Record<RequestStatus, { label: string; cls: string }> = {
@@ -45,6 +47,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   const requestCorrection = useRequestCorrection();
   const waive = useWaiveRequest();
   const reopen = useReopenRequest();
+  const remove = useRemoveRequest();
 
   const [editing, setEditing] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
@@ -61,7 +64,8 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   const settled = request.status === 'accepted' || request.status === 'waived';
   /* The client said "I don't have this" and nobody has decided yet. */
   const needsDecision = Boolean(request.clientResponseKind) && !settled;
-  const busy = accept.isPending || requestCorrection.isPending || waive.isPending || reopen.isPending || updateRequest.isPending;
+  const busy =
+    accept.isPending || requestCorrection.isPending || waive.isPending || reopen.isPending || remove.isPending || updateRequest.isPending;
 
   /**
    * The files filed against this line (H5), and the decision they permit.
@@ -75,7 +79,11 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
   const attachments = request.attachments;
   const versionIds = attachments.map((a) => a.currentVersion?.id).filter((id): id is string => Boolean(id));
   const stillChecking = attachments.some((a) => a.state === 'checking');
-  const decidable = attachments.length > 0 && !stillChecking && versionIds.length === attachments.length;
+  /* A file the scanner refused is shown but not decided on: there is nothing
+     in it to accept, and the server leaves it out of the decision too. */
+  const refused = attachments.filter((a) => a.state === 'refused');
+  const live = attachments.length - refused.length;
+  const decidable = live > 0 && !stillChecking && versionIds.length === live;
 
   const startEdit = () => {
     setTitle(request.title);
@@ -113,6 +121,13 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
     }
   };
 
+  /* Reversible from "Removed" under the list, so no confirmation step. */
+  const removeLine = () =>
+    run(async () => {
+      await remove.mutateAsync(request.id);
+      toast({ title: 'Removed from the checklist', description: `${request.title}. The client no longer sees it.` });
+    }, 'Could not remove');
+
   if (editing) {
     return (
       <div className="df-row" style={{ gridTemplateColumns: '1fr', gap: 8 }}>
@@ -137,7 +152,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
           </div>
           <label className="df-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} />
-            <span className="df-field-label" style={{ margin: 0 }}>Required — the client is chased for it</span>
+            <span className="df-field-label" style={{ margin: 0 }}>Required — the client is reminded until it is sent</span>
           </label>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="df-btn df-sm df-primary" onClick={saveEdit} disabled={busy || !title.trim()}>
@@ -188,8 +203,18 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
             Waive it with a reason, or leave it on the list.
           </div>
         )}
+        {request.status === 'needs_correction' && request.correction && (
+          <div className="df-note">You asked: {request.correction.note}</div>
+        )}
         {request.status === 'waived' && request.waivedReason && (
           <div className="df-note">Waived: {request.waivedReason}</div>
+        )}
+        {refused.length > 0 && (
+          <div className="df-note df-note-warn">
+            {refused.length === 1
+              ? `${refused[0].displayName} failed the virus check and was removed. The client has been asked to send it again.`
+              : `${refused.length} files failed the virus check and were removed. The client has been asked to send them again.`}
+          </div>
         )}
         {stillChecking && (
           <div className="df-note df-note-warn">
@@ -253,6 +278,11 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
           {editable && !settled && (
             <button className="df-btn df-sm df-ghost" disabled={busy} onClick={startEdit}>Edit</button>
           )}
+          {editable && attachments.length === 0 && (
+            <button className="df-btn df-sm df-ghost" disabled={busy} onClick={removeLine} title="Take it off the list. The client is not told why.">
+              Remove
+            </button>
+          )}
         </div>
       </div>
 
@@ -274,7 +304,7 @@ const ChecklistItem: React.FC<Props> = ({ request, first, last, editable, onMove
         title="Waive this item"
         subtitle={request.title}
         label="Why is this not needed?"
-        help="This stays on the file. A year from now it has to answer “why isn’t this on the list?”."
+        help="The client sees this reason on their checklist, and it stays on the file — so write it for both: “No brokerage account in 2026”, not “confirmed by phone on the 3rd”."
         placeholder="Client had no brokerage account in 2026."
         confirmLabel="Waive item"
         onConfirm={(reason) => waive.mutateAsync({ id: request.id, reason })}

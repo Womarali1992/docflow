@@ -13,6 +13,7 @@ import { authenticate } from '../middleware/auth.js';
 import { NAME_MAX } from '../security/limits.js';
 import { serializeDocument, serializeRequest } from './serialize.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
+import { correctionsByRequest } from '../workflow/corrections.js';
 import { isId } from './scope.js';
 
 const router = asyncRouter();
@@ -43,7 +44,7 @@ router.get('/', async (req, res) => {
   /* -------------------------------------------------------------- documents */
   const docScope =
     auth.kind === 'provider'
-      ? [eq(schema.documents.providerId, auth.providerId), ...(clientIdParam ? [eq(schema.documents.clientId, clientIdParam)] : [])]
+      ? [eq(schema.documents.firmId, auth.firmId), ...(clientIdParam ? [eq(schema.documents.clientId, clientIdParam)] : [])]
       : [
           eq(schema.documents.clientId, auth.sub),
           or(eq(schema.documents.kind, 'client_upload'), isNull(schema.documents.kind), isNotNull(schema.documents.sharedAt))!,
@@ -80,7 +81,7 @@ router.get('/', async (req, res) => {
   /* --------------------------------------------------------------- requests */
   const reqScope =
     auth.kind === 'provider'
-      ? [eq(schema.requests.providerId, auth.providerId), ...(clientIdParam ? [eq(schema.requests.clientId, clientIdParam)] : [])]
+      ? [eq(schema.requests.firmId, auth.firmId), ...(clientIdParam ? [eq(schema.requests.clientId, clientIdParam)] : [])]
       : [eq(schema.requests.clientId, auth.sub)];
 
   const reqConditions = [...reqScope, isNull(schema.requests.archivedAt)];
@@ -106,12 +107,13 @@ router.get('/', async (req, res) => {
   const truncated = documents.length > LIMIT || requests.length > LIMIT;
   const hits = requests.slice(0, LIMIT);
   const attachments = await attachmentsByRequest(hits.map((r) => r.id));
+  const corrections = await correctionsByRequest(hits.filter((r) => r.status === 'needs_correction').map((r) => r.id));
 
   res.json({
     query: q,
     truncated,
     documents: documents.slice(0, LIMIT).map(serializeDocument),
-    requests: hits.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [])),
+    requests: hits.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [], corrections.get(r.id) ?? null)),
   });
 });
 

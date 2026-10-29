@@ -160,3 +160,8 @@ export function useArchiveDocument() {
 export function useUnarchiveDocument() {
   return useDocumentMutation<string, Document>((id) => api.documents.unarchive(id), (id) => id);
 }
+
+/** "I sent the wrong file." Archived, never deleted; the advisor still sees it. */
+export function useWithdrawDocument() {
+  return useDocumentMutation<string, Document>((id) => api.documents.withdraw(id), (id) => id);
+}

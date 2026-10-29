@@ -29,15 +29,31 @@ export type AuditAction =
   | 'client.created'
   | 'client.deactivated'
   | 'client.reactivated'
+  /* An advisor removed a client's authenticator so they can enroll a new one (2026-10-28 audit). */
+  | 'client.mfa_reset'
+  /* An advisor moved a client's sign-in address (2026-10-28 audit). */
+  | 'client.email_changed'
+  /* A client given to another advisor of the firm, or to nobody (FIRM-BOOK-PLAN F5). */
+  | 'client.reassigned'
+  /* The firm's team (F4): an owner invites, deactivates and reactivates advisors. */
+  | 'staff.invited'
+  | 'staff.invitation_accepted'
+  | 'staff.deactivated'
+  | 'staff.reactivated'
   | 'engagement.created'
   | 'engagement.closed'
   /* A whole engagement copied out as a zip — every accepted file and every
      shared deliverable leaving the system at once (H8). */
   | 'engagement.exported'
+  /* An advisor pressed "Remind now" (2026-10-28 audit). */
+  | 'engagement.reminded'
   | 'request.created'
   | 'request.accepted'
   | 'request.correction_requested'
   | 'request.waived'
+  /* A line taken off the checklist before anything was sent for it, and put back (2026-10-28 audit). */
+  | 'request.removed'
+  | 'request.restored'
   | 'document.published'
   /* Stored and queued for a re-scan: the honest name for a 202, and the row a
      later `document.published` from the scan-retry job pairs with (H3). */
@@ -48,6 +64,8 @@ export type AuditAction =
   | 'document.shared'
   | 'document.unshared'
   | 'document.archived'
+  /* The client took back a file they sent, before the advisor decided on it (2026-10-28 audit). */
+  | 'document.withdrawn'
   | 'admin.action'
   | 'backup.run'
   /* An advisor put a failed background job back in the queue (H7). */

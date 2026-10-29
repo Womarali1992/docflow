@@ -28,3 +28,11 @@ export function resetHint(emailQueued: boolean): string {
     ? `We have emailed this link to the client. ${what} You can also hand it over yourself if the email does not arrive.`
     : `Hand this to the client. ${what}`;
 }
+
+/** Under an advisor's invitation link: the same truth about delivery, said to an owner. */
+export function staffInvitationHint(emailQueued: boolean): string {
+  const lead = emailQueued
+    ? 'We have emailed this link to them. You can also send it yourself if the email does not arrive.'
+    : 'Send this link to them.';
+  return `${lead} It sets their password and walks them through two-step verification. Any earlier link for them stops working.`;
+}

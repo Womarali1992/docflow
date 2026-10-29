@@ -35,7 +35,7 @@ router.use(authenticate);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 router.get('/status', requireProvider, async (req, res) => {
-  res.json(await collectOpsStatus(req.auth!.sub));
+  res.json(await collectOpsStatus(req.auth!.firmId));
 });
 
 /**

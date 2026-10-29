@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { useDashboard } from '@/api/queries';
+import { useDashboard, useQueueWho } from '@/api/queries';
+import WhoToggle from '@/components/docflow/WhoToggle';
 import { I } from '@/components/docflow/icons';
 import ActivityFeed from '@/components/docflow/ActivityFeed';
 import { QUEUE_TITLE, type QueueFilter } from '@/components/docflow/queue';
@@ -22,11 +23,12 @@ import { QUEUE_TITLE, type QueueFilter } from '@/components/docflow/queue';
 const Index: React.FC = () => {
   const navigate = useNavigate();
   const { me } = useAuth();
-  const { data, isPending, error } = useDashboard();
+  const { who, setWho, shared, ready } = useQueueWho();
+  const { data, isPending, error } = useDashboard({ who, ready });
 
   const headerName = me?.kind === 'provider' ? me.name : '';
   const firmName = me?.kind === 'provider' ? me.firmName : null;
-  const open = (filter: QueueFilter) => navigate(`/work?filter=${filter}`);
+  const open = (filter: QueueFilter) => navigate(`/work?filter=${filter}${shared ? `&who=${who}` : ''}`);
 
   const tiles: { filter: QueueFilter; count: number; hint: string; tone?: string }[] = [
     { filter: 'ready', count: data?.readyToReview.count ?? 0, hint: 'The client has done their part', tone: 'df-info' },
@@ -49,6 +51,7 @@ const Index: React.FC = () => {
           </div>
         </div>
         <div className="df-head-actions">
+          {shared && <WhoToggle who={who} onChange={setWho} />}
           <button className="df-btn" onClick={() => navigate('/documents')}><I.Search size={13} /> Find a document</button>
           <button className="df-btn df-primary" onClick={() => navigate('/clients')}><I.Users size={13} /> Clients</button>
         </div>

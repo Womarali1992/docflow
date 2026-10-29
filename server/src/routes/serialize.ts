@@ -7,6 +7,7 @@
  * turned into a path on the firm's disk.
  */
 import type { Document, DocumentVersion, Engagement, Request as RequestRow, RequestTemplate, Review } from '../db/schema.js';
+import type { RequestCorrection } from '../workflow/corrections.js';
 
 /** A request is overdue when it is still outstanding and its deadline has passed. Never stored. */
 export function isOverdue(row: Pick<RequestRow, 'status' | 'dueDate'>, now = new Date()): boolean {
@@ -18,7 +19,7 @@ export function serializeEngagement(e: Engagement) {
   return {
     id: e.id,
     clientId: e.clientId,
-    providerId: e.providerId,
+    firmId: e.firmId,
     title: e.title,
     kind: e.kind,
     taxYear: e.taxYear,
@@ -34,10 +35,13 @@ export function serializeEngagement(e: Engagement) {
  * One file answering a checklist line (H5).
  *
  * A request holds any number of these: six receipts are six attachments, each
- * with its own version history, each replaceable on its own. The two states are
- * the two the client is already told apart everywhere else — `ready` means
+ * with its own version history, each replaceable on its own. The states are
+ * the ones the client is already told apart everywhere else — `ready` means
  * there is something readable to open, `checking` means the bytes are here and
- * the virus check has not finished.
+ * the virus check has not finished — plus `refused`: the scanner rejected the
+ * newest version and nothing readable is left. Before the 2026-10-28 audit that
+ * last one read as `checking` forever, so a client whose file was quarantined
+ * on a re-scan was told there was nothing more to do.
  *
  * `currentVersion` is the same summary the engagement tree uses, so a screen
  * that has attachments does not need a second round trip to render them.
@@ -46,7 +50,9 @@ export interface RequestAttachment {
   documentId: string;
   displayName: string;
   currentVersion: ReturnType<typeof summarizeAttachmentVersion>;
-  state: 'ready' | 'checking';
+  state: 'ready' | 'checking' | 'refused';
+  /** The advisor has accepted or corrected the version on screen; until then the client may withdraw it. */
+  decided: boolean;
 }
 
 /** Just enough of a version to name it on a checklist row. */
@@ -63,23 +69,39 @@ function summarizeAttachmentVersion(v: DocumentVersion | undefined) {
   };
 }
 
-/** The attachment shape for one document plus its current version, if any. */
-export function toAttachment(doc: Document, version: DocumentVersion | undefined): RequestAttachment {
+/**
+ * The attachment shape for one document plus its current version, if any.
+ * `newest` is only needed when there is no current version: it is what says
+ * whether the file is still being checked or was refused.
+ */
+export function toAttachment(
+  doc: Document,
+  version: DocumentVersion | undefined,
+  newest?: DocumentVersion,
+  decided = false
+): RequestAttachment {
   const currentVersion = summarizeAttachmentVersion(version);
+  const refused = !currentVersion && (newest?.scanStatus === 'infected' || newest?.scanStatus === 'encrypted');
   return {
     documentId: doc.id,
     displayName: doc.displayName ?? doc.name,
     currentVersion,
-    state: currentVersion?.available ? 'ready' : 'checking',
+    state: currentVersion?.available ? 'ready' : refused ? 'refused' : 'checking',
+    decided,
   };
 }
 
-export function serializeRequest(r: RequestRow, now = new Date(), attachments: RequestAttachment[] = []) {
+export function serializeRequest(
+  r: RequestRow,
+  now = new Date(),
+  attachments: RequestAttachment[] = [],
+  correction: RequestCorrection | null = null
+) {
   return {
     id: r.id,
     engagementId: r.engagementId,
     clientId: r.clientId,
-    providerId: r.providerId,
+    firmId: r.firmId,
     title: r.title,
     instructions: r.instructions,
     category: r.category,
@@ -101,6 +123,10 @@ export function serializeRequest(r: RequestRow, now = new Date(), attachments: R
        absent rather than wrong. */
     attachments,
     attachmentCount: attachments.length,
+    /* What the advisor asked for, while the line is waiting on a corrected
+       copy. Only the open one: once the client sends again the note has done
+       its job, and it stays readable in the item's thread. */
+    correction: r.status === 'needs_correction' ? correction : null,
   };
 }
 
@@ -154,7 +180,7 @@ export function serializeDocument(doc: Document) {
   return {
     id: doc.id,
     clientId: doc.clientId,
-    providerId: doc.providerId,
+    firmId: doc.firmId,
     name: doc.name,
     mimeType: doc.mimeType,
     sizeBytes: doc.sizeBytes,
@@ -182,7 +208,7 @@ export function serializeDocument(doc: Document) {
 export function serializeTemplate(t: RequestTemplate) {
   return {
     id: t.id,
-    providerId: t.providerId,
+    firmId: t.firmId,
     name: t.name,
     kind: t.kind,
     items: t.items,

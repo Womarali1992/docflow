@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { recordActivity } from '../db/activity-log.js';
-import { notify } from '../notify.js';
+import { notify, notifyAdvisors } from '../notify.js';
 import { MESSAGE_MAX } from '../security/limits.js';
 
 const router = asyncRouter();
@@ -21,9 +21,9 @@ router.get('/', async (req, res) => {
   } else {
     if (!clientId) return res.status(400).json({ error: 'clientId required' });
     resolvedClientId = clientId;
-    // Verify client belongs to this provider
+    // The client has to be one of the firm's.
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, resolvedClientId));
-    if (!c || c.providerId !== auth.providerId) return res.status(404).json({ error: 'Not found' });
+    if (!c || c.firmId !== auth.firmId) return res.status(404).json({ error: 'Not found' });
   }
 
   const conditions = [eq(schema.messages.clientId, resolvedClientId)];
@@ -55,7 +55,7 @@ router.patch('/read', async (req, res) => {
     if (!parsed.data.clientId) return res.status(400).json({ error: 'clientId required' });
     clientId = parsed.data.clientId;
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, clientId));
-    if (!c || c.providerId !== auth.providerId) return res.status(404).json({ error: 'Not found' });
+    if (!c || c.firmId !== auth.firmId) return res.status(404).json({ error: 'Not found' });
   }
 
   const conditions = [
@@ -86,24 +86,22 @@ router.post('/', async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
 
   let clientId: string;
-  let providerId: string;
+  const firmId = auth.firmId;
 
   if (auth.kind === 'client') {
     clientId = auth.sub;
-    providerId = auth.providerId;
   } else {
     if (!parsed.data.clientId) return res.status(400).json({ error: 'clientId required' });
     clientId = parsed.data.clientId;
-    providerId = auth.providerId;
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, clientId));
-    if (!c || c.providerId !== providerId) return res.status(404).json({ error: 'Not found' });
+    if (!c || c.firmId !== firmId) return res.status(404).json({ error: 'Not found' });
   }
 
   const [msg] = await db
     .insert(schema.messages)
     .values({
       clientId,
-      providerId,
+      firmId,
       documentId: parsed.data.documentId,
       senderKind: auth.kind,
       senderId: auth.sub,
@@ -115,25 +113,19 @@ router.post('/', async (req, res) => {
   /* To the other side of the thread, and never with the message text: the
      notification list is glanced at, and a subject line is not a safe place
      for something a client wrote about their tax affairs. */
-  await notify(
-    auth.kind === 'client'
-      ? {
-          userKind: 'provider',
-          userId: providerId,
-          type: 'message.new',
-          title: `New message from ${auth.name}`,
-          link: `/clients/${clientId}`,
-        }
-      : {
-          userKind: 'client',
-          userId: clientId,
-          type: 'message.new',
-          title: 'New message from your accountant',
-          link: '/portal/messages',
-        }
-  );
+  if (auth.kind === 'client') {
+    await notifyAdvisors(clientId, { type: 'message.new', title: `New message from ${auth.name}`, link: `/clients/${clientId}` });
+  } else {
+    await notify({
+      userKind: 'client',
+      userId: clientId,
+      type: 'message.new',
+      title: 'New message from your accountant',
+      link: '/portal/messages',
+    });
+  }
   await recordActivity({
-    providerId,
+    firmId,
     clientId,
     type: 'message',
     description: parsed.data.documentId ? `sent message about a document` : `sent a message`,

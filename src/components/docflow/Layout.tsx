@@ -3,14 +3,11 @@ import { Outlet, useLocation } from 'react-router-dom';
 import PageLoading from './PageLoading';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
-import TweaksBar from './TweaksBar';
 import ErrorBoundary from './ErrorBoundary';
 import ConnectionBanner from './ConnectionBanner';
 import './styles.css';
 
 const DocFlowLayout: React.FC = () => {
-  const [theme, setTheme] = useState<'sand' | 'graphite' | 'forest'>('sand');
-  const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
 
@@ -19,12 +16,9 @@ const DocFlowLayout: React.FC = () => {
     setDrawerOpen(false);
   }, [location.pathname]);
 
-  const rootClass = [
-    'df-root',
-    `df-theme-${theme}`,
-    density === 'compact' ? 'df-density-compact' : '',
-    drawerOpen ? 'df-drawer-open' : '',
-  ].filter(Boolean).join(' ');
+  /* One look. The floating theme/density picker this used to carry was a
+     design-review tool that shipped to every screen (2026-10-28 audit). */
+  const rootClass = ['df-root', 'df-theme-sand', drawerOpen ? 'df-drawer-open' : ''].filter(Boolean).join(' ');
 
   return (
     <div className={rootClass}>
@@ -42,7 +36,6 @@ const DocFlowLayout: React.FC = () => {
           </ErrorBoundary>
         </main>
       </div>
-      <TweaksBar theme={theme} setTheme={setTheme} density={density} setDensity={setDensity} />
     </div>
   );
 };

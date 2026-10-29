@@ -18,11 +18,13 @@ import { recordActivity } from '../db/activity-log.js';
 import { itemsToRequests, type TemplateItem } from '../workflow/starter-templates.js';
 import { serializeDocument, serializeEngagement, serializeRequest } from './serialize.js';
 import { attachmentsByRequest } from '../workflow/attachments.js';
+import { correctionsByRequest } from '../workflow/corrections.js';
 import { exportFilename, manifestCsv, planExport } from '../workflow/export.js';
 import { contentDisposition } from '../files/filename.js';
 import { ZipFile } from 'yazl';
 import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
 import { notify } from '../notify.js';
+import { remindNow } from '../jobs/handlers/reminders.js';
 
 const router = asyncRouter();
 router.use(authenticate);
@@ -104,8 +106,8 @@ router.get('/', async (req, res) => {
   const where =
     auth.kind === 'provider'
       ? clientId
-        ? and(eq(schema.engagements.providerId, auth.providerId), eq(schema.engagements.clientId, clientId))
-        : eq(schema.engagements.providerId, auth.providerId)
+        ? and(eq(schema.engagements.firmId, auth.firmId), eq(schema.engagements.clientId, clientId))
+        : eq(schema.engagements.firmId, auth.firmId)
       : eq(schema.engagements.clientId, auth.sub);
 
   const list = await db.select().from(schema.engagements).where(where).orderBy(desc(schema.engagements.createdAt));
@@ -132,7 +134,7 @@ router.post('/', requireProvider, async (req, res) => {
   const [created] = await db
     .insert(schema.engagements)
     .values({
-      providerId: auth.providerId,
+      firmId: auth.firmId,
       clientId: client.id,
       title: parsed.data.title,
       kind: parsed.data.kind ?? 'other',
@@ -145,7 +147,7 @@ router.post('/', requireProvider, async (req, res) => {
 
   await auditRequest(req, { action: 'engagement.created', targetType: 'engagement', targetId: created.id, clientId: client.id });
   await recordActivity({
-    providerId: auth.providerId,
+    firmId: auth.firmId,
     clientId: client.id,
     type: 'update',
     description: `started engagement: ${created.title}`,
@@ -168,11 +170,16 @@ router.get('/:id', async (req, res) => {
   if (!engagement) return notFound(res);
   const now = new Date();
 
-  const requests = await db
+  const lines = await db
     .select()
     .from(schema.requests)
     .where(eq(schema.requests.engagementId, engagement.id))
     .orderBy(asc(schema.requests.sortOrder), asc(schema.requests.createdAt));
+  /* A line taken off the checklist is not part of it: every count on both
+     screens reads `requests`. The advisor gets the removed ones on their own,
+     to put one back; the client never sees them. */
+  const requests = lines.filter((r) => r.archivedAt === null);
+  const removed = req.auth!.kind === 'provider' ? lines.filter((r) => r.archivedAt !== null) : [];
 
   const allDocuments = await db.select().from(schema.documents).where(eq(schema.documents.engagementId, engagement.id));
   // A client does not see a deliverable until it is shared (invariant: 404, not 403).
@@ -186,10 +193,12 @@ router.get('/:id', async (req, res) => {
 
   // The attachments of every line in two queries, not two per line (H5).
   const attachments = await attachmentsByRequest(requests.map((r) => r.id));
+  const corrections = await correctionsByRequest(requests.filter((r) => r.status === 'needs_correction').map((r) => r.id));
 
   res.json({
     engagement: serializeEngagement(engagement),
-    requests: requests.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [])),
+    requests: requests.map((r) => serializeRequest(r, now, attachments.get(r.id) ?? [], corrections.get(r.id) ?? null)),
+    ...(req.auth!.kind === 'provider' ? { removedRequests: removed.map((r) => serializeRequest(r, now)) } : {}),
     documents: documents.map((d) => ({
       ...serializeDocument(d),
       currentVersion: d.currentVersionId ? summarizeVersion(versionById.get(d.currentVersionId)) : null,
@@ -321,6 +330,46 @@ router.post('/:id/close', async (req, res) => {
   res.json(serializeEngagement(updated));
 });
 
+/**
+ * "Remind them now." The morning run's notice, sent today, for this
+ * engagement's outstanding lines — at most one reminder per client per day,
+ * whoever sends it (see `remindNow`).
+ */
+router.post('/:id/remind', async (req, res) => {
+  const auth = req.auth!;
+  const engagement = await loadForAdvisor(req, res);
+  if (!engagement) return;
+
+  const outcome = await remindNow(engagement);
+  if (!outcome.ok) {
+    const message = {
+      engagement_closed: 'This engagement is closed. Reopen it before reminding the client.',
+      nothing_outstanding: 'Nothing on this checklist is waiting on the client.',
+      already_reminded: 'They have already been reminded today. The next reminder can go tomorrow.',
+    }[outcome.code];
+    return res.status(outcome.code === 'already_reminded' ? 409 : 400).json({ error: message, code: outcome.code });
+  }
+
+  await auditRequest(req, {
+    action: 'engagement.reminded',
+    targetType: 'engagement',
+    targetId: engagement.id,
+    clientId: engagement.clientId,
+    meta: { items: outcome.items },
+  });
+  await recordActivity({
+    firmId: engagement.firmId,
+    clientId: engagement.clientId,
+    type: 'update',
+    description: `sent a reminder about ${outcome.items} item${outcome.items === 1 ? '' : 's'}`,
+    actorKind: 'provider',
+    actorId: auth.sub,
+    actorName: auth.name,
+    targetId: engagement.id,
+  });
+  res.json({ items: outcome.items, emailQueued: outcome.emailQueued });
+});
+
 router.post('/:id/reopen', async (req, res) => {
   const engagement = await loadForAdvisor(req, res);
   if (!engagement) return;
@@ -397,7 +446,11 @@ router.post('/:id/requests', async (req, res) => {
   const nextOrder = (last?.sortOrder ?? -1) + 1;
 
   const dueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : null;
-  const values = itemsToRequests(items, { providerId: auth.providerId, clientId: engagement.clientId, engagementId: engagement.id }, now).map(
+  const values = itemsToRequests(
+    items,
+    { firmId: auth.firmId, clientId: engagement.clientId, engagementId: engagement.id },
+    now
+  ).map(
     (v, i) => ({
       ...v,
       sortOrder: nextOrder + i,
@@ -428,7 +481,7 @@ router.post('/:id/requests', async (req, res) => {
     link: '/portal',
   });
   await recordActivity({
-    providerId: auth.providerId,
+    firmId: auth.firmId,
     clientId: engagement.clientId,
     type: 'update',
     description: `requested ${created.length} document${created.length === 1 ? '' : 's'}`,

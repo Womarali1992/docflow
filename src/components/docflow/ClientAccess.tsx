@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Client } from '@/api/types';
-import { useClientResetLink, useDeactivateClient, useInviteClient, useReactivateClient } from '@/api/queries';
+import { useClientResetLink, useDeactivateClient, useInviteClient, useReactivateClient, useResetClientMfa } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { ACCESS_LABEL, accessState } from '@/utils/clientAccess';
@@ -11,7 +11,8 @@ import { I } from './icons';
 
 /**
  * Portal access controls for one client: the state pill, Invite / Resend,
- * a copy-link password reset, and deactivate / reactivate with a confirm.
+ * a copy-link password reset, a two-step reset for a lost phone, and
+ * deactivate / reactivate with a confirm.
  */
 const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
   const { toast } = useToast();
@@ -21,8 +22,10 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
   const resetLinkFor = useClientResetLink();
   const deactivateClient = useDeactivateClient();
   const reactivateClient = useReactivateClient();
+  const resetMfa = useResetClientMfa();
   const [link, setLink] = useState<OneTimeLinkView | null>(null);
   const [confirmOff, setConfirmOff] = useState(false);
+  const [confirmMfa, setConfirmMfa] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const state = accessState(client);
@@ -69,6 +72,16 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
       toast({ title: 'Client deactivated', description: `${client.name} is signed out and cannot sign in until reactivated.` });
     }, 'Could not deactivate');
 
+  const resetTwoStep = () =>
+    guard(async () => {
+      await resetMfa.mutateAsync(client.id);
+      setConfirmMfa(false);
+      toast({
+        title: 'Two-step verification reset',
+        description: `${client.name} is signed out. Their next sign-in sets up a new authenticator.`,
+      });
+    }, 'Could not reset two-step verification');
+
   const reactivate = () =>
     guard(async () => {
       await reactivateClient.mutateAsync(client.id);
@@ -83,9 +96,19 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
       ) : (
         <>
           {client.hasPassword ? (
-            <button className="df-btn df-ghost" onClick={resetLink} disabled={busy} title="A one-hour link that lets the client set a new password">
-              <I.Refresh size={13} /> Reset link
-            </button>
+            <>
+              <button className="df-btn df-ghost" onClick={resetLink} disabled={busy} title="A one-hour link that lets the client set a new password">
+                <I.Refresh size={13} /> Reset link
+              </button>
+              <button
+                className="df-btn df-ghost"
+                onClick={() => setConfirmMfa(true)}
+                disabled={busy}
+                title="For a client who lost the phone with their authenticator on it"
+              >
+                Reset two-step
+              </button>
+            </>
           ) : (
             <button className="df-btn" onClick={invite} disabled={busy}>
               <I.Send size={13} /> {state === 'invited' ? 'Resend invite' : 'Invite'}
@@ -96,6 +119,30 @@ const ClientAccess: React.FC<{ client: Client }> = ({ client }) => {
       )}
 
       <LinkModal value={link} onClose={() => setLink(null)} />
+
+      <Modal
+        open={confirmMfa}
+        onClose={() => setConfirmMfa(false)}
+        title="Reset two-step verification?"
+        subtitle={client.name}
+        footer={
+          <>
+            <button className="df-btn df-ghost" onClick={() => setConfirmMfa(false)} disabled={busy}>Cancel</button>
+            <button className="df-btn df-primary" onClick={resetTwoStep} disabled={busy}>Reset it</button>
+          </>
+        }
+      >
+        <div className="df-form" style={{ fontSize: 13 }}>
+          <div>
+            Their authenticator and recovery codes stop working and they are signed out. Next time they sign in with their
+            password, they set up a new authenticator.
+          </div>
+          <div className="df-note df-note-warn">
+            Only do this once you are sure it is really them — call them on the number you already have, not one given in the
+            request. Anyone who knows their password could otherwise take over the portal.
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={confirmOff}

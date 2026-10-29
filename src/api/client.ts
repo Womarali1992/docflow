@@ -1,5 +1,6 @@
 import type {
   Activity,
+  Advisor,
   AuthState,
   Client,
   DashboardSummary,
@@ -8,6 +9,7 @@ import type {
   EngagementKind,
   EngagementTree,
   FailedJob,
+  Firm,
   InvitationInfo,
   Message,
   MfaEnrollment,
@@ -15,6 +17,7 @@ import type {
   NotificationList,
   OneTimeLink,
   OpsStatus,
+  QueueWho,
   RequestItem,
   RequestTemplate,
   Review,
@@ -22,6 +25,7 @@ import type {
   SearchResults,
   SessionStage,
   SessionSummary,
+  StaffInvitationInfo,
   TemplateItem,
   TemplateKind,
   UploadResult,
@@ -39,6 +43,8 @@ const DATE_FIELDS = new Set([
      row, and they stay ISO strings so nothing formats them as local wall time. */
   'closedAt', 'archivedAt', 'waivedAt', 'clientResponseAt', 'sharedAt',
   'scannedAt', 'publishedAt', 'supersededAt',
+  /* The work queue's "when did this line last move" (2026-10-28 audit). */
+  'since',
 ]);
 
 function reviveDates<T>(obj: unknown): T {
@@ -227,11 +233,15 @@ export const api = {
   auth: {
     /** Identity plus session stage; works in every stage so a reload lands on the right screen. */
     me: () => request<AuthState>('/auth/me'),
-    /** Password step. The answer's `stage` is never `active`: a code or an enrollment follows. */
-    login: (email: string, password: string, kind: 'provider' | 'client') =>
+    /**
+     * Password step. The answer's `stage` is never `active`: a code or an enrollment follows.
+     * A client whose password opens accounts at two firms gets 409 `choose_firm` with
+     * `firms`, and signs in again with the one they pick as `firmId` (see `chooseFirm`).
+     */
+    login: (email: string, password: string, kind: 'provider' | 'client', firmId?: string) =>
       request<AuthState>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password, kind }),
+        body: JSON.stringify({ email, password, kind, ...(firmId ? { firmId } : {}) }),
       }),
     logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
     /** Sign out everywhere: every session of the current user, including this one. */
@@ -289,7 +299,7 @@ export const api = {
   clients: {
     list: () => request<Client[]>('/clients'),
     get: (id: string) => request<Client>(`/clients/${id}`),
-    create: (input: { name: string; email: string; accountId?: string; plan?: string; aum?: number | null; password?: string }) =>
+    create: (input: { name: string; email: string; accountId?: string; plan?: string; aum?: number | null; password?: string; assignedAdvisorId?: string | null }) =>
       request<Client>('/clients', {
         method: 'POST',
         body: JSON.stringify(input),
@@ -303,8 +313,38 @@ export const api = {
     invite: (id: string) => request<OneTimeLink>(`/clients/${id}/invitations`, { method: 'POST' }),
     /** A copy-link password reset for a client who already has a password. */
     resetLink: (id: string) => request<OneTimeLink>(`/clients/${id}/password-reset`, { method: 'POST' }),
+    /** Removes the client's authenticator and recovery codes; their next sign-in enrolls a new one. */
+    resetMfa: (id: string) =>
+      request<{ reset: boolean; sessionsRevoked: number }>(`/clients/${id}/mfa-reset`, { method: 'POST' }),
     deactivate: (id: string) => request<Client>(`/clients/${id}/deactivate`, { method: 'POST' }),
+    /** Gives the client to another advisor of the firm, or to nobody (null). */
+    assign: (id: string, advisorId: string | null) =>
+      request<Client>(`/clients/${id}/assign`, { method: 'POST', body: JSON.stringify({ advisorId }) }),
     reactivate: (id: string) => request<Client>(`/clients/${id}/reactivate`, { method: 'POST' }),
+  },
+
+  /** The firm and its advisors; reading is any advisor's, changing the team is an owner's. */
+  firm: {
+    get: () => request<Firm>('/firm'),
+    invite: (input: { name: string; email: string }) =>
+      request<OneTimeLink & { advisor: Advisor }>('/firm/advisors', { method: 'POST', body: JSON.stringify(input) }),
+    resendInvite: (id: string) => request<OneTimeLink>(`/firm/advisors/${id}/invitations`, { method: 'POST' }),
+    /** Ends their sessions; their clients go to `reassignTo`, or are left with the whole firm. */
+    deactivate: (id: string, reassignTo: string | null) =>
+      request<{ advisor: Advisor; clientsMoved: number }>(`/firm/advisors/${id}/deactivate`, {
+        method: 'POST',
+        body: JSON.stringify({ reassignTo }),
+      }),
+    reactivate: (id: string) => request<{ advisor: Advisor }>(`/firm/advisors/${id}/reactivate`, { method: 'POST' }),
+  },
+
+  staffInvitations: {
+    get: (token: string) => request<StaffInvitationInfo>(`/staff-invitations/${encodeURIComponent(token)}`),
+    accept: (token: string, password: string) =>
+      request<AuthState>(`/staff-invitations/${encodeURIComponent(token)}/accept`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
   },
 
   invitations: {
@@ -340,6 +380,8 @@ export const api = {
     unshare: (id: string) => request<Document>(`/documents/${id}/unshare`, { method: 'POST' }),
     archive: (id: string) => request<Document>(`/documents/${id}/archive`, { method: 'POST' }),
     unarchive: (id: string) => request<Document>(`/documents/${id}/unarchive`, { method: 'POST' }),
+    /** The client takes back a file they sent; 409 `decided` once the advisor has ruled on it. */
+    withdraw: (id: string) => request<Document>(`/documents/${id}/withdraw`, { method: 'POST' }),
     /** An empty document record; the bytes arrive separately through an upload route. */
     create: (input: { clientId: string; name: string; category?: string; engagementId?: string }) =>
       request<Document>('/documents', {
@@ -380,6 +422,8 @@ export const api = {
       request<Engagement>(`/engagements/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
     close: (id: string) => request<Engagement>(`/engagements/${id}/close`, { method: 'POST' }),
     reopen: (id: string) => request<Engagement>(`/engagements/${id}/reopen`, { method: 'POST' }),
+    /** Today's reminder for this engagement's outstanding lines; at most one per client per day. */
+    remind: (id: string) => request<{ items: number; emailQueued: boolean }>(`/engagements/${id}/remind`, { method: 'POST' }),
     /** Appends checklist lines — from a template or explicit items, never both. */
     addRequests: (id: string, input: { templateId: string; dueDate?: string | null } | { items: TemplateItem[]; dueDate?: string | null }) =>
       request<RequestItem[]>(`/engagements/${id}/requests`, { method: 'POST', body: JSON.stringify(input) }),
@@ -403,6 +447,9 @@ export const api = {
     waive: (id: string, reason: string) =>
       request<RequestItem>(`/requests/${id}/waive`, { method: 'POST', body: JSON.stringify({ reason }) }),
     reopen: (id: string) => request<RequestItem>(`/requests/${id}/reopen`, { method: 'POST' }),
+    /** Off the checklist, for a line nothing was sent against; 409 `has_files` otherwise. */
+    remove: (id: string) => request<RequestItem>(`/requests/${id}/remove`, { method: 'POST' }),
+    restore: (id: string) => request<RequestItem>(`/requests/${id}/restore`, { method: 'POST' }),
     /** "I don't have this" — recorded, and deliberately does not move the status. */
     respond: (id: string, input: { kind: 'not_applicable'; note?: string }) =>
       request<RequestItem>(`/requests/${id}/respond`, { method: 'POST', body: JSON.stringify(input) }),
@@ -438,7 +485,8 @@ export const api = {
   },
 
   dashboard: {
-    get: (opts?: ReadOpts) => request<DashboardSummary>('/dashboard', { poll: opts?.poll }),
+    get: (opts?: ReadOpts & { who?: QueueWho }) =>
+      request<DashboardSummary>(opts?.who ? `/dashboard?who=${opts.who}` : '/dashboard', { poll: opts?.poll }),
   },
 
   search: {

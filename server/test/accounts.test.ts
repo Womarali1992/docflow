@@ -341,6 +341,47 @@ describe('deactivation', () => {
   });
 });
 
+/* 2026-10-28 audit: a client who lost their phone could only be let back in
+   from the server console (`npm run admin -- reset-mfa`). */
+describe('two-step reset by the advisor', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it('removes the authenticator and codes, ends their sessions, and the next sign-in enrolls again', async () => {
+    const clientCookie = await loginAs(fx, 'client1a');
+    const advisor = await loginAs(fx, 'provider1');
+    const mine = (table: typeof schema.mfaTotp | typeof schema.recoveryCodes) =>
+      db.select().from(table).where(and(eq(table.userKind, 'client'), eq(table.userId, fx.client1a.id)));
+    await db.insert(schema.recoveryCodes).values({ userKind: 'client', userId: fx.client1a.id, codeHash: 'x' });
+
+    const res = await request(app).post(`/api/clients/${fx.client1a.id}/mfa-reset`).set('Cookie', advisor);
+    expect(res.status).toBe(200);
+    expect(res.body.reset).toBe(true);
+    expect(res.body.sessionsRevoked).toBeGreaterThanOrEqual(1);
+
+    expect(await mine(schema.mfaTotp)).toHaveLength(0);
+    expect(await mine(schema.recoveryCodes)).toHaveLength(0);
+    expect((await me(clientCookie)).status).toBe(401);
+
+    // Password first, as always — then straight to enrolling a new authenticator.
+    const again = await login(fx.client1a.email, PASSWORD, 'client');
+    expect(again.status).toBe(200);
+    expect(again.body.stage).toBe('mfa_enroll');
+
+    const [line] = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'client.mfa_reset'));
+    expect(line).toMatchObject({ clientId: fx.client1a.id, actorKind: 'provider', actorId: fx.provider1.id });
+
+    // Only the client's own advisor, and not for a deactivated client.
+    const other = await request(app).post(`/api/clients/${fx.client1a.id}/mfa-reset`).set('Cookie', await loginAs(fx, 'provider2'));
+    expect(other.status).toBe(404);
+    await request(app).post(`/api/clients/${fx.client1b.id}/deactivate`).set('Cookie', advisor);
+    expect((await request(app).post(`/api/clients/${fx.client1b.id}/mfa-reset`).set('Cookie', advisor)).status).toBe(409);
+  });
+});
+
 describe('password hashing', () => {
   let fx: Fixture;
 
@@ -408,8 +449,9 @@ describe('password hashing', () => {
       expect(Object.keys(c)).not.toContain('passwordHash');
       expect(Object.keys(c).sort()).toEqual(
         [
-          'accountId', 'aum', 'clientSince', 'createdAt', 'deactivatedAt', 'documentsCount', 'email', 'hasPassword', 'id',
-          'invitePendingUntil', 'lastActivity', 'name', 'pendingUpdates', 'plan', 'providerId', 'unreadMessages', 'updatedAt',
+          'accountId', 'assignedAdvisorId', 'assignedAdvisorName', 'aum', 'clientSince', 'createdAt', 'deactivatedAt',
+          'documentsCount', 'email', 'firmId', 'hasPassword', 'id', 'invitePendingUntil', 'lastActivity', 'name',
+          'pendingUpdates', 'plan', 'unreadMessages', 'updatedAt',
         ].sort()
       );
     }

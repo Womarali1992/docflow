@@ -3,6 +3,7 @@ import { useClientWork } from '@/api/queries/portal';
 import type { RequestItem } from '@/api/types';
 import RequestCard from '@/components/docflow/portal/RequestCard';
 import { clientRequestState } from '@/components/docflow/portal/requestState';
+import { WithdrawableFiles } from '@/components/docflow/portal/WithdrawFile';
 
 /**
  * Every item on the client's list, including the ones that are finished.
@@ -73,6 +74,7 @@ const PortalRequests: React.FC = () => {
                     ) : (
                       request.instructions && <div className="df-meta">{request.instructions}</div>
                     )}
+                    <WithdrawableFiles request={request} />
                   </div>
                   <span className={'df-pill ' + state.cls}>{state.label}</span>
                 </div>

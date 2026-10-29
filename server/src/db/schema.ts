@@ -26,32 +26,62 @@ export const reviewDecisionEnum = pgEnum('review_decision', ['accepted', 'needs_
 export const templateKindEnum = pgEnum('template_kind', ['individual_tax', 'business_tax', 'custom']);
 
 /* =========================================================
-   Providers (CPA firms / advisors)
+   Firms: the tenant. A firm owns its clients and everything under them, and
+   several advisor logins share that book (docs/FIRM-BOOK-PLAN.md). `0011_firms`
+   gave every existing advisor a firm of their own, with a fresh id: a firm's id
+   is never its founder's, so code that hands over a provider id where a firm id
+   belongs cannot pass against migrated data.
    ========================================================= */
-export const providers = pgTable('providers', {
+export const firms = pgTable('firms', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
-  firmName: text('firm_name'),
-  role: text('role').notNull().default('advisor'),
-  /* Set by the admin CLI; a deactivated account cannot sign in and its sessions are revoked. */
-  deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
-  passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
 /* =========================================================
-   Clients (belong to a provider; can optionally log in)
+   Providers (advisors; each belongs to one firm)
+   ========================================================= */
+export const providers = pgTable(
+  'providers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /* No cascade: a firm cannot be deleted out from under its advisors. */
+    firmId: uuid('firm_id')
+      .notNull()
+      .references(() => firms.id),
+    name: text('name').notNull(),
+    email: text('email').notNull().unique(),
+    /* Null for an advisor who was invited and has not accepted yet (F4): such
+       an account cannot sign in, be given a client or be told about one. */
+    passwordHash: text('password_hash'),
+    /* 'owner' | 'advisor'. An owner also manages the team; every advisor `0011_firms` found became one. */
+    role: text('role').notNull().default('advisor'),
+    /* Set by the admin CLI; a deactivated account cannot sign in and its sessions are revoked. */
+    deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
+    passwordChangedAt: timestamp('password_changed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    firmIdx: index('providers_firm_idx').on(t.firmId),
+  })
+);
+
+/* =========================================================
+   Clients (belong to a firm; can optionally log in)
    ========================================================= */
 export const clients = pgTable(
   'clients',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
+    /* The advisor who looks after this client: told about their uploads and
+       messages, and whose "mine" they appear in. Null when unassigned. Changing
+       it moves nothing else; every other row reaches the advisor through here. */
+    assignedProviderId: uuid('assigned_provider_id').references(() => providers.id, { onDelete: 'set null' }),
     name: text('name').notNull(),
     email: text('email').notNull(),
     passwordHash: text('password_hash'),
@@ -60,11 +90,13 @@ export const clients = pgTable(
     clientSince: text('client_since'),
     aum: numeric('aum', { precision: 14, scale: 2 }),
     lastActivity: timestamp('last_activity', { withTimezone: true }).defaultNow(),
-    /* lower(trim(email)) — one client per address, enforced. Backfilled and made
-       unique by `0008_contract`; written by `normalizeEmail()` on every create and
-       email change (until C5.4 only the legacy importer set it, which would have
-       left the index enforcing nothing: new rows were all NULL, and NULLs never
-       collide). `email` keeps the address as the client typed it. */
+    /* lower(trim(email)) — one client per address within a firm, enforced.
+       Backfilled and made unique by `0008_contract`, per firm since `0013`
+       (F7): the same person may be a client of two firms. Written by
+       `normalizeEmail()` on every create and email change (until C5.4 only the
+       legacy importer set it, which would have left the index enforcing
+       nothing: new rows were all NULL, and NULLs never collide). `email` keeps
+       the address as the client typed it. */
     emailNormalized: text('email_normalized').notNull(),
     /* Set by the advisor (or the admin CLI); reversible. Sessions are revoked, sign-in refused. */
     deactivatedAt: timestamp('deactivated_at', { withTimezone: true }),
@@ -73,9 +105,12 @@ export const clients = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    providerIdx: index('clients_provider_idx').on(t.providerId),
+    firmIdx: index('clients_firm_idx').on(t.firmId),
+    assignedIdx: index('clients_assigned_provider_idx').on(t.assignedProviderId),
     emailIdx: index('clients_email_idx').on(t.email),
-    emailNormalizedKey: uniqueIndex('clients_email_normalized_key').on(t.emailNormalized),
+    firmEmailKey: uniqueIndex('clients_firm_email_normalized_key').on(t.firmId, t.emailNormalized),
+    /* Sign-in and the reset request look an address up across every firm. */
+    emailNormalizedIdx: index('clients_email_normalized_idx').on(t.emailNormalized),
   })
 );
 
@@ -89,9 +124,9 @@ export const documents = pgTable(
     clientId: uuid('client_id')
       .notNull()
       .references(() => clients.id, { onDelete: 'cascade' }),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
 
     name: text('name').notNull(),
 
@@ -132,7 +167,7 @@ export const documents = pgTable(
   },
   (t) => ({
     clientIdx: index('documents_client_idx').on(t.clientId),
-    providerIdx: index('documents_provider_idx').on(t.providerId),
+    firmIdx: index('documents_firm_idx').on(t.firmId),
     engagementIdx: index('documents_client_engagement_idx').on(t.clientId, t.engagementId),
     requestIdx: index('documents_request_idx').on(t.requestId),
   })
@@ -148,9 +183,9 @@ export const messages = pgTable(
     clientId: uuid('client_id')
       .notNull()
       .references(() => clients.id, { onDelete: 'cascade' }),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
     documentId: uuid('document_id').references(() => documents.id, { onDelete: 'set null' }),
     senderKind: actorKindEnum('sender_kind').notNull(),
     senderId: uuid('sender_id').notNull(),
@@ -161,6 +196,7 @@ export const messages = pgTable(
   },
   (t) => ({
     clientIdx: index('messages_client_idx').on(t.clientId),
+    firmIdx: index('messages_firm_idx').on(t.firmId),
     docIdx: index('messages_doc_idx').on(t.documentId),
   })
 );
@@ -172,9 +208,9 @@ export const activities = pgTable(
   'activities',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
     clientId: uuid('client_id').references(() => clients.id, { onDelete: 'cascade' }),
     type: activityTypeEnum('type').notNull(),
     description: text('description').notNull(),
@@ -185,7 +221,7 @@ export const activities = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    providerIdx: index('activities_provider_idx').on(t.providerId),
+    firmIdx: index('activities_firm_idx').on(t.firmId),
   })
 );
 
@@ -272,6 +308,29 @@ export const invitations = pgTable(
   })
 );
 
+/* =========================================================
+   Staff invitations: how an advisor joins a firm (F4). The client invitations'
+   rules exactly — sha256 of the token, single use, 7 days, a new link retires
+   an unused one — in a table of their own so that path is not touched.
+   ========================================================= */
+export const staffInvitations = pgTable(
+  'staff_invitations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdById: uuid('created_by_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    providerIdx: index('staff_invitations_provider_idx').on(t.providerId),
+  })
+);
+
 /* Password resets: single use, 1 hour; completing one revokes every session. */
 export const passwordResets = pgTable(
   'password_resets',
@@ -327,9 +386,9 @@ export const engagements = pgTable(
   'engagements',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
     clientId: uuid('client_id')
       .notNull()
       .references(() => clients.id, { onDelete: 'cascade' }),
@@ -344,7 +403,7 @@ export const engagements = pgTable(
   },
   (t) => ({
     clientIdx: index('engagements_client_idx').on(t.clientId),
-    providerIdx: index('engagements_provider_idx').on(t.providerId),
+    firmIdx: index('engagements_firm_idx').on(t.firmId),
   })
 );
 
@@ -358,9 +417,9 @@ export const requests = pgTable(
   'requests',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
     clientId: uuid('client_id')
       .notNull()
       .references(() => clients.id, { onDelete: 'cascade' }),
@@ -389,7 +448,7 @@ export const requests = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    queueIdx: index('requests_provider_status_due_idx').on(t.providerId, t.status, t.dueDate),
+    firmQueueIdx: index('requests_firm_status_due_idx').on(t.firmId, t.status, t.dueDate),
     engagementIdx: index('requests_engagement_idx').on(t.engagementId),
     clientIdx: index('requests_client_idx').on(t.clientId),
     importedIdx: index('requests_imported_from_idx').on(t.importedFromDocumentId),
@@ -473,9 +532,9 @@ export const requestTemplates = pgTable(
   'request_templates',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    providerId: uuid('provider_id')
+    firmId: uuid('firm_id')
       .notNull()
-      .references(() => providers.id, { onDelete: 'cascade' }),
+      .references(() => firms.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     kind: templateKindEnum('kind').notNull().default('custom'),
     /* [{key, title, category, instructions, required, dueOffsetDays?}] */
@@ -485,7 +544,7 @@ export const requestTemplates = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    providerIdx: index('request_templates_provider_idx').on(t.providerId),
+    firmIdx: index('request_templates_firm_idx').on(t.firmId),
   })
 );
 
@@ -577,29 +636,35 @@ export const workerHeartbeats = pgTable('worker_heartbeats', {
 /* =========================================================
    Relations
    ========================================================= */
-export const providersRelations = relations(providers, ({ many }) => ({
+export const firmsRelations = relations(firms, ({ many }) => ({
+  providers: many(providers),
   clients: many(clients),
-  documents: many(documents),
+}));
+
+export const providersRelations = relations(providers, ({ one, many }) => ({
+  firm: one(firms, { fields: [providers.firmId], references: [firms.id] }),
+  /* The clients this advisor looks after. */
+  clients: many(clients),
 }));
 
 export const clientsRelations = relations(clients, ({ one, many }) => ({
-  provider: one(providers, { fields: [clients.providerId], references: [providers.id] }),
+  firm: one(firms, { fields: [clients.firmId], references: [firms.id] }),
+  assignedAdvisor: one(providers, { fields: [clients.assignedProviderId], references: [providers.id] }),
   documents: many(documents),
   messages: many(messages),
 }));
 
 export const documentsRelations = relations(documents, ({ one, many }) => ({
   client: one(clients, { fields: [documents.clientId], references: [clients.id] }),
-  provider: one(providers, { fields: [documents.providerId], references: [providers.id] }),
   messages: many(messages),
 }));
 
 export const messagesRelations = relations(messages, ({ one }) => ({
   client: one(clients, { fields: [messages.clientId], references: [clients.id] }),
-  provider: one(providers, { fields: [messages.providerId], references: [providers.id] }),
   document: one(documents, { fields: [messages.documentId], references: [documents.id] }),
 }));
 
+export type Firm = typeof firms.$inferSelect;
 export type Provider = typeof providers.$inferSelect;
 export type NewProvider = typeof providers.$inferInsert;
 export type Client = typeof clients.$inferSelect;
@@ -615,6 +680,7 @@ export type NewSession = typeof sessions.$inferInsert;
 export type MfaTotp = typeof mfaTotp.$inferSelect;
 export type RecoveryCode = typeof recoveryCodes.$inferSelect;
 export type Invitation = typeof invitations.$inferSelect;
+export type StaffInvitation = typeof staffInvitations.$inferSelect;
 export type PasswordReset = typeof passwordResets.$inferSelect;
 export type Engagement = typeof engagements.$inferSelect;
 export type NewEngagement = typeof engagements.$inferInsert;

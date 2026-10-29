@@ -86,6 +86,7 @@ export const UPLOAD_MESSAGE: Record<string, string> = {
   no_file: 'No file was attached.',
   client_only: 'Only you can answer this item — ask your accountant if this looks wrong.',
   request_closed: 'Your accountant has marked this item as not needed.',
+  request_removed: 'Your accountant has taken this item off your list. There is nothing to send for it.',
   engagement_closed: 'That work has been closed. Ask your accountant to reopen it.',
   archived: 'That document has been archived.',
   cancelled: 'Cancelled.',

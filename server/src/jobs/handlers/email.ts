@@ -81,11 +81,22 @@ export function render(payload: MailJobPayload): { subject: string; text: string
           `The link works once and expires in 7 days. If it has expired, ask ${from} for a new one.` +
           signoff,
       };
+    /* To an advisor joining the firm (F4): the same shape as a client's invitation. */
+    case 'staff_invitation':
+      return {
+        subject: `You have been invited to join ${from} on DocFlow`,
+        text:
+          `${from} has added you to its DocFlow workspace, where the firm's clients send their documents.\n\n` +
+          `Open this link to choose a password and set up your sign-in code:\n${payload.link ?? portal}\n\n` +
+          `The link works once and expires in 7 days. If it has expired, ask the firm's owner for a new one.` +
+          signoff,
+      };
     case 'password_reset':
       return {
         subject: 'Reset your DocFlow password',
         text:
-          `Someone asked to reset the password for your DocFlow portal.\n\n` +
+          // Names the firm: one address can hold an account at two, and get a link for each (F7).
+          `Someone asked to reset the password for your DocFlow account with ${from}.\n\n` +
           `Open this link to choose a new one:\n${payload.link ?? portal}\n\n` +
           `The link works once and expires in 1 hour. If you did not ask for this, you can ignore this message — ` +
           `your password has not changed.` +
@@ -105,6 +116,17 @@ export function render(payload: MailJobPayload): { subject: string; text: string
         text:
           `One of your documents needs another look.\n\n` +
           `Sign in to your secure portal for the details:\n${payload.link ?? portal}` +
+          signoff,
+      };
+    /* To the advisor, about their clients. Still generic: a firm inbox is
+       read on phones and forwarded, so it says that something arrived and
+       where to look, never who sent what. */
+    case 'advisor_activity':
+      return {
+        subject: 'New activity from your clients in DocFlow',
+        text:
+          `Your clients have sent documents, messages or answers since you last heard from DocFlow.\n\n` +
+          `Sign in to see what is waiting for you:\n${payload.link ?? `${portal}/work`}` +
           signoff,
       };
     /* The one notice that goes to the firm rather than to a client, so it says

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { I } from '@/components/docflow/icons';
 import SecurityCard from '@/components/docflow/SecurityCard';
+import FirmCard from '@/components/docflow/FirmCard';
 
 /**
  * Account settings: who you are signed in as, and the security card (two-step
@@ -58,6 +59,8 @@ const Settings: React.FC = () => {
       </div>
 
       <SecurityCard id="security" />
+
+      {isProvider && <FirmCard />}
 
       {isProvider && (
         <div className="df-section">

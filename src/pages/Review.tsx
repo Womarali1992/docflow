@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   useClient,
+  useDashboard,
+  useQueueWho,
   useDocument,
   useDocumentVersions,
   useEngagements,
@@ -10,7 +12,7 @@ import {
   useUnshareDocument,
 } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
-import { getErrorMessage } from '@/utils/errors';
+import { getErrorMessage, isMissing } from '@/utils/errors';
 import { I } from '@/components/docflow/icons';
 import Modal from '@/components/docflow/Modal';
 import MessagesPanel from '@/components/docflow/MessagesPanel';
@@ -19,6 +21,8 @@ import VersionHistory from '@/components/docflow/review/VersionHistory';
 import ReviewActions from '@/components/docflow/review/ReviewActions';
 import AttachmentSwitcher from '@/components/docflow/review/AttachmentSwitcher';
 import Organization from '@/components/docflow/review/Organization';
+import LoadError from '@/components/docflow/LoadError';
+import { queueNeighbours } from '@/components/docflow/queue';
 
 /**
  * The review workspace: the document on the left, everything you need to decide
@@ -44,11 +48,14 @@ const Review: React.FC = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const { data: doc, isPending, error } = useDocument(documentId);
+  const { data: doc, isPending, error, refetch } = useDocument(documentId);
   const { data: versions = [] } = useDocumentVersions(documentId);
   const { data: request = null } = useRequest(doc?.requestId ?? undefined);
   const { data: client } = useClient(doc?.clientId);
   const { data: engagements = [] } = useEngagements({ clientId: doc?.clientId });
+  // Next / previous page through the queue as it opens by default: "mine" in a shared book.
+  const queueWho = useQueueWho();
+  const { data: dashboard } = useDashboard({ who: queueWho.who, ready: queueWho.ready });
 
   const share = useShareDocument();
   const unshare = useUnshareDocument();
@@ -69,6 +76,13 @@ const Review: React.FC = () => {
   if (isPending) {
     return <div className="df-page"><div className="df-empty">Loading…</div></div>;
   }
+  if (error && !isMissing(error)) {
+    return (
+      <div className="df-page">
+        <LoadError what="this document" onRetry={() => void refetch()} />
+      </div>
+    );
+  }
   if (error || !doc) {
     return (
       <div className="df-page">
@@ -82,6 +96,7 @@ const Review: React.FC = () => {
 
   const engagement = engagements.find((e) => e.id === doc.engagementId) ?? null;
   const isDeliverable = doc.kind === 'deliverable';
+  const queue = queueNeighbours(dashboard?.readyToReview.items ?? [], doc.requestId);
 
   const doShare = async () => {
     try {
@@ -137,6 +152,29 @@ const Review: React.FC = () => {
           </div>
         </div>
         <div className="df-head-actions">
+          {!isDeliverable && queue.total > 0 && (
+            <div className="df-btn-group" style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <button
+                className="df-btn df-ghost df-sm"
+                disabled={!queue.prev}
+                onClick={() => queue.prev?.documentId && navigate(`/review/${queue.prev.documentId}`)}
+                title="The line before this one in Ready to review"
+              >
+                <I.ChevronL size={12} /> Previous
+              </button>
+              <span className="df-meta df-mono">
+                {queue.position ? `${queue.position} of ${queue.total}` : `${queue.total} waiting`}
+              </span>
+              <button
+                className="df-btn df-ghost df-sm"
+                disabled={!queue.next}
+                onClick={() => queue.next?.documentId && navigate(`/review/${queue.next.documentId}`)}
+                title="The next line waiting in Ready to review"
+              >
+                Next <I.ChevronR size={12} />
+              </button>
+            </div>
+          )}
           {isDeliverable && (doc.shared ? <span className="df-pill df-ok">Shared</span> : <span className="df-pill df-plain">Private</span>)}
           {isDeliverable && (
             doc.shared ? (

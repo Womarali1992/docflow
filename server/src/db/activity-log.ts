@@ -4,7 +4,7 @@ import { db, schema } from './client.js';
 export type ActivityType = 'document' | 'message' | 'update';
 
 export async function recordActivity(input: {
-  providerId: string;
+  firmId: string;
   clientId?: string | null;
   type: ActivityType;
   description: string;
@@ -15,7 +15,7 @@ export async function recordActivity(input: {
 }) {
   try {
     await db.insert(schema.activities).values({
-      providerId: input.providerId,
+      firmId: input.firmId,
       clientId: input.clientId ?? null,
       type: input.type,
       description: input.description,

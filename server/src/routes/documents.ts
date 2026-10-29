@@ -14,12 +14,14 @@
  * whichever version is current.
  *
  * `DELETE /documents/:id` ARCHIVES rather than deletes — nothing a client sent
- * is ever destroyed by a click.
+ * is ever destroyed by a click. The same goes for `withdraw`, the client's one
+ * verb here: a file they sent by mistake leaves the checklist, and stays on the
+ * record.
  */
 import { type Request, type Response } from 'express';
 import { asyncRouter } from './async-router.js';
 import fs from 'node:fs';
-import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
@@ -29,9 +31,10 @@ import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
 import { contentDisposition } from '../files/filename.js';
 import { serializeDocument, serializeReview } from './serialize.js';
-import { notify } from '../notify.js';
-import { advisorOnly, badRequest, findDocument, findEngagement, isId, notFound } from './scope.js';
-import { decidableVersion, refusalBody } from '../workflow/publish.js';
+import { notify, notifyAdvisors } from '../notify.js';
+import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, isId, notFound } from './scope.js';
+import { decidableVersion, lockDocument, refusalBody, type Tx } from '../workflow/publish.js';
+import { attachmentsForRequest } from '../workflow/attachments.js';
 import type { Document } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -67,7 +70,7 @@ router.get('/', async (req, res) => {
 
   const conditions =
     auth.kind === 'provider'
-      ? [eq(schema.documents.providerId, auth.providerId)]
+      ? [eq(schema.documents.firmId, auth.firmId)]
       : [
           eq(schema.documents.clientId, auth.sub),
           // Deliverables appear only once shared; everything else is theirs already.
@@ -207,7 +210,7 @@ router.post('/:id/share', async (req, res) => {
   });
   await auditRequest(req, { action: 'document.shared', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
   await recordActivity({
-    providerId: doc.providerId,
+    firmId: doc.firmId,
     clientId: doc.clientId,
     type: 'document',
     description: `shared ${updated.displayName ?? updated.name}`,
@@ -253,12 +256,134 @@ router.post('/:id/archive', async (req, res) => {
 router.post('/:id/unarchive', async (req, res) => {
   const doc = await loadForAdvisor(req, res);
   if (!doc) return;
+  const now = new Date();
   const [updated] = await db
     .update(schema.documents)
-    .set({ archivedAt: null, updatedAt: new Date() })
+    .set({ archivedAt: null, updatedAt: now })
     .where(eq(schema.documents.id, doc.id))
     .returning();
+  /* A file the client withdrew, brought back: its line has something to
+     review again, rather than saying it is waiting on the client. */
+  if (updated.requestId && updated.kind === 'client_upload' && updated.currentVersionId) {
+    await db
+      .update(schema.requests)
+      .set({ status: 'submitted', updatedAt: now })
+      .where(and(eq(schema.requests.id, updated.requestId), eq(schema.requests.status, 'requested')));
+  }
   res.json(serializeDocument(updated));
+});
+
+/**
+ * The line's status once a file has left it. No files left: back to
+ * `requested`. Every file left already ruled on: back to that ruling, so a
+ * stray upload on an accepted line, withdrawn, leaves it accepted. Anything
+ * else is still waiting for the advisor, as it was.
+ */
+async function settleAfterWithdrawal(tx: Tx, requestId: string, now: Date): Promise<void> {
+  const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId)).for('update');
+  if (!request || (request.status !== 'submitted' && request.status !== 'in_review')) return;
+
+  const remaining = await attachmentsForRequest(requestId, tx);
+  let status: 'requested' | 'accepted' | 'needs_correction' | null = null;
+  if (remaining.length === 0) {
+    status = 'requested';
+  } else if (remaining.every((a) => a.decided)) {
+    const versionIds = remaining.map((a) => a.currentVersion!.id);
+    const [latest] = await tx
+      .select({ decision: schema.reviews.decision })
+      .from(schema.reviews)
+      .where(inArray(schema.reviews.versionId, versionIds))
+      .orderBy(desc(schema.reviews.createdAt))
+      .limit(1);
+    if (latest) status = latest.decision;
+  }
+  if (status) await tx.update(schema.requests).set({ status, updatedAt: now }).where(eq(schema.requests.id, requestId));
+}
+
+/**
+ * "I sent the wrong file." The client takes back a file they sent for a
+ * checklist item, as long as the advisor has not accepted it or asked for a
+ * correction on it yet (2026-10-28 audit). After that it is part of the
+ * advisor's decision and stays; Replace is how a better copy arrives.
+ *
+ * The file is archived, never deleted: the advisor still sees it, marked
+ * archived, and the audit log says who took it back. The document is locked
+ * first, as every decision locks it, so a withdrawal and an accept on the same
+ * file cannot both win.
+ */
+router.post('/:id/withdraw', async (req, res) => {
+  const auth = req.auth!;
+  const doc = await findDocument(auth, req.params.id);
+  if (!doc) return notFound(res);
+  if (auth.kind !== 'client') return clientOnly(res);
+  if (doc.kind !== 'client_upload' || !doc.requestId) {
+    return badRequest(res, 'Only a file you sent for an item on your list can be withdrawn. Ask your accountant about this one.', 'not_withdrawable');
+  }
+  if (doc.archivedAt) return res.json(serializeDocument(doc));
+  if (doc.engagementId) {
+    const [engagement] = await db
+      .select({ status: schema.engagements.status })
+      .from(schema.engagements)
+      .where(eq(schema.engagements.id, doc.engagementId));
+    if (engagement?.status === 'closed') {
+      return badRequest(res, 'That work has been closed. Ask your accountant to reopen it.', 'engagement_closed');
+    }
+  }
+
+  const now = new Date();
+  const outcome = await db.transaction(async (tx) => {
+    const locked = await lockDocument(tx, doc.id);
+    if (!locked || locked.archivedAt) return { ok: true as const, document: locked ?? doc, changed: false };
+
+    if (locked.currentVersionId) {
+      const [review] = await tx
+        .select({ id: schema.reviews.id })
+        .from(schema.reviews)
+        .where(eq(schema.reviews.versionId, locked.currentVersionId))
+        .limit(1);
+      if (review) return { ok: false as const };
+    }
+
+    const [updated] = await tx
+      .update(schema.documents)
+      .set({ archivedAt: now, updatedAt: now })
+      .where(eq(schema.documents.id, locked.id))
+      .returning();
+    await settleAfterWithdrawal(tx, locked.requestId!, now);
+    await auditRequest(
+      req,
+      { action: 'document.withdrawn', targetType: 'document', targetId: locked.id, clientId: locked.clientId, meta: { requestId: locked.requestId } },
+      tx
+    );
+    return { ok: true as const, document: updated, changed: true };
+  });
+
+  if (!outcome.ok) {
+    return res.status(409).json({
+      error: 'Your accountant has already looked at this file, so it stays. Use Replace to send a corrected copy.',
+      code: 'decided',
+    });
+  }
+  if (outcome.changed) {
+    const name = outcome.document.displayName ?? outcome.document.name;
+    await notifyAdvisors(outcome.document.clientId, {
+      type: 'upload.withdrawn',
+      title: `${auth.name} withdrew ${name}`,
+      body: 'They sent it by mistake. It is archived on their file.',
+      link: outcome.document.engagementId ? `/engagements/${outcome.document.engagementId}` : null,
+    });
+    await recordActivity({
+      firmId: outcome.document.firmId,
+      clientId: outcome.document.clientId,
+      type: 'document',
+      description: `withdrew: ${name}`,
+      actorKind: 'client',
+      actorId: auth.sub,
+      actorName: auth.name,
+      targetId: outcome.document.id,
+    });
+  }
+  res.json(serializeDocument(outcome.document));
 });
 
 /* --------------------------------------------------------------- legacy API */
@@ -357,7 +482,7 @@ router.post('/', async (req, res) => {
 
   if (auth.kind === 'provider') {
     const [c] = await db.select().from(schema.clients).where(eq(schema.clients.id, data.clientId));
-    if (!c || c.providerId !== auth.providerId) return notFound(res);
+    if (!c || c.firmId !== auth.firmId) return notFound(res);
   } else if (data.clientId !== auth.sub) {
     return notFound(res);
   }
@@ -374,7 +499,7 @@ router.post('/', async (req, res) => {
     .insert(schema.documents)
     .values({
       clientId: data.clientId,
-      providerId: auth.providerId,
+      firmId: auth.firmId,
       name: data.name,
       displayName: data.name,
       category,
@@ -389,7 +514,7 @@ router.post('/', async (req, res) => {
     .returning();
 
   await recordActivity({
-    providerId: auth.providerId,
+    firmId: auth.firmId,
     clientId: doc.clientId,
     type: 'document',
     description: `added ${doc.name}`,

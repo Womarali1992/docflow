@@ -2,8 +2,14 @@
  * The daily nudge.
  *
  * Runs once per firm-local day (08:00, `schedule.ts`) and asks one question of
- * every outstanding checklist line with a deadline: does today earn a notice —
- * three days out, on the day, or a weekly one while it stays overdue?
+ * every outstanding checklist line: does today earn a notice? A line with a
+ * deadline is nudged three days out, on the day, and weekly while it stays
+ * overdue. A *required* line with no deadline is nudged once a week, counted
+ * from when it was last asked for (`isUndatedReminderDay`) — before the
+ * 2026-10-28 audit those were never chased at all, though due dates are
+ * optional everywhere and the Required box promised the client would be.
+ *
+ * Only lines in an open engagement count: a closed year is finished business.
  *
  * Everything else about this handler is about **not becoming noise**:
  *
@@ -20,12 +26,12 @@
  *  - **Idempotent.** The email carries `dedupeKey reminder:<clientId>:<date>`,
  *    so a retried job cannot send a second copy.
  */
-import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull } from 'drizzle-orm';
 import { db, schema } from '../../db/client.js';
-import type { Job } from '../../db/schema.js';
+import type { Engagement, Job } from '../../db/schema.js';
 import { notifyMany } from '../../notify.js';
 import { enqueueEmail } from '../mail.js';
-import { firmDate, firmTimezone, isReminderDay } from '../schedule.js';
+import { firmDate, firmInstant, firmTimezone, isReminderDay, isUndatedReminderDay } from '../schedule.js';
 
 export interface ReminderResult {
   date: string;
@@ -40,9 +46,8 @@ interface DueRow {
   requestId: string;
   clientId: string;
   clientEmail: string;
-  providerId: string;
-  firmName: string | null;
-  dueDate: Date;
+  firmName: string;
+  dueDate: Date | null;
 }
 
 export interface ReminderOptions {
@@ -63,63 +68,149 @@ export async function runReminders(options: ReminderOptions = {}): Promise<Remin
       clientId: schema.requests.clientId,
       clientEmail: schema.clients.email,
       deactivatedAt: schema.clients.deactivatedAt,
-      providerId: schema.requests.providerId,
-      firmName: schema.providers.firmName,
+      firmName: schema.firms.name,
       dueDate: schema.requests.dueDate,
+      required: schema.requests.required,
+      askedAt: schema.requests.updatedAt,
     })
     .from(schema.requests)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
-    .innerJoin(schema.providers, eq(schema.providers.id, schema.requests.providerId))
+    .innerJoin(schema.firms, eq(schema.firms.id, schema.requests.firmId))
+    .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId))
     .where(
       and(
         isNull(schema.requests.archivedAt),
-        isNotNull(schema.requests.dueDate),
-        inArray(schema.requests.status, ['requested', 'needs_correction'])
+        inArray(schema.requests.status, ['requested', 'needs_correction']),
+        eq(schema.engagements.status, 'open'),
+        isNull(schema.engagements.archivedAt)
       )
     );
 
-  // A deactivated client cannot sign in; chasing them is pointless and unkind.
+  /* A deactivated client cannot sign in; chasing them is pointless and unkind.
+     Only required lines are chased, which is what the Required box on the
+     checklist and the template editor both say: an optional line is the
+     advisor saying "if you have it". */
+  const earnsANotice = (r: (typeof rows)[number]) =>
+    r.required &&
+    (r.dueDate !== null
+      ? isReminderDay(firmDate(r.dueDate, timeZone), today)
+      : isUndatedReminderDay(firmDate(r.askedAt, timeZone), today));
+
   const due: DueRow[] = rows
-    .filter((r) => r.dueDate !== null && r.deactivatedAt === null && isReminderDay(firmDate(r.dueDate, timeZone), today))
+    .filter((r) => r.deactivatedAt === null && earnsANotice(r))
     .map((r) => ({
       requestId: r.requestId,
       clientId: r.clientId,
       clientEmail: r.clientEmail,
-      providerId: r.providerId,
       firmName: r.firmName,
-      dueDate: r.dueDate as Date,
+      dueDate: r.dueDate,
     }));
 
   const byClient = new Map<string, DueRow[]>();
   for (const row of due) byClient.set(row.clientId, [...(byClient.get(row.clientId) ?? []), row]);
 
   let emailsQueued = 0;
-  const notices = [...byClient.entries()].map(([clientId, items]) => {
-    const overdue = items.filter((i) => firmDate(i.dueDate, timeZone) < today).length;
-    return {
-      userKind: 'client' as const,
-      userId: clientId,
-      type: 'reminder.due' as const,
-      title:
-        overdue > 0
-          ? `${overdue} document${overdue === 1 ? ' is' : 's are'} overdue`
-          : `${items.length} document${items.length === 1 ? ' is' : 's are'} due soon`,
-      body: `You have ${items.length} item${items.length === 1 ? '' : 's'} waiting in your portal.`,
-      link: '/portal',
-    };
-  });
+  const notices = [...byClient.entries()].map(([clientId, items]) => ({
+    userKind: 'client' as const,
+    userId: clientId,
+    type: 'reminder.due' as const,
+    title: reminderTitle(items, today, timeZone),
+    body: `You have ${items.length} item${items.length === 1 ? '' : 's'} waiting in your portal.`,
+    link: '/portal',
+  }));
 
   await notifyMany(notices);
 
   for (const [clientId, items] of byClient) {
     const queued = await enqueueEmail(
-      { template: 'needs_attention', to: items[0].clientEmail, firmName: items[0].firmName ?? undefined },
+      { template: 'needs_attention', to: items[0].clientEmail, firmName: items[0].firmName },
       { dedupeKey: `reminder:${clientId}:${today}` }
     );
     if (queued) emailsQueued += 1;
   }
 
   return { date: today, clients: byClient.size, items: due.length, emailsQueued };
+}
+
+const documents = (n: number, one: string, many: string) => `${n} document${n === 1 ? one : many}`;
+
+/** What the notice says: the worst thing that is true, as a count. */
+function reminderTitle(items: Array<Pick<DueRow, 'dueDate'>>, today: string, timeZone: string): string {
+  const overdue = items.filter((i) => i.dueDate && firmDate(i.dueDate, timeZone) < today).length;
+  if (overdue > 0) return `${documents(overdue, ' is', 's are')} overdue`;
+  if (items.some((i) => i.dueDate)) return `${documents(items.length, ' is', 's are')} due soon`;
+  return `${documents(items.length, ' is', 's are')} still needed`;
+}
+
+export type RemindNowResult =
+  | { ok: true; items: number; emailQueued: boolean }
+  | { ok: false; code: 'nothing_outstanding' | 'already_reminded' | 'engagement_closed' };
+
+/**
+ * "Remind them now", from the engagement screen: the same notice the morning
+ * run sends, for one engagement's outstanding lines, today.
+ *
+ * At most one reminder per client per firm-local day, whoever sends it. The
+ * email shares the morning run's key (`reminder:<client>:<date>`), so a manual
+ * reminder at 07:00 and the scheduled one at 08:00 are one email, and the
+ * in-app check refuses a second press the same day — a client reminded twice
+ * before lunch has been nagged, not reminded.
+ */
+export async function remindNow(engagement: Engagement, options: ReminderOptions = {}): Promise<RemindNowResult> {
+  if (engagement.status !== 'open') return { ok: false, code: 'engagement_closed' };
+  const timeZone = options.timeZone ?? firmTimezone();
+  const today = options.today ?? firmDate(new Date(), timeZone);
+
+  const outstanding = await db
+    .select({ id: schema.requests.id, dueDate: schema.requests.dueDate })
+    .from(schema.requests)
+    .where(
+      and(
+        eq(schema.requests.engagementId, engagement.id),
+        isNull(schema.requests.archivedAt),
+        inArray(schema.requests.status, ['requested', 'needs_correction'])
+      )
+    );
+  if (outstanding.length === 0) return { ok: false, code: 'nothing_outstanding' };
+
+  const [already] = await db
+    .select({ id: schema.notifications.id })
+    .from(schema.notifications)
+    .where(
+      and(
+        eq(schema.notifications.userKind, 'client'),
+        eq(schema.notifications.userId, engagement.clientId),
+        eq(schema.notifications.type, 'reminder.due'),
+        gte(schema.notifications.createdAt, firmInstant(today, 0, timeZone))
+      )
+    )
+    .limit(1);
+  if (already) return { ok: false, code: 'already_reminded' };
+
+  const [client] = await db
+    .select({ email: schema.clients.email, firmName: schema.firms.name })
+    .from(schema.clients)
+    .innerJoin(schema.firms, eq(schema.firms.id, schema.clients.firmId))
+    .where(eq(schema.clients.id, engagement.clientId));
+
+  await notifyMany([
+    {
+      userKind: 'client',
+      userId: engagement.clientId,
+      type: 'reminder.due',
+      title: reminderTitle(outstanding, today, timeZone),
+      body: `You have ${outstanding.length} item${outstanding.length === 1 ? '' : 's'} waiting in your portal.`,
+      link: '/portal',
+    },
+  ]);
+  const emailQueued = client
+    ? await enqueueEmail(
+        { template: 'needs_attention', to: client.email, firmName: client.firmName },
+        { dedupeKey: `reminder:${engagement.clientId}:${today}` }
+      )
+    : false;
+
+  return { ok: true, items: outstanding.length, emailQueued };
 }
 
 export async function remindersJob(job: Job): Promise<ReminderResult> {

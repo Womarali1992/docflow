@@ -200,7 +200,7 @@ describe('hardening', () => {
     const [created] = await db
       .insert(schema.requests)
       .values({
-        providerId: fx.client1a.providerId,
+        firmId: fx.client1a.firmId,
         clientId: fx.client1a.id,
         engagementId: fx.client1a.engagement,
         title: 'Concurrent first upload',

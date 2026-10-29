@@ -26,11 +26,11 @@
  * current version to name. A document nothing was ever uploaded to is not an
  * answer to anything.
  */
-import { and, asc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { toAttachment, type RequestAttachment } from '../routes/serialize.js';
 import type { Tx } from './publish.js';
-import type { Document } from '../db/schema.js';
+import type { Document, DocumentVersion } from '../db/schema.js';
 
 /** Either handle reads the same way; a decision passes its transaction. */
 type Reader = Tx | typeof db;
@@ -43,6 +43,19 @@ type Reader = Tx | typeof db;
 const hasAVersion: SQL = sql`EXISTS (
   SELECT 1 FROM ${schema.documentVersions}
   WHERE ${schema.documentVersions.documentId} = ${schema.documents.id}
+)`;
+
+/**
+ * What a *decision* counts: an attachment with at least one version the
+ * scanner did not refuse. A document whose every version was quarantined is
+ * still shown — the client has to be told to send it again — but there is
+ * nothing in it to accept, and counting it would refuse every decision about
+ * the line forever, the same trap as the importer's empty rows above.
+ */
+const hasALiveVersion: SQL = sql`EXISTS (
+  SELECT 1 FROM ${schema.documentVersions}
+  WHERE ${schema.documentVersions.documentId} = ${schema.documents.id}
+    AND ${schema.documentVersions.scanStatus} NOT IN ('infected', 'encrypted')
 )`;
 
 /**
@@ -60,7 +73,7 @@ export async function documentsForRequest(requestId: string, reader: Reader = db
         eq(schema.documents.requestId, requestId),
         eq(schema.documents.kind, 'client_upload'),
         isNull(schema.documents.archivedAt),
-        hasAVersion
+        hasALiveVersion
       )
     )
     .orderBy(asc(schema.documents.createdAt), asc(schema.documents.id));
@@ -98,14 +111,49 @@ export async function attachmentsByRequest(
     ? await reader.select().from(schema.documentVersions).where(inArray(schema.documentVersions.id, versionIds))
     : [];
   const versionById = new Map(versions.map((v) => [v.id, v]));
+  const decided = await decidedVersions(versionIds, reader);
+
+  /* A document with nothing readable is either still being checked or was
+     refused by the scanner, and only its newest version can say which. */
+  const unreadable = documents.filter((d) => !d.currentVersionId).map((d) => d.id);
+  const newest = new Map<string, DocumentVersion>();
+  if (unreadable.length) {
+    const rows = await reader
+      .select()
+      .from(schema.documentVersions)
+      .where(inArray(schema.documentVersions.documentId, unreadable))
+      .orderBy(desc(schema.documentVersions.versionNo));
+    for (const v of rows) if (!newest.has(v.documentId)) newest.set(v.documentId, v);
+  }
 
   for (const doc of documents) {
     if (!doc.requestId) continue;
     const list = byRequest.get(doc.requestId) ?? [];
-    list.push(toAttachment(doc, doc.currentVersionId ? versionById.get(doc.currentVersionId) : undefined));
+    list.push(
+      toAttachment(
+        doc,
+        doc.currentVersionId ? versionById.get(doc.currentVersionId) : undefined,
+        newest.get(doc.id),
+        doc.currentVersionId !== null && decided.has(doc.currentVersionId)
+      )
+    );
     byRequest.set(doc.requestId, list);
   }
   return byRequest;
+}
+
+/**
+ * The versions among these that carry a review, accepted or corrected. A file
+ * is "decided" while the version on screen is one the advisor has ruled on; a
+ * replacement starts undecided again.
+ */
+export async function decidedVersions(versionIds: string[], reader: Reader = db): Promise<Set<string>> {
+  if (versionIds.length === 0) return new Set();
+  const rows = await reader
+    .selectDistinct({ versionId: schema.reviews.versionId })
+    .from(schema.reviews)
+    .where(inArray(schema.reviews.versionId, versionIds));
+  return new Set(rows.map((r) => r.versionId).filter((id): id is string => id !== null));
 }
 
 /** The attachments of a single request — the one-request form of the above. */

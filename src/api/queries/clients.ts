@@ -67,6 +67,11 @@ export function useClientResetLink() {
   return useClientMutation<string, OneTimeLink>((id) => api.clients.resetLink(id), (id) => id);
 }
 
+/** A client who lost their phone: their next sign-in sets up a new authenticator. */
+export function useResetClientMfa() {
+  return useClientMutation<string, { reset: boolean; sessionsRevoked: number }>((id) => api.clients.resetMfa(id), (id) => id);
+}
+
 /** Reversible: sign-in is refused and live sessions end, the file stays. */
 export function useDeactivateClient() {
   return useClientMutation<string, Client>((id) => api.clients.deactivate(id), (id) => id);
@@ -74,4 +79,20 @@ export function useDeactivateClient() {
 
 export function useReactivateClient() {
   return useClientMutation<string, Client>((id) => api.clients.reactivate(id), (id) => id);
+}
+
+/** Another advisor of the firm looks after this client now; the activity line and their notice follow. */
+export function useAssignClient() {
+  const queryClient = useQueryClient();
+  const scope = useScope();
+  return useMutation({
+    mutationFn: (input: { id: string; advisorId: string | null }) => api.clients.assign(input.id, input.advisorId),
+    onSuccess: (_result, input) => {
+      queryClient.invalidateQueries({ queryKey: keys.clients(scope) });
+      queryClient.invalidateQueries({ queryKey: keys.client(scope, input.id) });
+      queryClient.invalidateQueries({ queryKey: keys.firm(scope) });
+      queryClient.invalidateQueries({ queryKey: keys.dashboard(scope) });
+      queryClient.invalidateQueries({ queryKey: keys.activities(scope).slice(0, 3) });
+    },
+  });
 }

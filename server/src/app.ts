@@ -19,6 +19,8 @@ import documentRoutes from './routes/documents.js';
 import messageRoutes from './routes/messages.js';
 import activityRoutes from './routes/activities.js';
 import opsRoutes from './routes/ops.js';
+import firmRoutes from './routes/firm.js';
+import staffInvitationRoutes from './routes/staff-invitations.js';
 import { appOrigin, originCheck } from './auth/csrf.js';
 import { encryptionKey } from './auth/crypto.js';
 import { permissionsPolicy, securityHeaders } from './security/headers.js';
@@ -89,6 +91,7 @@ app.use('/api/auth/mfa', mfaRoutes);
 app.use('/api/auth', authRoutes);
 // Public by design: the invitation link is the credential (single use, 7 days, throttled per IP).
 app.use('/api/invitations', invitationRoutes);
+app.use('/api/staff-invitations', staffInvitationRoutes);
 // Uploads first: they authorize their target before any multipart body is parsed,
 // so they must not sit behind a router that would consume the request.
 app.use('/api', uploadRoutes);
@@ -106,6 +109,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/activities', activityRoutes);
 // Advisor-only operational status (queue depth, mail configuration); grows in C5.2.
 app.use('/api/ops', opsRoutes);
+app.use('/api/firm', firmRoutes);
 
 // Unknown API routes → 404 JSON (must come after all mounts, before the error handler)
 app.use('/api', (_req, res) => {

@@ -10,6 +10,7 @@ import pg from 'pg';
 import { databaseUrl, isMain } from './lib.mjs';
 
 export const TABLES = [
+  'firms',
   'providers',
   'clients',
   'documents',
@@ -19,6 +20,7 @@ export const TABLES = [
   'mfa_totp',
   'recovery_codes',
   'invitations',
+  'staff_invitations',
   'password_resets',
   'jobs',
   'engagements',

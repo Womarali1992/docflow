@@ -1,6 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { I } from './icons';
 import { useMessageThread } from '@/hooks/useMessageThread';
+import { getErrorMessage } from '@/utils/errors';
+
+/** The shortcut as this keyboard spells it: ⌘ means nothing on Windows. */
+const SEND_KEYS =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘↵' : 'Ctrl+Enter';
 
 interface Props {
   /** Required for providers; ignored for a logged-in client (server self-scopes). */
@@ -21,6 +26,7 @@ const MessagesPanel = React.forwardRef<HTMLDivElement, Props>(function MessagesP
 ) {
   const { messages, sending, send } = useMessageThread({ clientId, documentId });
   const [text, setText] = useState('');
+  const [failed, setFailed] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -28,16 +34,22 @@ const MessagesPanel = React.forwardRef<HTMLDivElement, Props>(function MessagesP
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
+  /* A send that fails puts the words back: before the 2026-10-28 audit the box
+     was cleared first and a dropped connection lost what was typed. */
   const doSend = async () => {
     const body = text.trim();
     if (!body || sending) return;
     setText('');
-    await send(body);
+    setFailed(null);
+    try {
+      await send(body);
+    } catch (err) {
+      setText((current) => (current.trim() ? current : body));
+      setFailed(getErrorMessage(err));
+    }
   };
 
-  const privacyCopy = meKind === 'provider'
-    ? 'Private between you and your client · ⌘↵ to send'
-    : 'Private between you and your advisor · ⌘↵ to send';
+  const privacyCopy = `${meKind === 'provider' ? 'Private between you and your client' : 'Private between you and your advisor'} · ${SEND_KEYS} to send`;
 
   return (
     <div className="df-messages" ref={ref}>
@@ -54,7 +66,7 @@ const MessagesPanel = React.forwardRef<HTMLDivElement, Props>(function MessagesP
         {messages.map((m) => (
           <div key={m.id} className={'df-msg df-' + (m.senderKind === meKind ? 'me' : 'them')}>
             <div className="df-msg-meta">
-              {m.senderName} · {new Date(m.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {m.senderKind === meKind ? 'You' : m.senderName} · {new Date(m.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
             </div>
             <div className="df-msg-bubble">{m.content}</div>
           </div>
@@ -70,6 +82,7 @@ const MessagesPanel = React.forwardRef<HTMLDivElement, Props>(function MessagesP
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) doSend(); }}
         />
+        {failed && <div className="df-small" style={{ color: 'var(--df-danger)' }}>Not sent: {failed}. Your message is still here — try again.</div>}
         <div className="df-msg-actions">
           <span className="df-small df-muted">{privacyCopy}</span>
           <button className="df-btn df-accent df-sm" onClick={doSend} disabled={sending}>

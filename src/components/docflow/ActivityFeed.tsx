@@ -18,11 +18,9 @@ const TYPE_TO_ICON = {
   update:   { type: 'req', Icon: I.Plus },
 } as const;
 
-const targetFor = (a: Activity): string | null => {
-  if ((a.type === 'document' || a.type === 'update') && a.targetId) return `/documents/${a.targetId}`;
-  if (a.type === 'message' && a.clientId) return `/clients/${a.clientId}`;
-  return null;
-};
+/* The server resolves the link: only it knows whether an `update` names a
+   request or an engagement (2026-10-28 audit: every one went to /documents). */
+const targetFor = (a: Activity): string | null => a.link ?? null;
 
 const ActivityFeed: React.FC<Props> = ({ clientId, limit = 50, refreshKey, emptyMessage = 'No recent activity', compact = false }) => {
   const navigate = useNavigate();

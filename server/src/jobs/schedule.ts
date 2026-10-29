@@ -97,6 +97,18 @@ export function isReminderDay(dueDate: string, today: string): boolean {
 }
 
 /**
+ * Whether a required line with no deadline earns a notice today: once a week,
+ * counted from the day it was asked for, starting a week in. The day it was
+ * asked for already had its email (the new-checklist notice), and with no
+ * deadline there is no "three days out" to aim at — a weekly nudge is what an
+ * accountant would do by hand.
+ */
+export function isUndatedReminderDay(askedOn: string, today: string): boolean {
+  const delta = daysBetween(askedOn, today);
+  return delta > 0 && delta % 7 === 0;
+}
+
+/**
  * Makes sure the recurring jobs for right now exist. Called on every worker
  * tick: the dedupe keys make it idempotent, so a worker restarting at noon
  * cannot double-send the morning's reminders — and a worker that was down all

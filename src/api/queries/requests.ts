@@ -83,6 +83,15 @@ export function useReopenRequest() {
   return useRequestMutation<string, RequestItem>((id) => api.requests.reopen(id), (id) => id);
 }
 
+/** A line asked for by mistake, off the checklist without a waiver the client reads. */
+export function useRemoveRequest() {
+  return useRequestMutation<string, RequestItem>((id) => api.requests.remove(id), (id) => id);
+}
+
+export function useRestoreRequest() {
+  return useRequestMutation<string, RequestItem>((id) => api.requests.restore(id), (id) => id);
+}
+
 /** "I don't have this" — recorded against the line, and left for the advisor to decide. */
 export function useRespondToRequest() {
   return useRequestMutation<{ id: string; note?: string }, RequestItem>(

@@ -15,6 +15,7 @@ const attachment = (n: number, state: 'ready' | 'checking'): RequestAttachment =
   documentId: `doc-${n}`,
   displayName: `receipt-${n}.pdf`,
   state,
+  decided: false,
   currentVersion: {
     id: `ver-${n}`,
     versionNo: 1,
@@ -57,6 +58,24 @@ describe('what the client is told about a line with several files', () => {
   it('is unmoved by attachments once the advisor has decided', () => {
     const accepted = { status: 'accepted', overdue: false } as unknown as RequestItem;
     expect(clientRequestState(accepted, [attachment(1, 'checking')]).state).toBe('accepted');
+  });
+
+  /** 2026-10-28 audit: the card pointed at a thread the note was never posted to. */
+  it('puts the advisor’s correction note on the card itself', () => {
+    const corrected = {
+      status: 'needs_correction',
+      overdue: false,
+      correction: { note: 'This is the December statement, not the annual 1098.', createdAt: new Date() },
+    } as unknown as RequestItem;
+    const view = clientRequestState(corrected, [attachment(1, 'ready')]);
+    expect(view.state).toBe('needs_correction');
+    expect(view.note).toContain('This is the December statement, not the annual 1098.');
+    expect(view.note).not.toContain('in the messages');
+  });
+
+  it('still says what to do when the note is missing', () => {
+    const corrected = { status: 'needs_correction', overdue: false, correction: null } as unknown as RequestItem;
+    expect(clientRequestState(corrected, []).note).toContain('corrected copy');
   });
 
   it('still answers for a line nobody has sent anything for', () => {

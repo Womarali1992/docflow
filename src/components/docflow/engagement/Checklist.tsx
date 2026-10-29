@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { EngagementDocument, RequestItem } from '@/api/types';
-import { useUpdateRequest } from '@/api/queries';
+import { useRestoreRequest, useUpdateRequest } from '@/api/queries';
 import { useToast } from '@/hooks/use-toast';
 import { getErrorMessage } from '@/utils/errors';
 import { I } from '../icons';
@@ -22,6 +22,8 @@ interface Props {
   /** A closed engagement is readable, and nothing on it can be edited. */
   closed: boolean;
   requests: RequestItem[];
+  /** Lines taken off the checklist, kept so one can be put back. */
+  removed: RequestItem[];
   documents: EngagementDocument[];
 }
 
@@ -33,11 +35,13 @@ interface Props {
  * rather than swapping two values, because an imported checklist can arrive
  * with every `sortOrder` set to zero and swapping would do nothing at all.
  */
-const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, requests, documents }) => {
+const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, requests, removed }) => {
   const { toast } = useToast();
   const updateRequest = useUpdateRequest();
+  const restore = useRestoreRequest();
   const [filter, setFilter] = useState<Filter>('all');
   const [addOpen, setAddOpen] = useState(false);
+  const [showRemoved, setShowRemoved] = useState(false);
 
   const ordered = useMemo(
     () => [...requests].sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.getTime() - b.createdAt.getTime()),
@@ -75,6 +79,15 @@ const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, req
       }
     } catch (err) {
       toast({ title: 'Could not reorder the list', description: getErrorMessage(err), variant: 'destructive' });
+    }
+  };
+
+  const putBack = async (line: RequestItem) => {
+    try {
+      await restore.mutateAsync(line.id);
+      toast({ title: 'Back on the checklist', description: line.title });
+    } catch (err) {
+      toast({ title: 'Could not put it back', description: getErrorMessage(err), variant: 'destructive' });
     }
   };
 
@@ -124,6 +137,35 @@ const Checklist: React.FC<Props> = ({ engagementId, engagementTitle, closed, req
           );
         })}
       </div>
+
+      {removed.length > 0 && (
+        <div className="df-list">
+          <div className="df-row" style={{ gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+            <span className="df-small df-muted">
+              {removed.length} removed from the checklist. The client does not see {removed.length === 1 ? 'it' : 'them'}.
+            </span>
+            <button className="df-btn df-sm df-ghost" onClick={() => setShowRemoved((v) => !v)}>
+              {showRemoved ? 'Hide removed' : 'Show removed'}
+            </button>
+          </div>
+          {showRemoved &&
+            removed.map((line) => (
+              <div key={line.id} className="df-row" style={{ gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="df-name df-muted">{line.title}</div>
+                  {line.archivedAt && (
+                    <div className="df-meta">
+                      removed {line.archivedAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </div>
+                  )}
+                </div>
+                <button className="df-btn df-sm" disabled={closed || restore.isPending} onClick={() => putBack(line)}>
+                  <I.Refresh size={12} /> Put back
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
 
       <AddItemsDialog
         open={addOpen}

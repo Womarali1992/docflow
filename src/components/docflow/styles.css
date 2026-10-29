@@ -1029,9 +1029,6 @@
   /* Filter inputs stretch */
   .df-root .df-input { width: 100% !important; }
 
-
-  /* Tweaks bar — keep it tappable */
-  .df-root + div .df-btn { padding: 8px 12px; }
 }
 
 @media (max-width: 480px) {

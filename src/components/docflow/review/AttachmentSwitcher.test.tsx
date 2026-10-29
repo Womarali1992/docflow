@@ -27,6 +27,7 @@ const attachment = (n: number, state: 'ready' | 'checking' = 'ready'): RequestAt
   documentId: `doc-${n}`,
   displayName: `receipt-${n}.pdf`,
   state,
+  decided: false,
   currentVersion: {
     id: `ver-${n}`,
     versionNo: 1,

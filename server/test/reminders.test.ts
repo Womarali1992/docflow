@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '../src/db/client.js';
 import { runReminders } from '../src/jobs/handlers/reminders.js';
-import { daysBetween, firmDate, firmInstant, isReminderDay } from '../src/jobs/schedule.js';
+import { daysBetween, firmDate, firmInstant, firmTimezone, isReminderDay, isUndatedReminderDay } from '../src/jobs/schedule.js';
 import { loginAs, request, app, seedFixture, type Fixture } from './helpers.js';
 
 const TZ = 'America/Chicago';
@@ -169,6 +169,98 @@ describe('the reminder run', () => {
       // A retried job, or a second worker, must not double-send.
       await runReminders({ today: due, timeZone: TZ });
       expect(await reminderEmails(fx.client1a.id, due)).toHaveLength(1);
+    } finally {
+      delete process.env.SMTP_URL;
+    }
+  });
+
+  /* 2026-10-28 audit: due dates are optional everywhere, and an undated line was
+     never chased — though the Required box told the advisor it would be. */
+  it('chases a required line with no due date once a week from when it was asked for', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const created = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+      .set('Cookie', advisor)
+      .send({ items: [{ title: 'W-2' }, { title: 'Charity receipts', required: false }] });
+    expect(created.status).toBe(201);
+    const asked = '2026-03-02';
+    for (const row of created.body as Array<{ id: string }>) {
+      await db.update(schema.requests).set({ updatedAt: firmInstant(asked, 9, TZ) }).where(eq(schema.requests.id, row.id));
+    }
+    // The fixture's own undated line was asked for today, so it stays out of the way.
+
+    expect(isUndatedReminderDay(asked, '2026-03-09')).toBe(true);
+    for (const day of ['2026-03-02', '2026-03-05', '2026-03-08', '2026-03-10']) {
+      expect((await runReminders({ today: day, timeZone: TZ })).items).toBe(0);
+    }
+
+    const week = await runReminders({ today: '2026-03-09', timeZone: TZ });
+    // The W-2, not the optional receipts: "if you have it" is not chased.
+    expect(week.items).toBe(1);
+    const [notice] = await notificationsFor(fx.client1a.id);
+    expect(notice.title).toBe('1 document is still needed');
+
+    expect((await runReminders({ today: '2026-03-16', timeZone: TZ })).items).toBe(1);
+  });
+
+  it('does not chase an optional line, even one with a due date', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const created = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+      .set('Cookie', advisor)
+      .send({ items: [{ title: 'Charity receipts', required: false }] });
+    await setDue((created.body as Array<{ id: string }>)[0].id, '2026-04-15');
+
+    expect((await runReminders({ today: '2026-04-15', timeZone: TZ })).items).toBe(0);
+  });
+
+  it('does not chase anything in a closed engagement', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const created = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+      .set('Cookie', advisor)
+      .send({ items: [{ title: 'W-2' }] });
+    await setDue((created.body as Array<{ id: string }>)[0].id, '2026-04-15');
+    await request(app).post(`/api/engagements/${fx.client1a.engagement}/close`).set('Cookie', advisor);
+
+    expect((await runReminders({ today: '2026-04-15', timeZone: TZ })).items).toBe(0);
+  });
+
+  it('does not chase a line taken off the checklist', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const created = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/requests`)
+      .set('Cookie', advisor)
+      .send({ items: [{ title: 'W-2' }] });
+    const id = (created.body as Array<{ id: string }>)[0].id;
+    await setDue(id, '2026-04-15');
+    await request(app).post(`/api/requests/${id}/remove`).set('Cookie', advisor);
+
+    expect((await runReminders({ today: '2026-04-15', timeZone: TZ })).items).toBe(0);
+  });
+
+  it('lets the advisor remind a client now, once a day', async () => {
+    process.env.SMTP_URL = 'smtps://user:pw@smtp.example.com:465';
+    try {
+      const advisor = await loginAs(fx, 'provider1');
+      const today = firmDate(new Date(), firmTimezone());
+
+      const first = await request(app).post(`/api/engagements/${fx.client1a.engagement}/remind`).set('Cookie', advisor);
+      expect(first.status).toBe(200);
+      expect(first.body).toEqual({ items: 1, emailQueued: true });
+      expect(await reminderEmails(fx.client1a.id, today)).toHaveLength(1);
+      expect(await notificationsFor(fx.client1a.id)).toHaveLength(1);
+
+      const again = await request(app).post(`/api/engagements/${fx.client1a.engagement}/remind`).set('Cookie', advisor);
+      expect(again.status).toBe(409);
+      expect(again.body.code).toBe('already_reminded');
+      expect(await notificationsFor(fx.client1a.id)).toHaveLength(1);
+
+      // Nothing outstanding is a refusal, not an empty email.
+      await request(app).post(`/api/requests/${fx.client1b.request}/waive`).set('Cookie', advisor).send({ reason: 'Not needed' });
+      const none = await request(app).post(`/api/engagements/${fx.client1b.engagement}/remind`).set('Cookie', advisor);
+      expect(none.status).toBe(400);
+      expect(none.body.code).toBe('nothing_outstanding');
     } finally {
       delete process.env.SMTP_URL;
     }

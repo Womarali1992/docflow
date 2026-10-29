@@ -62,10 +62,14 @@ describe('admin CLI', () => {
 
     const [p] = await db.select().from(schema.providers).where(eq(schema.providers.email, 'new@firm.test'));
     expect(p).toBeDefined();
-    expect(p.firmName).toBe('New Firm CPA');
     expect(p.passwordChangedAt).not.toBeNull();
+    // A new advisor founds a firm of their own and owns it; the firm's id is never theirs.
+    const [firm] = await db.select().from(schema.firms).where(eq(schema.firms.id, p.firmId));
+    expect(firm.name).toBe('New Firm CPA');
+    expect(firm.id).not.toBe(p.id);
+    expect(p.role).toBe('owner');
     // Cost comes from the environment the CLI ran in (4 in tests, 12 on the firm PC).
-    expect(bcrypt.getRounds(p.passwordHash)).toBe(4);
+    expect(bcrypt.getRounds(p.passwordHash!)).toBe(4);
 
     const signin = await login('new@firm.test', 'an-admin-chosen-pass', 'provider');
     expect(signin.status).toBe(200);
@@ -73,7 +77,7 @@ describe('admin CLI', () => {
 
     const log = await adminActivities();
     expect(log).toHaveLength(1);
-    expect(log[0]).toMatchObject({ providerId: p.id, type: 'update', actorKind: null, actorId: null });
+    expect(log[0]).toMatchObject({ firmId: p.firmId, type: 'update', actorKind: null, actorId: null });
     expect(log[0].description).toContain('created advisor account new@firm.test');
   });
 
@@ -107,7 +111,7 @@ describe('admin CLI', () => {
 
     const [entry] = await adminActivities();
     expect(entry.clientId).toBe(fx.client1a.id);
-    expect(entry.providerId).toBe(fx.provider1.id);
+    expect(entry.firmId).toBe(fx.provider1.firmId);
   });
 
   it('deactivate and reactivate an advisor', async () => {
@@ -138,6 +142,37 @@ describe('admin CLI', () => {
     expect((await login(fx.provider1.email, PASSWORD, 'provider')).status).toBe(401);
   });
 
+  it('a client of two firms is named with --firm; without it the CLI lists the firms and stops', async () => {
+    await db.insert(schema.clients).values({
+      firmId: fx.provider2.firmId,
+      name: 'Client 1A at Two',
+      email: 'C1A@Example.Test',
+      emailNormalized: 'c1a@example.test',
+      accountId: 'CL-TWIN',
+    });
+
+    const ambiguous = await admin(['deactivate', '--kind', 'client', '--email', fx.client1a.email]);
+    expect(ambiguous.code).toBe(2);
+    expect(ambiguous.stderr).toContain('is a client of 2 firms');
+    expect(ambiguous.stderr).toContain(`${fx.provider1.firmId}  Provider One CPA`);
+    expect(ambiguous.stderr).toContain(`${fx.provider2.firmId}  Provider Two CPA`);
+
+    const named = await admin(['deactivate', '--kind', 'client', '--email', fx.client1a.email, '--firm', fx.provider2.firmId]);
+    expect(named.code, named.stderr).toBe(0);
+    const accounts = await db.select().from(schema.clients).where(eq(schema.clients.emailNormalized, 'c1a@example.test'));
+    expect(accounts.map((c) => [c.firmId, Boolean(c.deactivatedAt)]).sort()).toEqual(
+      [
+        [fx.provider1.firmId, false],
+        [fx.provider2.firmId, true],
+      ].sort()
+    );
+
+    const notAnId = await admin(['deactivate', '--kind', 'client', '--email', fx.client1a.email, '--firm', 'Provider Two CPA']);
+    expect(notAnId.code).toBe(2);
+    expect(notAnId.stderr).toContain('--firm needs a firm id');
+  }, 60_000);
+
+  // Six CLI processes in a row: under the full suite this ran right at the 20 s default.
   it('list-sessions and list-users report; unknown commands and bad flags exit 2', async () => {
     await loginAs(fx, 'provider1');
     const sessions = await admin(['list-sessions', '--kind', 'provider', '--email', fx.provider1.email]);
@@ -147,9 +182,10 @@ describe('admin CLI', () => {
 
     const users = await admin(['list-users']);
     expect(users.code, users.stderr).toBe(0);
-    expect(users.stdout).toContain('2 advisor(s)');
+    expect(users.stdout).toContain('3 advisor(s)');
+    expect(users.stdout).toContain(`${fx.provider1.email}  Provider One (Provider One CPA, owner)  active`);
     expect(users.stdout).toContain('3 client(s)');
-    expect(users.stdout).toContain(`${fx.client1a.email}  Client 1A  can sign in`);
+    expect(users.stdout).toContain(`${fx.client1a.email}  Client 1A (Provider One CPA)  can sign in`);
 
     expect((await admin(['nope'])).code).toBe(2);
     const badKind = await admin(['reset-mfa', '--kind', 'wizard', '--email', fx.provider1.email]);
@@ -158,5 +194,5 @@ describe('admin CLI', () => {
     const unknownUser = await admin(['deactivate', '--kind', 'client', '--email', 'nobody@example.test']);
     expect(unknownUser.code).toBe(2);
     expect(unknownUser.stderr).toContain('No client');
-  });
+  }, 60_000);
 });

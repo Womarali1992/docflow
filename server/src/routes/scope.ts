@@ -9,7 +9,8 @@
  * Visibility rules that live here rather than in each route:
  *   - a client sees only their own rows;
  *   - a client sees a deliverable only once it has been shared;
- *   - an advisor sees only their own firm's rows.
+ *   - an advisor sees every row of their own firm, whoever the client is
+ *     assigned to: assignment decides who is told, never who may look.
  */
 import type { Response } from 'express';
 import { eq } from 'drizzle-orm';
@@ -22,6 +23,9 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 export const notFound = (res: Response) => res.status(404).json({ error: 'Not found' });
 export const advisorOnly = (res: Response) => res.status(403).json({ error: 'Only your advisor can do that.' });
 export const clientOnly = (res: Response) => res.status(403).json({ error: 'Only the client can do that.' });
+
+/** What a client is told about a line that was taken off their list while they had it open. */
+export const REQUEST_REMOVED = 'Your accountant has taken this item off your list. There is nothing to send for it.';
 
 export function badRequest(res: Response, error: string, code?: string) {
   return res.status(400).json(code ? { error, code } : { error });
@@ -36,7 +40,7 @@ export async function findEngagement(auth: AuthPayload, id: string): Promise<Eng
   if (!isId(id)) return null;
   const [row] = await db.select().from(schema.engagements).where(eq(schema.engagements.id, id));
   if (!row) return null;
-  if (auth.kind === 'provider' && row.providerId !== auth.providerId) return null;
+  if (auth.kind === 'provider' && row.firmId !== auth.firmId) return null;
   if (auth.kind === 'client' && row.clientId !== auth.sub) return null;
   return row;
 }
@@ -45,7 +49,7 @@ export async function findRequest(auth: AuthPayload, id: string): Promise<Reques
   if (!isId(id)) return null;
   const [row] = await db.select().from(schema.requests).where(eq(schema.requests.id, id));
   if (!row) return null;
-  if (auth.kind === 'provider' && row.providerId !== auth.providerId) return null;
+  if (auth.kind === 'provider' && row.firmId !== auth.firmId) return null;
   if (auth.kind === 'client' && row.clientId !== auth.sub) return null;
   return row;
 }
@@ -59,7 +63,7 @@ export async function findDocument(auth: AuthPayload, id: string): Promise<Docum
   if (!isId(id)) return null;
   const [row] = await db.select().from(schema.documents).where(eq(schema.documents.id, id));
   if (!row) return null;
-  if (auth.kind === 'provider') return row.providerId === auth.providerId ? row : null;
+  if (auth.kind === 'provider') return row.firmId === auth.firmId ? row : null;
   if (row.clientId !== auth.sub) return null;
   if (row.kind === 'deliverable' && row.sharedAt === null) return null;
   return row;
@@ -81,16 +85,16 @@ export async function findVersion(
 export async function findTemplate(auth: AuthPayload, id: string): Promise<RequestTemplate | null> {
   if (!isId(id) || auth.kind !== 'provider') return null;
   const [row] = await db.select().from(schema.requestTemplates).where(eq(schema.requestTemplates.id, id));
-  if (!row || row.providerId !== auth.providerId) return null;
+  if (!row || row.firmId !== auth.firmId) return null;
   return row;
 }
 
-/** The advisor's own client, or null (the caller answers 404). */
+/** A client of the advisor's firm, or null (the caller answers 404). */
 export async function findClient(auth: AuthPayload, id: string) {
   if (!isId(id)) return null;
   const [row] = await db.select().from(schema.clients).where(eq(schema.clients.id, id));
   if (!row) return null;
-  if (auth.kind === 'provider' && row.providerId !== auth.providerId) return null;
+  if (auth.kind === 'provider' && row.firmId !== auth.firmId) return null;
   if (auth.kind === 'client' && row.id !== auth.sub) return null;
   return row;
 }

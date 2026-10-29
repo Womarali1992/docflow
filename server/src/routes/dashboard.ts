@@ -15,51 +15,83 @@
  *
  * Each request row carries its `engagementId` so a queue row can open the
  * checklist it came from — without it the queue could only offer "here is a
- * client", which is one click short of the thing that needs doing.
+ * client", which is one click short of the thing that needs doing. Since the
+ * 2026-10-28 audit it also carries what a row needs to be read without opening
+ * it: the engagement's title, when the line last moved (`since`), its status,
+ * and — for a line ready to review — the first file to open (`documentId`),
+ * so the queue goes straight to the review workspace. Rows are oldest first:
+ * the client who sent something on Monday is ahead of the one from Thursday.
+ *
+ * Only open engagements count. A closed year is finished business, and its
+ * leftover lines used to sit in "waiting on clients" forever.
+ *
+ * `?who=mine` (FIRM-BOOK-PLAN F6) narrows every bucket to the caller's own
+ * clients plus the firm's unassigned ones — until somebody takes those they
+ * are everybody's. `?who=all`, or no `who`, is the whole book. Each row says
+ * whose client it is (`advisorId`, `advisorName`; null when unassigned), so
+ * "everyone" shows whose line it is.
  */
 import { asyncRouter } from './async-router.js';
-import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { authenticate, requireProvider } from '../middleware/auth.js';
+import { attachmentsByRequest } from '../workflow/attachments.js';
+import { isEffectiveAdvisor } from '../db/firms.js';
 
 const router = asyncRouter();
 router.use(authenticate, requireProvider);
 
 router.get('/', async (req, res) => {
-  const providerId = req.auth!.providerId;
+  const firmId = req.auth!.firmId;
   const now = new Date();
+  const who = req.query.who ?? 'all';
+  if (who !== 'all' && who !== 'mine') {
+    return res.status(400).json({ error: 'who is "mine" or "all".', code: 'bad_who' });
+  }
+  /* Read through the left join below: no effective advisor means unassigned. */
+  const mine = who === 'mine' ? or(eq(schema.providers.id, req.auth!.sub), isNull(schema.providers.id)) : undefined;
 
-  const open = and(eq(schema.requests.providerId, providerId), isNull(schema.requests.archivedAt));
+  const open = and(
+    eq(schema.requests.firmId, firmId),
+    mine,
+    isNull(schema.requests.archivedAt),
+    eq(schema.engagements.status, 'open'),
+    isNull(schema.engagements.archivedAt)
+  );
+  /* What every request row says about itself. */
+  const row = {
+    id: schema.requests.id,
+    clientId: schema.requests.clientId,
+    engagementId: schema.requests.engagementId,
+    engagementTitle: schema.engagements.title,
+    title: schema.requests.title,
+    status: schema.requests.status,
+    dueDate: schema.requests.dueDate,
+    since: schema.requests.updatedAt,
+    advisorId: schema.providers.id,
+    advisorName: schema.providers.name,
+  };
+  const lines = () =>
+    db
+      .select(row)
+      .from(schema.requests)
+      .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
+      .leftJoin(schema.providers, isEffectiveAdvisor);
 
-  const [readyToReview, waiting, needsDecision, unread] = await Promise.all([
+  const [ready, waiting, needsDecision, unread] = await Promise.all([
+    lines()
+      .where(and(open, eq(schema.requests.status, 'submitted')))
+      .orderBy(asc(schema.requests.updatedAt)),
+    lines()
+      .where(and(open, inArray(schema.requests.status, ['requested', 'needs_correction'])))
+      .orderBy(asc(schema.requests.dueDate), asc(schema.requests.updatedAt)),
     db
-      .select({
-        id: schema.requests.id,
-        clientId: schema.requests.clientId,
-        engagementId: schema.requests.engagementId,
-        title: schema.requests.title,
-      })
+      .select({ ...row, note: schema.requests.clientResponseNote })
       .from(schema.requests)
-      .where(and(open, eq(schema.requests.status, 'submitted'))),
-    db
-      .select({
-        id: schema.requests.id,
-        clientId: schema.requests.clientId,
-        engagementId: schema.requests.engagementId,
-        title: schema.requests.title,
-        dueDate: schema.requests.dueDate,
-      })
-      .from(schema.requests)
-      .where(and(open, inArray(schema.requests.status, ['requested', 'needs_correction']))),
-    db
-      .select({
-        id: schema.requests.id,
-        clientId: schema.requests.clientId,
-        engagementId: schema.requests.engagementId,
-        title: schema.requests.title,
-        note: schema.requests.clientResponseNote,
-      })
-      .from(schema.requests)
+      .innerJoin(schema.engagements, eq(schema.engagements.id, schema.requests.engagementId))
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.requests.clientId))
+      .leftJoin(schema.providers, isEffectiveAdvisor)
       .where(
         and(
           open,
@@ -68,12 +100,28 @@ router.get('/', async (req, res) => {
           ne(schema.requests.status, 'accepted'),
           ne(schema.requests.status, 'waived')
         )
-      ),
+      )
+      .orderBy(asc(schema.requests.updatedAt)),
     db
-      .select({ id: schema.messages.id, clientId: schema.messages.clientId })
+      .select({
+        id: schema.messages.id,
+        clientId: schema.messages.clientId,
+        advisorId: schema.providers.id,
+        advisorName: schema.providers.name,
+      })
       .from(schema.messages)
-      .where(and(eq(schema.messages.providerId, providerId), eq(schema.messages.senderKind, 'client'), isNull(schema.messages.readAt))),
+      .innerJoin(schema.clients, eq(schema.clients.id, schema.messages.clientId))
+      .leftJoin(schema.providers, isEffectiveAdvisor)
+      .where(and(eq(schema.messages.firmId, firmId), mine, eq(schema.messages.senderKind, 'client'), isNull(schema.messages.readAt))),
   ]);
+
+  /* The file a "ready" row opens: the line's first readable attachment, in
+     the order the review workspace pages through them. One batched read. */
+  const attachments = await attachmentsByRequest(ready.map((r) => r.id));
+  const readyToReview = ready.map((r) => ({
+    ...r,
+    documentId: (attachments.get(r.id) ?? []).find((a) => a.state !== 'refused')?.documentId ?? null,
+  }));
 
   // Overdue is a slice of "waiting", computed here so the definition lives in one place.
   const overdue = waiting.filter((r) => r.dueDate !== null && r.dueDate.getTime() < now.getTime());

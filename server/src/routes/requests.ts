@@ -19,6 +19,11 @@
  *
  * Every move is an explicit verb (invariant 5). PATCH only edits wording,
  * category, deadline and order.
+ *
+ * Beside the state machine is `remove` / `restore`: a line asked for by mistake
+ * comes off the checklist without a waiver the client would read. It is only
+ * for a line nothing was ever sent against. Once the client has sent a file,
+ * the line is part of the record and waiving is the way to close it.
  */
 import { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
 import { asyncRouter } from './async-router.js';
@@ -30,10 +35,11 @@ import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
 import { auditRequest } from '../db/audit.js';
 import { decidableVersions, refusalBody, type DecisionRefusal } from '../workflow/publish.js';
 import { attachmentsForRequest, documentsForRequest } from '../workflow/attachments.js';
+import { correctionsByRequest } from '../workflow/corrections.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
-import { advisorOnly, badRequest, clientOnly, findRequest, notFound } from './scope.js';
-import { notify } from '../notify.js';
+import { advisorOnly, badRequest, clientOnly, findRequest, notFound, REQUEST_REMOVED } from './scope.js';
+import { notify, notifyAdvisors } from '../notify.js';
 import type { Request as RequestRow } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -130,6 +136,23 @@ async function recordDecision(req: ExpressRequest, input: DecisionInput): Promis
 
     const versionIds = decidable.decisions.map((d) => d.versionId);
 
+    /* A correction is a question to the client, so it goes where questions
+       go: the item's own thread, in the advisor's words, where the client can
+       answer it. Before the 2026-10-28 audit the portal promised the note was
+       "in the messages for this item" and it was only ever on the review rows. */
+    if (input.decision === 'needs_correction' && input.note) {
+      await tx.insert(schema.messages).values({
+        clientId: input.request.clientId,
+        firmId: input.request.firmId,
+        documentId: decidable.decisions[0]?.documentId ?? null,
+        senderKind: 'provider',
+        senderId: auth.sub,
+        senderName: auth.name,
+        content: `Re: ${input.request.title}\n\n${input.note}`,
+        createdAt: now,
+      });
+    }
+
     // The decision and the record of it are one fact (F10): inside the
     // transaction, so a failed audit rolls the decision back rather than
     // leaving a change nobody can account for.
@@ -151,10 +174,16 @@ async function recordDecision(req: ExpressRequest, input: DecisionInput): Promis
   });
 }
 
-/** The request as it stands, with its attachments, ready to answer with. */
+/** A request row in its public shape, with what hangs off it: its attachments and any open correction. */
+async function present(row: RequestRow, now = new Date()) {
+  const corrections = row.status === 'needs_correction' ? await correctionsByRequest([row.id]) : null;
+  return serializeRequest(row, now, await attachmentsForRequest(row.id), corrections?.get(row.id) ?? null);
+}
+
+/** The request as it stands, re-read, ready to answer with. */
 async function freshRequest(requestId: string, now: Date) {
   const [updated] = await db.select().from(schema.requests).where(eq(schema.requests.id, requestId));
-  return serializeRequest(updated, now, await attachmentsForRequest(requestId));
+  return present(updated, now);
 }
 
 /* Wording, category, deadline and order. Never status. */
@@ -170,7 +199,7 @@ const patchSchema = z.object({
 router.get('/:id', async (req, res) => {
   const request = await findRequest(req.auth!, req.params.id);
   if (!request) return notFound(res);
-  res.json(serializeRequest(request, new Date(), await attachmentsForRequest(request.id)));
+  res.json(await present(request));
 });
 
 router.patch('/:id', async (req, res) => {
@@ -185,7 +214,7 @@ router.patch('/:id', async (req, res) => {
   if (dueDate !== undefined) updates.dueDate = dueDate === null ? null : new Date(dueDate);
 
   const [updated] = await db.update(schema.requests).set(updates).where(eq(schema.requests.id, request.id)).returning();
-  res.json(serializeRequest(updated, new Date(), await attachmentsForRequest(request.id)));
+  res.json(await present(updated));
 });
 
 /* ------------------------------------------------------------ advisor verbs */
@@ -228,7 +257,7 @@ router.post('/:id/accept', async (req, res) => {
     link: '/portal/requests',
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `accepted: ${request.title}`,
@@ -282,7 +311,7 @@ router.post('/:id/request-correction', async (req, res) => {
     link: '/portal',
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `asked for a correction: ${request.title}`,
@@ -323,7 +352,7 @@ router.post('/:id/waive', async (req, res) => {
     meta: { reason: parsed.data.reason },
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `waived: ${request.title}`,
@@ -333,7 +362,7 @@ router.post('/:id/waive', async (req, res) => {
     targetId: request.id,
   });
 
-  res.json(serializeRequest(updated, now, await attachmentsForRequest(request.id)));
+  res.json(await present(updated, now));
 });
 
 /** Puts a decided request back in play — back to `submitted` if an answer is on file. */
@@ -355,7 +384,108 @@ router.post('/:id/reopen', async (req, res) => {
     .where(eq(schema.requests.id, request.id))
     .returning();
 
-  res.json(serializeRequest(updated, now, await attachmentsForRequest(request.id)));
+  res.json(await present(updated, now));
+});
+
+const ENGAGEMENT_CLOSED = 'This engagement is closed. Reopen it to change the checklist.';
+
+async function engagementClosed(request: RequestRow): Promise<boolean> {
+  const [engagement] = await db
+    .select({ status: schema.engagements.status })
+    .from(schema.engagements)
+    .where(eq(schema.engagements.id, request.engagementId));
+  return engagement?.status === 'closed';
+}
+
+/**
+ * Take a line off the checklist: a template line that does not apply to this
+ * client, or one added twice. The client stops seeing it and is not chased for
+ * it, and nothing is said to them. They never had anything to do for it.
+ *
+ * Refused once any file has been sent against it, including one still being
+ * checked or one the scanner refused (an importer's empty document row is not
+ * a file). That file is the client's answer, and
+ * the line it answers stays on the record. The request row is locked first,
+ * the same lock the upload path takes before attaching a file, so a removal
+ * and a first upload cannot both win (see `documentForRequest`).
+ */
+router.post('/:id/remove', async (req, res) => {
+  const auth = req.auth!;
+  const request = await loadForAdvisor(req, res);
+  if (!request) return;
+  if (await engagementClosed(request)) return badRequest(res, ENGAGEMENT_CLOSED, 'engagement_closed');
+
+  const now = new Date();
+  const outcome = await db.transaction(async (tx) => {
+    const [row] = await tx.select().from(schema.requests).where(eq(schema.requests.id, request.id)).for('update');
+    if (row.archivedAt) return { ok: true as const, row, changed: false };
+
+    // "A file on this line" means what the checklist shows as one (attachments.ts).
+    if ((await attachmentsForRequest(request.id, tx)).length > 0) return { ok: false as const };
+
+    const [updated] = await tx
+      .update(schema.requests)
+      .set({ archivedAt: now, updatedAt: now })
+      .where(eq(schema.requests.id, request.id))
+      .returning();
+    await auditRequest(
+      req,
+      { action: 'request.removed', targetType: 'request', targetId: request.id, clientId: request.clientId, meta: { status: row.status } },
+      tx
+    );
+    return { ok: true as const, row: updated, changed: true };
+  });
+
+  if (!outcome.ok) {
+    return res.status(409).json({
+      error: 'The client has sent a file for this item, so it stays on the record. Waive it instead.',
+      code: 'has_files',
+    });
+  }
+  if (outcome.changed) {
+    await recordActivity({
+      firmId: request.firmId,
+      clientId: request.clientId,
+      type: 'update',
+      description: `removed from the checklist: ${request.title}`,
+      actorKind: 'provider',
+      actorId: auth.sub,
+      actorName: auth.name,
+      targetId: request.id,
+    });
+  }
+
+  res.json(await present(outcome.row, now));
+});
+
+/** Puts a removed line back on the checklist, in the state it was removed in. */
+router.post('/:id/restore', async (req, res) => {
+  const auth = req.auth!;
+  const request = await loadForAdvisor(req, res);
+  if (!request) return;
+  if (await engagementClosed(request)) return badRequest(res, ENGAGEMENT_CLOSED, 'engagement_closed');
+  if (!request.archivedAt) return res.json(await present(request));
+
+  const now = new Date();
+  const [updated] = await db
+    .update(schema.requests)
+    .set({ archivedAt: null, updatedAt: now })
+    .where(eq(schema.requests.id, request.id))
+    .returning();
+
+  await auditRequest(req, { action: 'request.restored', targetType: 'request', targetId: request.id, clientId: request.clientId });
+  await recordActivity({
+    firmId: request.firmId,
+    clientId: request.clientId,
+    type: 'update',
+    description: `put back on the checklist: ${request.title}`,
+    actorKind: 'provider',
+    actorId: auth.sub,
+    actorName: auth.name,
+    targetId: request.id,
+  });
+
+  res.json(await present(updated, now));
 });
 
 /* ------------------------------------------------------------- client verbs */
@@ -379,6 +509,7 @@ router.post('/:id/respond', async (req, res) => {
   const parsed = respondSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
 
+  if (request.archivedAt) return badRequest(res, REQUEST_REMOVED, 'request_removed');
   if (request.status === 'accepted' || request.status === 'waived') {
     return badRequest(res, 'This item is already closed.', 'request_closed');
   }
@@ -396,16 +527,14 @@ router.post('/:id/respond', async (req, res) => {
     .returning();
 
   // Only the advisor can take a line off the list, so they have to hear about it.
-  await notify({
-    userKind: 'provider',
-    userId: request.providerId,
+  await notifyAdvisors(request.clientId, {
     type: 'request.not_applicable',
     title: `${auth.name} says they do not have: ${request.title}`,
     body: parsed.data.note ?? null,
     link: `/engagements/${request.engagementId}`,
   });
   await recordActivity({
-    providerId: request.providerId,
+    firmId: request.firmId,
     clientId: request.clientId,
     type: 'update',
     description: `said they do not have: ${request.title}`,
@@ -415,7 +544,7 @@ router.post('/:id/respond', async (req, res) => {
     targetId: request.id,
   });
 
-  res.json(serializeRequest(updated, now, await attachmentsForRequest(request.id)));
+  res.json(await present(updated, now));
 });
 
 export default router;

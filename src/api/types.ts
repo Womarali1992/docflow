@@ -12,7 +12,10 @@ export interface Provider {
 
 export interface Client {
   id: string;
-  providerId: string;
+  firmId: string;
+  /** The active advisor who looks after this client; null when unassigned (or theirs was deactivated). */
+  assignedAdvisorId: string | null;
+  assignedAdvisorName: string | null;
   name: string;
   email: string;
   accountId: string;
@@ -40,6 +43,39 @@ export interface OneTimeLink {
   emailQueued: boolean;
 }
 
+/** An owner also manages the team: invites, deactivates and reactivates advisors. */
+export type AdvisorRole = 'owner' | 'advisor';
+
+/** One advisor of the firm, as the team card shows them. Never a hash or a token. */
+export interface Advisor {
+  id: string;
+  name: string;
+  email: string;
+  role: AdvisorRole;
+  deactivatedAt: Date | null;
+  /** False until they accept their invitation and choose a password. */
+  hasPassword: boolean;
+  invitePendingUntil: Date | null;
+  /** Active clients who have this advisor. */
+  assignedClients: number;
+}
+
+/** GET /firm — the firm and every advisor who shares its book. */
+export interface Firm {
+  id: string;
+  name: string;
+  advisors: Advisor[];
+}
+
+/** GET /staff-invitations/:token — shown before an invited advisor sets a password. */
+export interface StaffInvitationInfo {
+  name: string;
+  email: string;
+  firmName: string;
+  inviterName: string;
+  expiresAt: Date;
+}
+
 /** GET /invitations/:token — who invited whom, shown before the password is set. */
 export interface InvitationInfo {
   clientName: string;
@@ -52,7 +88,7 @@ export interface InvitationInfo {
 export interface Document {
   id: string;
   clientId: string;
-  providerId: string;
+  firmId: string;
   name: string;
   /** True when bytes are stored for this document; the storage path itself never leaves the server. */
   hasFile: boolean;
@@ -84,7 +120,7 @@ export interface Document {
 export interface Message {
   id: string;
   clientId: string;
-  providerId: string;
+  firmId: string;
   documentId?: string | null;
   senderKind: ActorKind;
   senderId: string;
@@ -98,7 +134,7 @@ export type ActivityType = 'document' | 'message' | 'update';
 
 export interface Activity {
   id: string;
-  providerId: string;
+  firmId: string;
   clientId?: string | null;
   type: ActivityType;
   description: string;
@@ -106,6 +142,8 @@ export interface Activity {
   actorId?: string | null;
   actorName?: string | null;
   targetId?: string | null;
+  /** Where "View" goes, resolved by the server; null when there is nowhere useful. */
+  link?: string | null;
   createdAt: Date;
 }
 
@@ -121,8 +159,8 @@ export interface SessionSummary {
 }
 
 export type Me =
-  | { kind: 'provider'; id: string; name: string; email: string; firmName?: string | null }
-  | { kind: 'client';   id: string; name: string; email: string; providerId: string; providerName?: string | null };
+  | { kind: 'provider'; id: string; name: string; email: string; firmName?: string | null; role?: AdvisorRole }
+  | { kind: 'client';   id: string; name: string; email: string; firmId: string; providerName?: string | null };
 
 /**
  * Where a session stands. `preauth`: password accepted, authenticator code owed.
@@ -188,7 +226,7 @@ export interface EngagementCounts {
 export interface Engagement {
   id: string;
   clientId: string;
-  providerId: string;
+  firmId: string;
   title: string;
   kind: EngagementKind;
   taxYear: number | null;
@@ -216,15 +254,21 @@ export interface RequestAttachment {
   documentId: string;
   displayName: string;
   currentVersion: VersionSummary | null;
-  /** `ready` means there is something to open; `checking` means the scan is still running. */
-  state: 'ready' | 'checking';
+  /**
+   * `ready` means there is something to open; `checking` means the scan is still
+   * running; `refused` means the scanner rejected the newest file and nothing
+   * readable is left — the client has to send it again.
+   */
+  state: 'ready' | 'checking' | 'refused';
+  /** The advisor has accepted or corrected the version on screen. Until then the client may withdraw it. */
+  decided: boolean;
 }
 
 export interface RequestItem {
   id: string;
   engagementId: string;
   clientId: string;
-  providerId: string;
+  firmId: string;
   title: string;
   instructions: string | null;
   category: string | null;
@@ -245,6 +289,8 @@ export interface RequestItem {
   /** Every file filed against this line, oldest first. */
   attachments: RequestAttachment[];
   attachmentCount: number;
+  /** What the advisor asked for — set only while the line is `needs_correction`. */
+  correction: { note: string; createdAt: Date } | null;
 }
 
 export interface DocumentVersion {
@@ -302,6 +348,8 @@ export interface EngagementDocument extends Document {
 export interface EngagementTree {
   engagement: Engagement;
   requests: RequestItem[];
+  /** Lines taken off the checklist. Advisor only; a client's tree never has them. */
+  removedRequests?: RequestItem[];
   documents: EngagementDocument[];
 }
 
@@ -316,7 +364,7 @@ export interface TemplateItem {
 
 export interface RequestTemplate {
   id: string;
-  providerId: string;
+  firmId: string;
   name: string;
   kind: TemplateKind;
   items: TemplateItem[];
@@ -337,10 +385,22 @@ export interface DashboardRequestRef {
   clientId: string;
   /** Where the line lives, so a queue row can open the checklist it came from. */
   engagementId: string;
+  engagementTitle: string;
   title: string;
+  status: RequestStatus;
   dueDate?: Date | null;
+  /** When the line last moved: sent, sent back, or asked for. */
+  since: Date;
+  /** Ready-to-review rows only: the first file to open in the review workspace. */
+  documentId?: string | null;
   note?: string | null;
+  /** Whose client this is (F6), so "everyone" shows whose line it is; null when unassigned. */
+  advisorId?: string | null;
+  advisorName?: string | null;
 }
+
+/** Whose work the queue counts (F6). "mine" includes the firm's unassigned clients. */
+export type QueueWho = 'mine' | 'all';
 
 export interface DashboardSummary {
   generatedAt: string;
@@ -348,7 +408,7 @@ export interface DashboardSummary {
   waitingOnClients: DashboardBucket<DashboardRequestRef>;
   overdue: DashboardBucket<DashboardRequestRef>;
   needsDecision: DashboardBucket<DashboardRequestRef>;
-  unreadMessages: DashboardBucket<{ id: string; clientId: string }>;
+  unreadMessages: DashboardBucket<{ id: string; clientId: string; advisorId?: string | null; advisorName?: string | null }>;
 }
 
 export interface SearchParams {

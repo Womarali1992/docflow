@@ -2,13 +2,18 @@
  * Administrator CLI (plan: Security design → Provisioning). Runs on the server
  * console only — there is no admin role in the app.
  *
- *   npm run admin -- create-advisor --email a@firm.com --name "Ann Advisor" [--firm "Firm CPA"]
- *   npm run admin -- reset-mfa      --kind provider|client --email …
- *   npm run admin -- reset-link     --kind provider|client --email …
- *   npm run admin -- deactivate     --kind provider|client --email …
- *   npm run admin -- reactivate     --kind provider|client --email …
- *   npm run admin -- list-sessions  --kind provider|client --email …
+ *   npm run admin -- create-advisor --email a@firm.com --name "Ann Advisor" [--firm "Firm CPA" | --join <firm id>]
+ *   npm run admin -- list-firms
+ *   npm run admin -- reset-mfa      --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- reset-link     --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- deactivate     --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- reactivate     --kind provider|client --email … [--firm <firm id>]
+ *   npm run admin -- list-sessions  --kind provider|client --email … [--firm <firm id>]
  *   npm run admin -- list-users
+ *
+ * A client's address is unique only within a firm (F7). When it is a client of
+ * several, the account commands stop, list the firms and ask for `--firm`.
+ * Advisor addresses are unique across the install and need no `--firm`.
  *   npm run admin -- unlock
  *
  * Every change is recorded as an activity row ("Administrator (CLI) …") so the
@@ -16,12 +21,14 @@
  */
 import 'dotenv/config';
 import readline from 'node:readline';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db, pool, schema } from './db/client.js';
 import { hashPassword, isRefusedDemoPassword, passwordSchema } from './auth/passwords.js';
 import { createPasswordReset, resetLink } from './auth/resets.js';
 import { listLiveSessions, revokeAllSessions } from './auth/sessions.js';
 import { audit } from './db/audit.js';
+import { findClientsByEmail, findProviderByEmail, providerEmailIsTaken } from './auth/email.js';
+import { createFirmWithOwner } from './db/firms.js';
 
 type Kind = 'provider' | 'client';
 type Flags = Record<string, string | true>;
@@ -101,19 +108,37 @@ interface Account {
   id: string;
   name: string;
   email: string;
-  providerId: string;
+  firmId: string;
   deactivatedAt: Date | null;
 }
 
-async function findAccount(kind: Kind, email: string): Promise<Account> {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The account `--kind`, `--email` (and, for a client of several firms, `--firm`) name. */
+async function findAccount(flags: Flags): Promise<Account> {
+  const kind = needKind(flags);
+  const email = need(flags, 'email');
   if (kind === 'provider') {
-    const [p] = await db.select().from(schema.providers).where(eq(schema.providers.email, email));
+    const p = await findProviderByEmail(email);
     if (!p) throw new UsageError(`No advisor with email ${email}`);
-    return { kind, id: p.id, name: p.name, email: p.email, providerId: p.id, deactivatedAt: p.deactivatedAt };
+    return { kind, id: p.id, name: p.name, email: p.email, firmId: p.firmId, deactivatedAt: p.deactivatedAt };
   }
-  const [c] = await db.select().from(schema.clients).where(eq(schema.clients.email, email));
-  if (!c) throw new UsageError(`No client with email ${email}`);
-  return { kind, id: c.id, name: c.name, email: c.email, providerId: c.providerId, deactivatedAt: c.deactivatedAt };
+  const firm = flags.firm === undefined ? undefined : need(flags, 'firm');
+  if (firm !== undefined && !UUID.test(firm)) throw new UsageError('--firm needs a firm id (see list-firms)');
+  const found = await findClientsByEmail(email, firm);
+  if (found.length === 0) throw new UsageError(firm ? `No client with email ${email} at firm ${firm}` : `No client with email ${email}`);
+  if (found.length > 1) {
+    const firms = await db
+      .select({ id: schema.firms.id, name: schema.firms.name })
+      .from(schema.firms)
+      .where(inArray(schema.firms.id, found.map((c) => c.firmId)))
+      .orderBy(schema.firms.name);
+    throw new UsageError(
+      `${email} is a client of ${firms.length} firms. Say which with --firm <firm id>:\n` + firms.map((f) => `  ${f.id}  ${f.name}`).join('\n')
+    );
+  }
+  const [c] = found;
+  return { kind, id: c.id, name: c.name, email: c.email, firmId: c.firmId, deactivatedAt: c.deactivatedAt };
 }
 
 /**
@@ -125,9 +150,9 @@ async function findAccount(kind: Kind, email: string): Promise<Account> {
  * a shell on the machine; that one is append-only and cannot be edited, which
  * is exactly what a "reset someone's two-step verification" line needs to be.
  */
-async function record(account: Pick<Account, 'kind' | 'id' | 'providerId'>, description: string) {
+async function record(account: Pick<Account, 'kind' | 'id' | 'firmId'>, description: string) {
   await db.insert(schema.activities).values({
-    providerId: account.providerId,
+    firmId: account.firmId,
     clientId: account.kind === 'client' ? account.id : null,
     type: 'update',
     description,
@@ -152,22 +177,34 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
     const email = need(flags, 'email');
     const name = need(flags, 'name');
     const firm = typeof flags.firm === 'string' ? flags.firm.trim() : null;
-    const [existing] = await db.select({ id: schema.providers.id }).from(schema.providers).where(eq(schema.providers.email, email));
-    if (existing) throw new UsageError(`An advisor with email ${email} already exists`);
+    /* --join seats the account in an existing firm as an advisor (FIRM-BOOK-PLAN
+       F4); without it the account founds a firm of its own and owns it. */
+    const join = typeof flags.join === 'string' ? flags.join.trim() : null;
+    if (flags.join !== undefined && !join) throw new UsageError('--join needs a firm id (see list-firms)');
+    if (firm && join) throw new UsageError('Use --firm to found a new firm or --join to add to one, not both');
+    const [joined] = join
+      ? await db.select({ id: schema.firms.id, name: schema.firms.name }).from(schema.firms).where(eq(schema.firms.id, join)).catch(() => [])
+      : [];
+    if (join && !joined) throw new UsageError(`No firm with id ${join} (see list-firms)`);
+    if (await providerEmailIsTaken(email)) throw new UsageError(`An advisor with email ${email} already exists`);
 
     const password = await passwordFromEnvOrPrompt();
     checkPassword(password);
     const passwordHash = await hashPassword(password);
-    const [created] = await db
-      .insert(schema.providers)
-      .values({ name, email, passwordHash, firmName: firm, role: 'advisor', passwordChangedAt: new Date() })
-      .returning({ id: schema.providers.id });
-    await record({ kind: 'provider', id: created.id, providerId: created.id }, `Administrator (CLI) created advisor account ${email}`);
-    console.log(`Created advisor ${name} <${email}>${firm ? ` at ${firm}` : ''}. The first sign-in sets up two-step verification.`);
+    const values = { name, email, passwordHash, passwordChangedAt: new Date() };
+    const created = joined
+      ? (await db.insert(schema.providers).values({ ...values, firmId: joined.id, role: 'advisor' }).returning())[0]
+      : await createFirmWithOwner({ ...values, firmName: firm });
+    await record(
+      { kind: 'provider', id: created.id, firmId: created.firmId },
+      `Administrator (CLI) created advisor account ${email}`
+    );
+    const at = joined?.name ?? firm;
+    console.log(`Created advisor ${name} <${email}>${at ? ` at ${at}` : ''}. The first sign-in sets up two-step verification.`);
   },
 
   async 'reset-mfa'(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     await db.delete(schema.mfaTotp).where(and(eq(schema.mfaTotp.userKind, account.kind), eq(schema.mfaTotp.userId, account.id)));
     await db.delete(schema.recoveryCodes).where(and(eq(schema.recoveryCodes.userKind, account.kind), eq(schema.recoveryCodes.userId, account.id)));
     const revoked = await revokeAllSessions(account.kind, account.id);
@@ -176,7 +213,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'reset-link'(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     if (account.deactivatedAt) throw new UsageError(`${account.email} is deactivated; reactivate first`);
     const { token, expiresAt } = await createPasswordReset(account.kind, account.id);
     await record(account, `Administrator (CLI) issued a password reset link for ${account.email}`);
@@ -185,7 +222,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async deactivate(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     const now = new Date();
     if (account.kind === 'provider') {
       await db.update(schema.providers).set({ deactivatedAt: now, updatedAt: now }).where(eq(schema.providers.id, account.id));
@@ -198,7 +235,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async reactivate(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     const now = new Date();
     if (account.kind === 'provider') {
       await db.update(schema.providers).set({ deactivatedAt: null, updatedAt: now }).where(eq(schema.providers.id, account.id));
@@ -210,7 +247,7 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'list-sessions'(flags) {
-    const account = await findAccount(needKind(flags), need(flags, 'email'));
+    const account = await findAccount(flags);
     const rows = await listLiveSessions(account.kind, account.id);
     if (rows.length === 0) {
       console.log(`No live sessions for ${account.email}.`);
@@ -223,17 +260,50 @@ const commands: Record<string, (flags: Flags) => Promise<void>> = {
   },
 
   async 'list-users'() {
-    const providers = await db.select().from(schema.providers);
-    const clients = await db.select().from(schema.clients);
+    const providers = await db
+      .select({
+        email: schema.providers.email,
+        name: schema.providers.name,
+        role: schema.providers.role,
+        deactivatedAt: schema.providers.deactivatedAt,
+        firmName: schema.firms.name,
+      })
+      .from(schema.providers)
+      .innerJoin(schema.firms, eq(schema.firms.id, schema.providers.firmId));
+    // With the firm: one address can be a client of two (F7).
+    const clients = await db
+      .select({
+        email: schema.clients.email,
+        name: schema.clients.name,
+        passwordHash: schema.clients.passwordHash,
+        deactivatedAt: schema.clients.deactivatedAt,
+        firmName: schema.firms.name,
+      })
+      .from(schema.clients)
+      .innerJoin(schema.firms, eq(schema.firms.id, schema.clients.firmId));
     console.log(`${providers.length} advisor(s):`);
     for (const p of providers) {
-      console.log(`  ${p.email}  ${p.name}${p.firmName ? ` (${p.firmName})` : ''}  ${p.deactivatedAt ? 'DEACTIVATED' : 'active'}`);
+      console.log(`  ${p.email}  ${p.name} (${p.firmName}, ${p.role})  ${p.deactivatedAt ? 'DEACTIVATED' : 'active'}`);
     }
     console.log(`${clients.length} client(s):`);
     for (const c of clients) {
       const state = c.deactivatedAt ? 'DEACTIVATED' : c.passwordHash ? 'can sign in' : 'not invited / no password';
-      console.log(`  ${c.email}  ${c.name}  ${state}`);
+      console.log(`  ${c.email}  ${c.name} (${c.firmName})  ${state}`);
     }
+  },
+
+  async 'list-firms'() {
+    const firms = await db
+      .select({
+        id: schema.firms.id,
+        name: schema.firms.name,
+        advisors: sql<number>`(SELECT COUNT(*)::int FROM ${schema.providers} p WHERE p.firm_id = ${schema.firms}."id")`,
+        clients: sql<number>`(SELECT COUNT(*)::int FROM ${schema.clients} c WHERE c.firm_id = ${schema.firms}."id")`,
+      })
+      .from(schema.firms)
+      .orderBy(schema.firms.name);
+    console.log(`${firms.length} firm(s):`);
+    for (const f of firms) console.log(`  ${f.id}  ${f.name}  ${f.advisors} advisor(s), ${f.clients} client(s)`);
   },
 
   async unlock() {

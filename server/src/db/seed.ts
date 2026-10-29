@@ -4,6 +4,7 @@ import { db, pool, schema } from './client.js';
 import { and, eq } from 'drizzle-orm';
 import { encryptSecret } from '../auth/crypto.js';
 import { normalizeEmail } from '../auth/email.js';
+import { createFirmWithOwner } from './firms.js';
 import { type UserKind } from '../auth/mfa.js';
 
 /**
@@ -63,37 +64,68 @@ async function seed() {
 
   if (!provider) {
     const passwordHash = await bcrypt.hash(advisorPassword, 10);
-    [provider] = await db
-      .insert(schema.providers)
-      .values({
-        name: 'Sarah Johnson',
-        email: advisorEmail,
-        passwordHash,
-        firmName: 'Meridian CPA',
-        role: 'advisor',
-      })
-      .returning();
+    provider = await createFirmWithOwner({
+      /* Not "Sarah Johnson": that is the demo client, and a thread between
+         two people with one name is unreadable (2026-10-28 audit). */
+      name: 'Sarah Mitchell',
+      email: advisorEmail,
+      passwordHash,
+      firmName: 'Meridian CPA',
+    });
     console.log(`+ Provider: ${provider.name} <${provider.email}>`);
   } else {
     console.log(`= Provider already exists: ${provider.email}`);
   }
 
+  /* A second advisor, so the firm's shared book has something to share
+     (FIRM-BOOK-PLAN F8): Mine / Everyone, reassignment, and the notices that
+     go to the whole firm while a client has nobody. */
+  const colleagueEmail = 'james@meridiancpa.com';
+  let [colleague] = await db.select().from(schema.providers).where(eq(schema.providers.email, colleagueEmail));
+  if (!colleague) {
+    [colleague] = await db
+      .insert(schema.providers)
+      .values({
+        firmId: provider.firmId,
+        name: 'James Okafor',
+        email: colleagueEmail,
+        passwordHash: await bcrypt.hash(advisorPassword, 10),
+        role: 'advisor',
+      })
+      .returning();
+    console.log(`+ Advisor: ${colleague.name} <${colleague.email}>`);
+  } else {
+    console.log(`= Advisor already exists: ${colleague.email}`);
+  }
+
+  /* Emily Davis has nobody: the whole firm hears from her until someone takes her. */
   const clientSeeds = [
-    { name: 'Sarah Johnson', email: 'sarah.johnson@meridian.co', accountId: 'CL-04827', plan: 'Wealth Tier', clientSince: 'Mar 2021', aum: '2450000.00' },
-    { name: 'Michael Chen',   email: 'm.chen@chenco.io',         accountId: 'CL-02941', plan: 'Wealth Tier', clientSince: 'Jan 2019', aum: '5120000.00' },
-    { name: 'Emily Davis',    email: 'emily@davisventures.com',  accountId: 'CL-11203', plan: 'Core',        clientSince: 'Aug 2022', aum: '780000.00' },
+    { name: 'Sarah Johnson', email: 'sarah.johnson@meridian.co', accountId: 'CL-04827', plan: 'Wealth Tier', clientSince: 'Mar 2021', aum: '2450000.00', advisor: provider.id },
+    { name: 'Michael Chen',   email: 'm.chen@chenco.io',         accountId: 'CL-02941', plan: 'Wealth Tier', clientSince: 'Jan 2019', aum: '5120000.00', advisor: colleague.id },
+    { name: 'Emily Davis',    email: 'emily@davisventures.com',  accountId: 'CL-11203', plan: 'Core',        clientSince: 'Aug 2022', aum: '780000.00',  advisor: null },
   ];
 
   const clientPassword = 'client123';
   const clientHash = await bcrypt.hash(clientPassword, 10);
 
-  for (const c of clientSeeds) {
-    const existing = await db.select().from(schema.clients).where(eq(schema.clients.email, c.email));
+  // An existing client keeps whatever advisor it has: the seed never reassigns.
+  for (const { advisor, ...c } of clientSeeds) {
+    // The same address may be a client of another firm (F7); only this firm's account counts.
+    const existing = await db
+      .select()
+      .from(schema.clients)
+      .where(and(eq(schema.clients.firmId, provider.firmId), eq(schema.clients.emailNormalized, normalizeEmail(c.email))));
     if (existing.length === 0) {
       const [created] = await db
         .insert(schema.clients)
-        // `emailNormalized` is NOT NULL and unique since C5.4; every write path sets it.
-        .values({ ...c, emailNormalized: normalizeEmail(c.email), providerId: provider.id, passwordHash: clientHash })
+        // `emailNormalized` is NOT NULL and unique within the firm (F7); every write path sets it.
+        .values({
+          ...c,
+          emailNormalized: normalizeEmail(c.email),
+          firmId: provider.firmId,
+          assignedProviderId: advisor,
+          passwordHash: clientHash,
+        })
         .returning();
       console.log(`+ Client: ${created.name} <${created.email}>`);
     } else {
@@ -102,11 +134,12 @@ async function seed() {
   }
 
   await enrollDevMfa('provider', provider.id, provider.email);
-  const allClients = await db.select().from(schema.clients).where(eq(schema.clients.providerId, provider.id));
+  await enrollDevMfa('provider', colleague.id, colleague.email);
+  const allClients = await db.select().from(schema.clients).where(eq(schema.clients.firmId, provider.firmId));
   for (const c of allClients) await enrollDevMfa('client', c.id, c.email);
 
   console.log('\nSeed complete.');
-  console.log(`  Advisor: ${advisorEmail} / ${advisorPassword}`);
+  console.log(`  Advisors: ${advisorEmail} (owner), ${colleagueEmail} / ${advisorPassword}`);
   console.log(`  Clients: ${clientSeeds.map((c) => c.email).join(', ')} / ${clientPassword}`);
   console.log(`  Authenticator code: npm run totp -- ${DEV_TOTP_SECRET}`);
   console.log('  Next: npm run db:demo — a tax season of documents to look at.');

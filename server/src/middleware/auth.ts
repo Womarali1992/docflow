@@ -19,7 +19,8 @@ import {
 export interface AuthPayload {
   sub: string;
   kind: 'provider' | 'client';
-  providerId: string;
+  /* The tenant (FIRM-BOOK-PLAN): every advisor in a firm sees the whole book. */
+  firmId: string;
   email: string;
   name: string;
 }
@@ -65,16 +66,22 @@ function reject(res: Response, reason: AuthFailure) {
 export async function loadAuth(kind: 'provider' | 'client', id: string): Promise<AuthPayload | null> {
   if (kind === 'provider') {
     const [p] = await db
-      .select({ id: schema.providers.id, email: schema.providers.email, name: schema.providers.name, deactivatedAt: schema.providers.deactivatedAt })
+      .select({
+        id: schema.providers.id,
+        firmId: schema.providers.firmId,
+        email: schema.providers.email,
+        name: schema.providers.name,
+        deactivatedAt: schema.providers.deactivatedAt,
+      })
       .from(schema.providers)
       .where(eq(schema.providers.id, id));
     if (!p || p.deactivatedAt) return null;
-    return { sub: p.id, kind: 'provider', providerId: p.id, email: p.email, name: p.name };
+    return { sub: p.id, kind: 'provider', firmId: p.firmId, email: p.email, name: p.name };
   }
   const [c] = await db
     .select({
       id: schema.clients.id,
-      providerId: schema.clients.providerId,
+      firmId: schema.clients.firmId,
       email: schema.clients.email,
       name: schema.clients.name,
       deactivatedAt: schema.clients.deactivatedAt,
@@ -82,7 +89,7 @@ export async function loadAuth(kind: 'provider' | 'client', id: string): Promise
     .from(schema.clients)
     .where(eq(schema.clients.id, id));
   if (!c || c.deactivatedAt) return null;
-  return { sub: c.id, kind: 'client', providerId: c.providerId, email: c.email, name: c.name };
+  return { sub: c.id, kind: 'client', firmId: c.firmId, email: c.email, name: c.name };
 }
 
 /**
