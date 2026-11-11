@@ -9,6 +9,8 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Response, Test } from 'supertest';
+import { eq } from 'drizzle-orm';
+import { db, schema } from '../src/db/client.js';
 import {
   ACTORS,
   PASSWORD,
@@ -940,5 +942,87 @@ describe('authorization matrix', () => {
   it('has no case left running as an expected failure', () => {
     expect(cases.filter((c) => c.fails && c.fails.length > 0).map((c) => c.name)).toEqual([]);
     expect(CLIENTS.every((a) => ACTORS.includes(a))).toBe(true);
+  });
+});
+
+/*
+ * The 2026-11-11 engineering audit, findings 4, 10 and 11, as the behaviour the
+ * refactor plan asks for (docs/AUDIT-REFACTOR-PLAN.md, R9). None of them leaks
+ * across a firm; they are a feed that says more than the portal does, ids that
+ * reach Postgres unchecked, and a message pinned to someone else's file. Every
+ * row starts as `it.fails` and R9 flips it to `it`.
+ */
+describe('2026-11-11 audit: what a caller can name', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it.fails('F4 (R9): a client’s activity feed holds only what they did themselves', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const draft = Buffer.concat([PDF_BYTES, Buffer.from('\n% a draft not yet shared\n')]);
+    const up = await request(app)
+      .post(`/api/engagements/${fx.client1a.engagement}/uploads`)
+      .set('Cookie', advisor)
+      .attach('file', draft, { filename: 'Draft return.pdf' });
+    expect(up.status).toBe(202);
+
+    const client = await loginAs(fx, 'client1a');
+    const feed = await request(app).get('/api/activities').set('Cookie', client);
+    expect(feed.status).toBe(200);
+    expect(feed.body.length).toBeGreaterThan(0);
+    for (const line of feed.body as { actorKind: string; actorId: string }[]) {
+      expect(line).toMatchObject({ actorKind: 'client', actorId: fx.client1a.id });
+    }
+  });
+
+  it.fails('F10 (R9): a malformed id in the path answers 404', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    expect((await request(app).get('/api/clients/not-a-uuid').set('Cookie', advisor)).status).toBe(404);
+    expect((await request(app).post('/api/clients/not-a-uuid/deactivate').set('Cookie', advisor)).status).toBe(404);
+  });
+
+  it.fails('F10 (R9): a malformed id in the query answers 400 bad_id', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    for (const url of [
+      '/api/messages?clientId=abc',
+      `/api/messages?clientId=${fx.client1a.id}&documentId=abc`,
+      '/api/engagements?clientId=abc',
+      '/api/activities?clientId=abc',
+    ]) {
+      const res = await request(app).get(url).set('Cookie', advisor);
+      expect(res.status, url).toBe(400);
+      expect(res.body.code, url).toBe('bad_id');
+    }
+  });
+
+  it.fails('F10 (R9): a limit that is not a number falls back to fifty', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    await db.insert(schema.activities).values(
+      Array.from({ length: 60 }, (_, i) => ({
+        firmId: fx.provider1.firmId,
+        clientId: fx.client1a.id,
+        type: 'update' as const,
+        description: `filler ${i}`,
+        actorKind: 'provider' as const,
+        actorId: fx.provider1.id,
+        actorName: 'Provider One',
+      }))
+    );
+    const res = await request(app).get('/api/activities?limit=abc').set('Cookie', advisor);
+    expect(res.status).toBe(200);
+    // Today NaN reaches drizzle, which drops the LIMIT clause: every row, past the 200 cap.
+    expect(res.body).toHaveLength(50);
+  });
+
+  it.fails('F11 (R9): a message cannot be pinned to a file outside its own thread', async () => {
+    const client = await loginAs(fx, 'client1a');
+    for (const documentId of [fx.client2a.upload, fx.client1b.upload]) {
+      const res = await request(app).post('/api/messages').set('Cookie', client).send({ content: 'about this file', documentId });
+      expect(res.status, documentId).toBe(404);
+    }
+    const stored = await db.select().from(schema.messages).where(eq(schema.messages.clientId, fx.client1a.id));
+    expect(stored.filter((m) => m.content === 'about this file')).toEqual([]);
   });
 });

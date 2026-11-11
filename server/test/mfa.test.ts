@@ -413,3 +413,38 @@ describe('mfa', () => {
     expect(ok.body.stage).toBe('preauth');
   });
 });
+
+/*
+ * The 2026-11-11 engineering audit, finding 3, as the behaviour the refactor
+ * plan asks for (docs/AUDIT-REFACTOR-PLAN.md, R8). Both rows start as
+ * `it.fails`; R8 flips them, and with them the "lock is per session" half of
+ * the throttle test above, which states today's behaviour.
+ */
+describe('2026-11-11 audit: wrong codes', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it.fails('F3 (R8): wrong codes are counted per account, so signing in again buys no more guesses', async () => {
+    const { cookie: first } = await passwordLogin(fx, 'client1a');
+    for (let i = 0; i < 5; i++) {
+      expect((await verify(first, { code: '000000' })).status, `attempt ${i + 1}`).toBe(401);
+    }
+    expect((await verify(first, { code: '000000' })).status).toBe(429);
+
+    const { cookie: second } = await passwordLogin(fx, 'client1a');
+    const again = await verify(second, { code: '000000' });
+    expect(again.status).toBe(429);
+    expect(again.body.code).toBe('rate_limited');
+  });
+
+  it.fails('F3 (R8): a wrong code is on the record', async () => {
+    const { cookie } = await passwordLogin(fx, 'client1a');
+    expect((await verify(cookie, { code: '000000' })).status).toBe(401);
+    const rows = (await db.select().from(schema.auditLog)).filter((r) => r.action === 'auth.mfa_failed');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actorKind: 'client', actorId: fx.client1a.id });
+  });
+});
