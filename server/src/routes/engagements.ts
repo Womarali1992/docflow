@@ -22,7 +22,7 @@ import { correctionsByRequest } from '../workflow/corrections.js';
 import { exportFilename, manifestCsv, planExport } from '../workflow/export.js';
 import { contentDisposition } from '../files/filename.js';
 import { ZipFile } from 'yazl';
-import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound } from './scope.js';
+import { advisorOnly, badRequest, findClient, findEngagement, findTemplate, notFound, requireOpenEngagement } from './scope.js';
 import { notify } from '../notify.js';
 import { remindNow } from '../jobs/handlers/reminders.js';
 
@@ -339,6 +339,7 @@ router.post('/:id/remind', async (req, res) => {
   const auth = req.auth!;
   const engagement = await loadForAdvisor(req, res);
   if (!engagement) return;
+  if (!(await requireOpenEngagement(res, auth, engagement))) return;
 
   const outcome = await remindNow(engagement);
   if (!outcome.ok) {
@@ -410,9 +411,7 @@ router.post('/:id/requests', async (req, res) => {
   const auth = req.auth!;
   const engagement = await loadForAdvisor(req, res);
   if (!engagement) return;
-  if (engagement.status === 'closed') {
-    return badRequest(res, 'This engagement is closed. Reopen it before adding requests.', 'engagement_closed');
-  }
+  if (!(await requireOpenEngagement(res, auth, engagement))) return;
 
   const parsed = bulkSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
