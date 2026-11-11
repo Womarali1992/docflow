@@ -972,7 +972,7 @@ describe('2026-11-11 audit: the review loop', () => {
     fx = await seedFixture();
   });
 
-  it.fails('F1 (R2): a correction on an ad-hoc upload reaches the client', async () => {
+  it('F1 (R2): a correction on an ad-hoc upload reaches the client', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const note = 'This is the wrong month. Please send December.';
     const res = await request(app)
@@ -991,7 +991,7 @@ describe('2026-11-11 audit: the review loop', () => {
     expect(thread.some((m) => m.senderKind === 'provider' && m.content.includes(note))).toBe(true);
   });
 
-  it.fails('F7 (R2): accept refuses a line with nothing on it', async () => {
+  it('F7 (R2): accept refuses a line with nothing on it', async () => {
     const advisor = await loginAs(fx, 'provider1');
     // "Submitted" with no live file behind it: what archive and quarantine leave today.
     await db.update(schema.requests).set({ status: 'submitted' }).where(eq(schema.requests.id, fx.client1a.request));
@@ -1002,7 +1002,7 @@ describe('2026-11-11 audit: the review loop', () => {
     expect(await db.select().from(schema.reviews).where(eq(schema.reviews.requestId, fx.client1a.request))).toEqual([]);
   });
 
-  it.fails('S5 (R2): accepting a checklist file through its document moves the line', async () => {
+  it('S5 (R2): accepting a checklist file through its document moves the line', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const { version } = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
 
@@ -1012,6 +1012,61 @@ describe('2026-11-11 audit: the review loop', () => {
       .send({ versionId: version.id });
     expect(res.status).toBe(200);
     expect((await requestRow(fx.client1a.request)).status).toBe('accepted');
+  });
+
+  it('F1 (R2): an accept on an ad-hoc upload tells the client too, and the activity says so', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const res = await request(app)
+      .post(`/api/documents/${fx.client1a.upload}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionId: fx.client1a.uploadVersion });
+    expect(res.status).toBe(200);
+    expect(res.body.latestDecision).toMatchObject({ decision: 'accepted', note: null });
+
+    const [notice] = await db
+      .select()
+      .from(schema.notifications)
+      .where(and(eq(schema.notifications.userId, fx.client1a.id), eq(schema.notifications.type, 'request.accepted')));
+    expect(notice?.link).toBe('/portal/documents');
+    const lines = await db.select().from(schema.activities).where(eq(schema.activities.targetId, fx.client1a.upload));
+    expect(lines.map((l) => l.description)).toEqual([expect.stringMatching(/^accepted: /)]);
+  });
+
+  it('F1 (R2): the client’s list says where an ad-hoc file stands, and forgets it once they send another copy', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const client = await loginAs(fx, 'client1a');
+    const note = 'Page two is missing.';
+    const corrected = await request(app)
+      .post(`/api/documents/${fx.client1a.upload}/request-correction`)
+      .set('Cookie', advisor)
+      .send({ versionId: fx.client1a.uploadVersion, note });
+    expect(corrected.status).toBe(200);
+
+    const listed = async () =>
+      ((await request(app).get('/api/documents').set('Cookie', client)).body as { id: string; latestDecision: unknown }[]).find(
+        (d) => d.id === fx.client1a.upload
+      );
+    expect((await listed())?.latestDecision).toMatchObject({ decision: 'needs_correction', note });
+
+    // The ruling was about the copy they replaced: it is history now.
+    await submitVersion(fx.client1a.upload, { kind: 'client', id: fx.client1a.id }, 'both-pages.pdf');
+    expect((await listed())?.latestDecision).toBeNull();
+  });
+
+  it('F7 (R2): a correction on a line with nothing on it is refused too, and writes nothing', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    await db.update(schema.requests).set({ status: 'submitted' }).where(eq(schema.requests.id, fx.client1a.request));
+    const thread = async () => (await db.select().from(schema.messages).where(eq(schema.messages.clientId, fx.client1a.id))).length;
+    const before = await thread();
+
+    const res = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/request-correction`)
+      .set('Cookie', advisor)
+      .send({ note: 'Send it again.' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('nothing_submitted');
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+    expect(await thread()).toBe(before);
   });
 
   it.fails('F7 (R3): archiving the only file on a submitted line sends it back to the client', async () => {

@@ -115,6 +115,17 @@ export interface Document {
   archivedAt?: Date | null;
   /** Server-computed convenience: `sharedAt !== null`. */
   shared?: boolean;
+  /**
+   * The ruling on the current version, null when nobody has decided yet. Sent by
+   * the document list, a single document and a decision; absent elsewhere.
+   */
+  latestDecision?: DocumentDecision | null;
+}
+
+export interface DocumentDecision {
+  decision: 'accepted' | 'needs_correction';
+  note: string | null;
+  decidedAt: Date;
 }
 
 export interface Message {

@@ -249,6 +249,8 @@ export interface StaleVersion {
 export type DecisionRefusal =
   | { ok: false; status: 400; code: 'version_required'; error: string }
   | { ok: false; status: 400; code: 'version_mismatch'; error: string }
+  /* A line with nothing on it to decide (decisions.ts, 2026-11-11 audit finding 7). */
+  | { ok: false; status: 400; code: 'nothing_submitted'; error: string }
   | StaleVersion;
 
 export type DecidableVersion = { ok: true; document: Document; versionId: string } | DecisionRefusal;

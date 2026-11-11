@@ -30,10 +30,11 @@ import { absPathForKey } from '../files/store.js';
 import { recordActivity } from '../db/activity-log.js';
 import { auditRequest } from '../db/audit.js';
 import { contentDisposition } from '../files/filename.js';
-import { serializeDocument, serializeReview } from './serialize.js';
+import { serializeDocument, serializeDocumentWithDecision, serializeReview } from './serialize.js';
 import { notify, notifyAdvisors } from '../notify.js';
-import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, isId, notFound } from './scope.js';
-import { decidableVersion, lockDocument, refusalBody } from '../workflow/publish.js';
+import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, findRequest, isId, notFound } from './scope.js';
+import { lockDocument, refusalBody } from '../workflow/publish.js';
+import { announceDecision, latestDecisions, recordDecision, type Decision, type DecisionSubject } from '../workflow/decisions.js';
 import { reviveLine, settleLine } from '../workflow/line-status.js';
 import type { Document } from '../db/schema.js';
 
@@ -89,14 +90,25 @@ router.get('/', async (req, res) => {
     .from(schema.documents)
     .where(and(...conditions))
     .orderBy(desc(schema.documents.uploadedAt));
-  res.json(list.map(serializeDocument));
+  const decisions = await latestDecisions(list);
+  res.json(list.map((doc) => serializeDocumentWithDecision(doc, decisions.get(doc.id) ?? null)));
 });
 
 router.get('/:id', async (req, res) => {
   const doc = await findDocument(req.auth!, req.params.id);
   if (!doc) return notFound(res);
-  res.json(serializeDocument(doc));
+  res.json(await presentDocument(doc));
 });
+
+/** A document as it stands, with the ruling on its current version. */
+async function presentDocument(docOrId: Document | string) {
+  const doc =
+    typeof docOrId === 'string'
+      ? (await db.select().from(schema.documents).where(eq(schema.documents.id, docOrId)))[0]
+      : docOrId;
+  const decisions = await latestDecisions([doc]);
+  return serializeDocumentWithDecision(doc, decisions.get(doc.id) ?? null);
+}
 
 /** The decision history for a document — who decided what, about which version. */
 router.get('/:id/reviews', async (req, res) => {
@@ -114,8 +126,16 @@ router.get('/:id/reviews', async (req, res) => {
 
 const decisionSchema = z.object({ versionId: z.string().uuid().optional(), note: z.string().max(INSTRUCTIONS_MAX).optional() });
 
-/** Accept / request a correction on an ad-hoc upload — one with no request behind it. */
-async function decide(req: Request, res: Response, decision: 'accepted' | 'needs_correction') {
+/**
+ * Accept / request a correction on a document.
+ *
+ * A file sent outside the checklist is decided on its own. A file on a
+ * checklist line is decided through that line, the same code as
+ * `/requests/:id/accept`, so a review can no longer be written without the
+ * line moving (2026-11-11 audit, smaller thing 5). Either way the client hears
+ * about it (finding 1).
+ */
+async function decide(req: Request, res: Response, decision: Decision) {
   const auth = req.auth!;
   const doc = await loadForAdvisor(req, res);
   if (!doc) return;
@@ -136,42 +156,22 @@ async function decide(req: Request, res: Response, decision: 'accepted' | 'needs
     if (!v || v.documentId !== doc.id) return badRequest(res, 'That version does not belong to this document.', 'version_mismatch');
   }
 
-  const now = new Date();
-  /* The same rule as a checklist decision (invariant 19): the decision names
-     the version it is about, that version is the current clean one, and the
-     document is locked while both are true. */
-  const outcome = await db.transaction(async (tx) => {
-    const decidable = await decidableVersion(tx, doc.id, named);
-    if (!decidable.ok) return decidable;
+  /* On the line means what the line counts as its files (attachments.ts): a
+     client's upload, not archived. An imported or archived file is decided on
+     its own, as before. */
+  const line = doc.requestId && doc.kind === 'client_upload' && !doc.archivedAt ? await findRequest(auth, doc.requestId) : null;
+  const subject: DecisionSubject = line ? { kind: 'line', request: line } : { kind: 'document', document: doc };
 
-    await tx.insert(schema.reviews).values({
-      documentId: doc.id,
-      versionId: decidable.versionId,
-      requestId: doc.requestId,
-      reviewerId: auth.sub,
-      decision,
-      note: parsed.data.note ?? null,
-      createdAt: now,
-    });
-    await tx.update(schema.documents).set({ updatedAt: now }).where(eq(schema.documents.id, doc.id));
-
-    await auditRequest(
-      req,
-      {
-        action: decision === 'accepted' ? 'request.accepted' : 'request.correction_requested',
-        targetType: 'document',
-        targetId: doc.id,
-        clientId: doc.clientId,
-        meta: { versionId: decidable.versionId },
-      },
-      tx
-    );
-    return decidable;
+  const outcome = await recordDecision(req, {
+    subject,
+    decision,
+    namedVersionIds: named ? [named] : [],
+    note: parsed.data.note ?? null,
   });
   if (!outcome.ok) return res.status(outcome.status).json(refusalBody(outcome));
 
-  const [updated] = await db.select().from(schema.documents).where(eq(schema.documents.id, doc.id));
-  res.json(serializeDocument(updated));
+  await announceDecision(auth, subject, decision);
+  res.json(await presentDocument(doc.id));
 }
 
 router.post('/:id/accept', (req, res, next) => {

@@ -43,6 +43,8 @@ const DATE_FIELDS = new Set([
      row, and they stay ISO strings so nothing formats them as local wall time. */
   'closedAt', 'archivedAt', 'waivedAt', 'clientResponseAt', 'sharedAt',
   'scannedAt', 'publishedAt', 'supersededAt',
+  /* A document's latest decision (2026-11-11 audit, finding 1). */
+  'decidedAt',
   /* The work queue's "when did this line last move" (2026-10-28 audit). */
   'since',
 ]);

@@ -829,4 +829,21 @@ describe('hardening', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  /* 2026-11-11 audit, R2: a decision was written twice, and the second copy
+     never told the client (finding 1) or moved the line (smaller thing 5). A
+     review row is a decision, so only the one decision path writes one. */
+  it('nothing outside workflow/decisions.ts writes a review', () => {
+    const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const owner = path.join('workflow', 'decisions.ts');
+    const allowed: Record<string, string> = {
+      [path.join('db', 'demo.ts')]: 'the demo seeds backdated history, outside any request',
+    };
+    const offenders = sourceFiles(srcDir)
+      .map((file) => path.relative(srcDir, file))
+      .filter((relative) => relative !== owner && !allowed[relative])
+      .filter((relative) => /\.insert\(\s*schema\.reviews\s*\)/.test(fs.readFileSync(path.join(srcDir, relative), 'utf8')));
+
+    expect(offenders).toEqual([]);
+  });
 });

@@ -26,14 +26,23 @@ import type { Tx } from './publish.js';
 
 type Writer = Tx | typeof db;
 
-/** Accept or request-correction: the advisor's ruling on what is on the line. */
+/**
+ * Accept or request-correction: the advisor's ruling on what is on the line.
+ *
+ * Refused (false, nothing written) when no file is left on the line to rule
+ * on. Before the 2026-11-11 audit (finding 7) a line whose only file had been
+ * archived still said `submitted`, and accepting it answered 200 and marked it
+ * accepted with no review behind it.
+ */
 export async function decideLine(
   tx: Writer,
   requestId: string,
   status: 'accepted' | 'needs_correction',
   now: Date
-): Promise<void> {
+): Promise<boolean> {
+  if ((await documentsForRequest(requestId, tx)).length === 0) return false;
   await tx.update(schema.requests).set({ status, updatedAt: now }).where(eq(schema.requests.id, requestId));
+  return true;
 }
 
 /** Waive, with the reason that stays on the file and who gave it. */

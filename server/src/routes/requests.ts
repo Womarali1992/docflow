@@ -34,14 +34,15 @@ import { db, schema } from '../db/client.js';
 import { authenticate } from '../middleware/auth.js';
 import { INSTRUCTIONS_MAX, NAME_MAX } from '../security/limits.js';
 import { auditRequest } from '../db/audit.js';
-import { decidableVersions, refusalBody, type DecisionRefusal } from '../workflow/publish.js';
-import { attachmentsForRequest, documentsForRequest } from '../workflow/attachments.js';
+import { refusalBody } from '../workflow/publish.js';
+import { attachmentsForRequest } from '../workflow/attachments.js';
+import { announceDecision, namedVersions, recordDecision } from '../workflow/decisions.js';
 import { correctionsByRequest } from '../workflow/corrections.js';
-import { decideLine, reopenLine, waiveLine } from '../workflow/line-status.js';
+import { reopenLine, waiveLine } from '../workflow/line-status.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, clientOnly, findRequest, notFound, REQUEST_REMOVED } from './scope.js';
-import { notify, notifyAdvisors } from '../notify.js';
+import { notifyAdvisors } from '../notify.js';
 import type { Request as RequestRow } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -62,115 +63,6 @@ async function loadForAdvisor(req: ExpressRequest, res: ExpressResponse) {
     return null;
   }
   return request;
-}
-
-/**
- * The version ids a decision is about.
- *
- * `versionIds` is the H5 form — a request holds several attachments and a
- * decision is about all of them — and `versionId` is still accepted as the
- * one-element spelling, so a client that has not been reloaded keeps working
- * against a request with one attachment.
- */
-function namedVersions(body: { versionId?: string; versionIds?: string[] }): string[] {
-  if (body.versionIds?.length) return body.versionIds;
-  return body.versionId ? [body.versionId] : [];
-}
-
-/**
- * Accept and request-correction, which are the same transaction with a
- * different word in it: check that the decision names the versions the advisor
- * was actually reading, write a review per attachment, move the request, and
- * record it — all with the documents locked, all or nothing.
- *
- * Before H2 this was three unlocked steps, so an advisor deciding about v1
- * while v2 landed got a 200 and a review row pointing at a file nobody had
- * looked at (audit F5). `decidableVersions` is the guard; a 409 `stale_version`
- * is what the review workspace turns into "Refresh and read that one".
- *
- * H5 made it plural. Six receipts on one line are six attachments, and
- * accepting the line accepts all six — so there are six review rows, each
- * naming its own document and version, and one status change. A file arriving
- * on any of them while the advisor read is the same 409 as a replacement of the
- * one they were looking at: the set they decided is no longer the set on file.
- */
-interface DecisionInput {
-  request: RequestRow;
-  decision: 'accepted' | 'needs_correction';
-  nextStatus: 'accepted' | 'needs_correction';
-  namedVersionIds: string[];
-  note: string | null;
-  action: 'request.accepted' | 'request.correction_requested';
-}
-
-type DecisionResult = { ok: true; versionIds: string[]; now: Date } | DecisionRefusal;
-
-async function recordDecision(req: ExpressRequest, input: DecisionInput): Promise<DecisionResult> {
-  const auth = req.auth!;
-  const now = new Date();
-
-  return db.transaction(async (tx): Promise<DecisionResult> => {
-    const documents = await documentsForRequest(input.request.id, tx);
-
-    const decidable = await decidableVersions(
-      tx,
-      documents.map((d) => d.id),
-      input.namedVersionIds
-    );
-    if (!decidable.ok) return decidable;
-
-    for (const decision of decidable.decisions) {
-      await tx.insert(schema.reviews).values({
-        documentId: decision.documentId,
-        versionId: decision.versionId,
-        requestId: input.request.id,
-        reviewerId: auth.sub,
-        decision: input.decision,
-        note: input.note,
-        createdAt: now,
-      });
-    }
-
-    await decideLine(tx, input.request.id, input.nextStatus, now);
-
-    const versionIds = decidable.decisions.map((d) => d.versionId);
-
-    /* A correction is a question to the client, so it goes where questions
-       go: the item's own thread, in the advisor's words, where the client can
-       answer it. Before the 2026-10-28 audit the portal promised the note was
-       "in the messages for this item" and it was only ever on the review rows. */
-    if (input.decision === 'needs_correction' && input.note) {
-      await tx.insert(schema.messages).values({
-        clientId: input.request.clientId,
-        firmId: input.request.firmId,
-        documentId: decidable.decisions[0]?.documentId ?? null,
-        senderKind: 'provider',
-        senderId: auth.sub,
-        senderName: auth.name,
-        content: `Re: ${input.request.title}\n\n${input.note}`,
-        createdAt: now,
-      });
-    }
-
-    // The decision and the record of it are one fact (F10): inside the
-    // transaction, so a failed audit rolls the decision back rather than
-    // leaving a change nobody can account for.
-    await auditRequest(
-      req,
-      {
-        action: input.action,
-        targetType: 'request',
-        targetId: input.request.id,
-        clientId: input.request.clientId,
-        // `versionId` stays for the single-attachment case, which is what every
-        // audit line written before H5 looks like.
-        meta: { versionId: versionIds[0] ?? null, versionIds },
-      },
-      tx
-    );
-
-    return { ok: true, versionIds, now };
-  });
 }
 
 /** A request row in its public shape, with what hangs off it: its attachments and any open correction. */
@@ -225,48 +117,23 @@ const acceptSchema = z.object({
 });
 
 router.post('/:id/accept', async (req, res) => {
-  const auth = req.auth!;
   const request = await loadForAdvisor(req, res);
   if (!request) return;
 
   const parsed = acceptSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
 
-  if (request.status === 'requested' || request.status === 'waived') {
-    return badRequest(res, 'There is nothing to accept yet — no document has been submitted.', 'nothing_submitted');
-  }
-
+  const subject = { kind: 'line', request } as const;
   const outcome = await recordDecision(req, {
-    request,
+    subject,
     decision: 'accepted',
-    nextStatus: 'accepted',
     namedVersionIds: namedVersions(parsed.data),
     note: parsed.data.note ?? null,
-    action: 'request.accepted',
   });
   if (!outcome.ok) return res.status(outcome.status).json(refusalBody(outcome));
-  const { now } = outcome;
 
-  await notify({
-    userKind: 'client',
-    userId: request.clientId,
-    type: 'request.accepted',
-    title: `Accepted: ${request.title}`,
-    body: 'Nothing more to do for this one.',
-    link: '/portal/requests',
-  });
-  await recordActivity({
-    firmId: request.firmId,
-    clientId: request.clientId,
-    type: 'update',
-    description: `accepted: ${request.title}`,
-    actorKind: 'provider',
-    actorId: auth.sub,
-    actorName: auth.name,
-    targetId: request.id,
-  });
-
-  res.json(await freshRequest(request.id, now));
+  await announceDecision(req.auth!, subject, 'accepted');
+  res.json(await freshRequest(request.id, outcome.now));
 });
 
 const correctionSchema = z.object({
@@ -276,7 +143,6 @@ const correctionSchema = z.object({
 });
 
 router.post('/:id/request-correction', async (req, res) => {
-  const auth = req.auth!;
   const request = await loadForAdvisor(req, res);
   if (!request) return;
 
@@ -286,41 +152,17 @@ router.post('/:id/request-correction', async (req, res) => {
     return res.status(400).json({ error: 'Say what needs correcting — the client sees this note.', code: 'note_required', issues: parsed.error.issues });
   }
 
-  if (request.status === 'requested' || request.status === 'waived') {
-    return badRequest(res, 'There is nothing to correct yet — no document has been submitted.', 'nothing_submitted');
-  }
-
+  const subject = { kind: 'line', request } as const;
   const outcome = await recordDecision(req, {
-    request,
+    subject,
     decision: 'needs_correction',
-    nextStatus: 'needs_correction',
     namedVersionIds: namedVersions(parsed.data),
     note: parsed.data.note,
-    action: 'request.correction_requested',
   });
   if (!outcome.ok) return res.status(outcome.status).json(refusalBody(outcome));
-  const { now } = outcome;
 
-  await notify({
-    userKind: 'client',
-    userId: request.clientId,
-    type: 'request.correction',
-    title: `Another look needed: ${request.title}`,
-    body: 'Your accountant has left a note about what to send instead.',
-    link: '/portal',
-  });
-  await recordActivity({
-    firmId: request.firmId,
-    clientId: request.clientId,
-    type: 'update',
-    description: `asked for a correction: ${request.title}`,
-    actorKind: 'provider',
-    actorId: auth.sub,
-    actorName: auth.name,
-    targetId: request.id,
-  });
-
-  res.json(await freshRequest(request.id, now));
+  await announceDecision(req.auth!, subject, 'needs_correction');
+  res.json(await freshRequest(request.id, outcome.now));
 });
 
 const waiveSchema = z.object({ reason: z.string().min(1).max(INSTRUCTIONS_MAX) });

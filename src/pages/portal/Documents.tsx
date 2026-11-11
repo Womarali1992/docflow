@@ -131,14 +131,28 @@ const PortalDocuments: React.FC = () => {
             </div>
           </div>
           <div className="df-list">
-            {group.items.map((doc) => (
-              <div key={doc.id} className="df-row" style={{ gridTemplateColumns: '1fr' }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="df-name">{doc.displayName ?? doc.name}</div>
-                  <div className="df-meta">Sent {formatDate(doc.uploadedAt)}{doc.sizeBytes ? ` · ${formatBytes(doc.sizeBytes)}` : ''}</div>
+            {group.items.map((doc) => {
+              /* A file on a checklist line shows its ruling on the line's card
+                 at home; one sent on its own has only this row to say it. */
+              const ruling = doc.requestId ? null : doc.latestDecision ?? null;
+              return (
+                <div key={doc.id} className="df-row" style={{ gridTemplateColumns: '1fr' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="df-name">
+                      {doc.displayName ?? doc.name}
+                      {ruling?.decision === 'accepted' && <span className="df-pill df-ok" style={{ marginLeft: 8 }}>Accepted</span>}
+                      {ruling?.decision === 'needs_correction' && (
+                        <span className="df-pill df-danger" style={{ marginLeft: 8 }}>Needs another look</span>
+                      )}
+                    </div>
+                    <div className="df-meta">Sent {formatDate(doc.uploadedAt)}{doc.sizeBytes ? ` · ${formatBytes(doc.sizeBytes)}` : ''}</div>
+                    {ruling?.decision === 'needs_correction' && ruling.note && (
+                      <div className="df-note df-note-warn">Your accountant said: “{ruling.note}”</div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ))}
