@@ -18,7 +18,7 @@
  * Creating a line is not a move: it starts at the column's default,
  * `requested`, wherever it is inserted.
  */
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { Document, Request as RequestRow } from '../db/schema.js';
 import { attachmentsForRequest, documentsForRequest } from './attachments.js';
@@ -109,16 +109,20 @@ export async function resetLine(tx: Tx, requestId: string | null, now: Date): Pr
 }
 
 /**
- * The line's status once a file has left it. No files left: back to
+ * The line's status once a file has left it: withdrawn by the client, archived
+ * or deleted by the advisor, or condemned by a re-scan. No files left: back to
  * `requested`. Every file left already ruled on: back to that ruling, so a
  * stray upload on an accepted line, withdrawn, leaves it accepted. Anything
  * else is still waiting for the advisor, as it was.
+ *
+ * A file the scanner refused is not left on the line. It is still shown, so
+ * the client is told to send it again, but there is nothing in it to review.
  */
 export async function settleLine(tx: Tx, requestId: string, now: Date): Promise<void> {
   const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId)).for('update');
   if (!request || (request.status !== 'submitted' && request.status !== 'in_review')) return;
 
-  const remaining = await attachmentsForRequest(requestId, tx);
+  const remaining = (await attachmentsForRequest(requestId, tx)).filter((a) => a.state !== 'refused');
   let status: 'requested' | 'accepted' | 'needs_correction' | null = null;
   if (remaining.length === 0) {
     status = 'requested';
@@ -136,13 +140,25 @@ export async function settleLine(tx: Tx, requestId: string, now: Date): Promise<
 }
 
 /**
- * A file the client withdrew, brought back: its line has something to review
- * again, rather than saying it is waiting on the client.
+ * A file brought back from the archive: the reverse of `settleLine`.
+ *
+ * A file nobody has ruled on puts its line back in front of the advisor,
+ * whether the line had emptied (`requested`) or settled on the ruling of the
+ * files that stayed. A file already ruled on changes nothing, unless the line
+ * had emptied: then the line takes that ruling back. A waived line stays
+ * waived, and a line already waiting for the advisor stays as it is.
  */
-export async function reviveLine(tx: Writer, document: Document, now: Date): Promise<void> {
+export async function reviveLine(tx: Tx, document: Document, now: Date): Promise<void> {
   if (!document.requestId || document.kind !== 'client_upload' || !document.currentVersionId) return;
-  await tx
-    .update(schema.requests)
-    .set({ status: 'submitted', updatedAt: now })
-    .where(and(eq(schema.requests.id, document.requestId), eq(schema.requests.status, 'requested')));
+  const [line] = await tx.select().from(schema.requests).where(eq(schema.requests.id, document.requestId)).for('update');
+  if (!line || line.status === 'waived' || line.status === 'submitted' || line.status === 'in_review') return;
+
+  const [ruling] = await tx
+    .select({ decision: schema.reviews.decision })
+    .from(schema.reviews)
+    .where(eq(schema.reviews.versionId, document.currentVersionId))
+    .orderBy(desc(schema.reviews.createdAt))
+    .limit(1);
+  const status = !ruling ? 'submitted' : line.status === 'requested' ? ruling.decision : null;
+  if (status) await tx.update(schema.requests).set({ status, updatedAt: now }).where(eq(schema.requests.id, line.id));
 }

@@ -35,7 +35,7 @@
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { Document, DocumentVersion, ScanStatus } from '../db/schema.js';
-import { resetLine } from './line-status.js';
+import { resetLine, settleLine } from './line-status.js';
 
 /** A drizzle transaction handle, as `db.transaction(async (tx) => …)` hands it out. */
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -223,6 +223,10 @@ export async function quarantineVersion(
       .update(schema.documents)
       .set({ currentVersionId: null, updatedAt: now })
       .where(eq(schema.documents.id, document.id));
+    /* The file its line was showing has gone. Today only a version that was
+       never current is re-scanned, so this does not happen; when it can, the
+       line settles here rather than claiming a file it no longer has. */
+    if (document.requestId) await settleLine(tx, document.requestId, now);
   }
 
   return { version, document, wasCurrent };
