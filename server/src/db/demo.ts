@@ -6,6 +6,7 @@ import { db, pool, schema } from './client.js';
 import { makePlaceholderPdf } from './placeholder-pdf.js';
 import { ensureKeyDir, newStorageKey } from '../files/store.js';
 import { recordNewVersion } from '../workflow/versions.js';
+import { decideLine, waiveLine } from '../workflow/line-status.js';
 import { ensureStarterTemplates } from '../workflow/starter-templates.js';
 import { notify, notifyAdvisors } from '../notify.js';
 import { recordActivity } from './activity-log.js';
@@ -326,24 +327,12 @@ async function main() {
             note: 'note' in item.state ? item.state.note ?? null : null,
             createdAt: decidedAt,
           });
-          await db
-            .update(schema.requests)
-            .set({ status: item.state.kind, updatedAt: decidedAt })
-            .where(eq(schema.requests.id, request.id));
+          await decideLine(db, request.id, item.state.kind, decidedAt);
         }
       }
 
       if (item.state.kind === 'waived') {
-        await db
-          .update(schema.requests)
-          .set({
-            status: 'waived',
-            waivedReason: item.state.reason,
-            waivedAt: ago(3),
-            waivedById: provider.id,
-            updatedAt: ago(3),
-          })
-          .where(eq(schema.requests.id, request.id));
+        await waiveLine(db, request.id, { reason: item.state.reason, byId: provider.id }, ago(3));
       }
 
       if (item.state.kind === 'not_applicable') {

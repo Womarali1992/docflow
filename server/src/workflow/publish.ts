@@ -35,6 +35,7 @@
 import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import type { Document, DocumentVersion, ScanStatus } from '../db/schema.js';
+import { resetLine } from './line-status.js';
 
 /** A drizzle transaction handle, as `db.transaction(async (tx) => …)` hands it out. */
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -187,36 +188,9 @@ export async function publishVersion(
     .where(eq(schema.documents.id, document.id))
     .returning();
 
-  const reopened = await resetRequest(tx, updatedDocument.requestId, now);
+  // A new answer: the line is the advisor's to look at again (line-status.ts).
+  const reopened = await resetLine(tx, updatedDocument.requestId, now);
   return { version: current, document: updatedDocument, currentChanged: true, reopened };
-}
-
-/**
- * A new answer means the advisor has to look again, whatever they decided last
- * time — and whichever path the answer arrived by. The old review row is left
- * exactly as it was: reviews are history, not current state.
- *
- * A waived line stays waived: the advisor closed it deliberately, and a late
- * upload is not an argument.
- */
-async function resetRequest(tx: Tx, requestId: string | null, now: Date): Promise<boolean> {
-  if (!requestId) return false;
-  const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId));
-  if (!request || request.status === 'waived') return false;
-
-  await tx
-    .update(schema.requests)
-    .set({
-      status: 'submitted',
-      // A fresh submission also clears a stale "I don't have this".
-      clientResponseKind: null,
-      clientResponseNote: null,
-      clientResponseAt: null,
-      updatedAt: now,
-    })
-    .where(eq(schema.requests.id, request.id));
-
-  return request.status === 'accepted';
 }
 
 /**

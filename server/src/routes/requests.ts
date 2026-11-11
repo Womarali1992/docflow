@@ -17,8 +17,9 @@
  *   - Waiving needs a written reason. "Why is this not on the list any more?"
  *     is a question the file has to be able to answer a year later.
  *
- * Every move is an explicit verb (invariant 5). PATCH only edits wording,
- * category, deadline and order.
+ * Every move is an explicit verb (invariant 5), and the move itself is made in
+ * `workflow/line-status.ts`, the one module that writes the status column.
+ * PATCH only edits wording, category, deadline and order.
  *
  * Beside the state machine is `remove` / `restore`: a line asked for by mistake
  * comes off the checklist without a waiver the client would read. It is only
@@ -36,6 +37,7 @@ import { auditRequest } from '../db/audit.js';
 import { decidableVersions, refusalBody, type DecisionRefusal } from '../workflow/publish.js';
 import { attachmentsForRequest, documentsForRequest } from '../workflow/attachments.js';
 import { correctionsByRequest } from '../workflow/corrections.js';
+import { decideLine, reopenLine, waiveLine } from '../workflow/line-status.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
 import { advisorOnly, badRequest, clientOnly, findRequest, notFound, REQUEST_REMOVED } from './scope.js';
@@ -129,10 +131,7 @@ async function recordDecision(req: ExpressRequest, input: DecisionInput): Promis
       });
     }
 
-    await tx
-      .update(schema.requests)
-      .set({ status: input.nextStatus, updatedAt: now })
-      .where(eq(schema.requests.id, input.request.id));
+    await decideLine(tx, input.request.id, input.nextStatus, now);
 
     const versionIds = decidable.decisions.map((d) => d.versionId);
 
@@ -338,11 +337,7 @@ router.post('/:id/waive', async (req, res) => {
   }
 
   const now = new Date();
-  const [updated] = await db
-    .update(schema.requests)
-    .set({ status: 'waived', waivedReason: parsed.data.reason, waivedAt: now, waivedById: auth.sub, updatedAt: now })
-    .where(eq(schema.requests.id, request.id))
-    .returning();
+  const updated = await waiveLine(db, request.id, { reason: parsed.data.reason, byId: auth.sub }, now);
 
   await auditRequest(req, {
     action: 'request.waived',
@@ -370,19 +365,8 @@ router.post('/:id/reopen', async (req, res) => {
   const request = await loadForAdvisor(req, res);
   if (!request) return;
 
-  const documents = await documentsForRequest(request.id);
   const now = new Date();
-  const [updated] = await db
-    .update(schema.requests)
-    .set({
-      status: documents.some((d) => d.currentVersionId) ? 'submitted' : 'requested',
-      waivedReason: null,
-      waivedAt: null,
-      waivedById: null,
-      updatedAt: now,
-    })
-    .where(eq(schema.requests.id, request.id))
-    .returning();
+  const updated = await reopenLine(db, request.id, now);
 
   res.json(await present(updated, now));
 });
