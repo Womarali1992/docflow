@@ -41,7 +41,7 @@ import { duplicateAnswer, publishStagedUpload, versionByUploadId, type PublishSu
 import { quotaRefusal } from '../files/quota.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeDocument, serializeVersion } from './serialize.js';
-import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound, REQUEST_REMOVED } from './scope.js';
+import { advisorOnly, badRequest, findDocument, findEngagement, findRequest, isId, notFound, REQUEST_REMOVED, requireOpenEngagement } from './scope.js';
 import { type Tx } from '../workflow/publish.js';
 import { notifyAdvisors } from '../notify.js';
 import type { Document } from '../db/schema.js';
@@ -327,15 +327,9 @@ router.post(
           return badRequest(res, 'Your accountant has marked this item as not needed.', 'request_closed');
         }
         if (request.archivedAt) return badRequest(res, REQUEST_REMOVED, 'request_removed');
-        /* A closed year takes no more files, by either route (2026-10-28 audit:
+        /* A closed year takes no more files, by any route (2026-10-28 audit:
            the ad-hoc route refused, this one did not). */
-        const [engagement] = await db
-          .select({ status: schema.engagements.status })
-          .from(schema.engagements)
-          .where(eq(schema.engagements.id, request.engagementId));
-        if (engagement?.status === 'closed') {
-          return badRequest(res, 'This engagement is closed. Ask your accountant to reopen it.', 'engagement_closed');
-        }
+        if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
         // Only the client answers their own checklist; the advisor files ad-hoc.
         if (req.auth!.kind !== 'client') {
           return res.status(403).json({ error: 'Only the client uploads against a request.', code: 'client_only' });
@@ -415,9 +409,7 @@ router.post(
     findEngagement(req.auth!, req.params.id)
       .then(async (engagement) => {
         if (!engagement) return notFound(res);
-        if (engagement.status === 'closed') {
-          return badRequest(res, 'This engagement is closed. Ask your accountant to reopen it.', 'engagement_closed');
-        }
+        if (!(await requireOpenEngagement(res, req.auth!, engagement))) return;
 
         const context = { clientId: engagement.clientId };
         if (await settledBeforeBytes(req, res, context)) return;
@@ -456,6 +448,8 @@ router.post(
       .then(async (doc) => {
         if (!doc) return notFound(res);
         if (!mayAddVersion(doc, req.auth!.kind)) return advisorOnly(res);
+        // The third door into a closed year (2026-11-11 audit, finding 6).
+        if (!(await requireOpenEngagement(res, req.auth!, doc.engagementId))) return;
         if (doc.archivedAt) return badRequest(res, 'This document is archived.', 'archived');
         const context = { clientId: doc.clientId };
         if (await settledBeforeBytes(req, res, context)) return;

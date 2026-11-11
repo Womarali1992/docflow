@@ -31,6 +31,48 @@ export function badRequest(res: Response, error: string, code?: string) {
   return res.status(400).json(code ? { error, code } : { error });
 }
 
+/** What each side is told when a closed engagement refuses a change. */
+const ENGAGEMENT_CLOSED = {
+  provider: 'This engagement is closed. Reopen it to make changes.',
+  client: 'That work has been closed. Ask your accountant to reopen it.',
+} as const;
+
+/**
+ * A closed engagement takes no change to its checklist and no decision
+ * (decision of 2026-11-11). Before the audit this check was written five times
+ * with three different sentences, and nine routes that change a line or a file
+ * had none (finding 6).
+ *
+ * Every route that makes such a change calls this right after loading what it
+ * acts on and checking the caller's role, before reading the body, so the
+ * refusal is the same whatever was sent. Sharing, archiving, filing, messages
+ * and export may act on a closed engagement; the route-table test in
+ * `workflow.test.ts` names each one with its reason, and fails on a new route
+ * that neither calls this nor is named there.
+ *
+ * True when the engagement is open, or there is none. Otherwise it answers 400
+ * `engagement_closed` and returns false.
+ */
+export async function requireOpenEngagement(
+  res: Response,
+  auth: AuthPayload,
+  engagement: Pick<Engagement, 'status'> | string | null
+): Promise<boolean> {
+  if (!engagement) return true;
+  const status =
+    typeof engagement === 'string'
+      ? (
+          await db
+            .select({ status: schema.engagements.status })
+            .from(schema.engagements)
+            .where(eq(schema.engagements.id, engagement))
+        )[0]?.status
+      : engagement.status;
+  if (status !== 'closed') return true;
+  badRequest(res, ENGAGEMENT_CLOSED[auth.kind], 'engagement_closed');
+  return false;
+}
+
 /** Rejects a malformed id before it reaches the database. */
 export function isId(value: unknown): value is string {
   return typeof value === 'string' && UUID_RE.test(value);

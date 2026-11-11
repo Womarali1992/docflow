@@ -17,6 +17,7 @@ import { quarantineVersion } from '../src/workflow/publish.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
 import { FIXTURES } from './fixtures.js';
 import { PDF_BYTES, app, loginAs, request, seedFixture, type Fixture } from './helpers.js';
+import { MUTATING, routeTable } from './route-table.js';
 
 /** Puts a new version on a document, exactly as C2.3's publish step will. */
 async function submitVersion(documentId: string, uploader: { kind: 'provider' | 'client'; id: string }, filename = 'submission.pdf') {
@@ -1227,12 +1228,52 @@ describe('2026-11-11 audit: a closed engagement takes no changes', () => {
   ];
 
   for (const [name, send] of refused) {
-    it.fails(`F6 (R4): ${name} is refused`, async () => {
+    it(`F6 (R4): ${name} is refused`, async () => {
       const res = await send();
       expect(res.status, JSON.stringify(res.body)).toBe(400);
       expect(res.body.code).toBe('engagement_closed');
     });
   }
+
+  /* The rule's guard (R4). Every route that changes one line, one file or one
+     engagement either refuses a closed engagement or is named here with the
+     reason it may act on one (decision of 2026-11-11). The list is read from
+     the app itself, so a route added later with neither fails this test. */
+  const ALLOWED_WHEN_CLOSED: Record<string, string> = {
+    'POST /api/engagements/:id/reopen': 'reopening is how a closed engagement takes changes again',
+    'POST /api/engagements/:id/close': 'closing it again changes nothing',
+    'PATCH /api/engagements/:id': 'its title, kind and tax year: what the engagement is, not what is on it',
+    'POST /api/documents/:id/share': 'a deliverable is shared when the work is done',
+    'POST /api/documents/:id/unshare': 'the same, taken back',
+    'POST /api/documents/:id/archive': 'housekeeping of the record',
+    'DELETE /api/documents/:id': 'an archive by another name',
+    'POST /api/documents/:id/unarchive': 'housekeeping of the record, undone',
+    'PATCH /api/documents/:id': "filing: a file's name, category or engagement, not the checklist or a decision",
+  };
+
+  it('F6 (R4): every route that changes a line, a file or an engagement refuses a closed one, or says why it may not', async () => {
+    const subject = /^\/api\/(requests|documents|engagements)\/:id(?:\/|$)/;
+    const ids = { requests: fx.client1a.request, documents: fx.client1a.upload, engagements: fx.client1a.engagement };
+    const routes = routeTable(app).filter((r) => MUTATING.has(r.method) && subject.test(r.path));
+    const named = new Set(routes.map((r) => `${r.method} ${r.path}`));
+    // An entry for a route that no longer exists is a reason nobody is reading.
+    expect(Object.keys(ALLOWED_WHEN_CLOSED).filter((key) => !named.has(key))).toEqual([]);
+
+    const unanswered: string[] = [];
+    for (const route of routes) {
+      const key = `${route.method} ${route.path}`;
+      if (ALLOWED_WHEN_CLOSED[key]) continue;
+      const url = route.path.replace(':id', ids[subject.exec(route.path)![1] as keyof typeof ids]);
+      const send = (cookie: string) =>
+        (request(app) as unknown as Record<string, (url: string) => Test>)[route.method.toLowerCase()](url).set('Cookie', cookie).send({});
+      // The refusal comes right after the role check, so whichever side may call the route hears it.
+      let res = await send(advisor);
+      if (res.status === 403) res = await send(client);
+      if (res.status !== 400 || res.body.code !== 'engagement_closed') unanswered.push(`${key} -> ${res.status} ${res.body.code ?? ''}`);
+    }
+    expect(routes.length).toBeGreaterThan(Object.keys(ALLOWED_WHEN_CLOSED).length);
+    expect(unanswered).toEqual([]);
+  });
 });
 
 describe('2026-11-11 audit: search', () => {

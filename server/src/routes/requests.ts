@@ -41,7 +41,7 @@ import { correctionsByRequest } from '../workflow/corrections.js';
 import { reopenLine, waiveLine } from '../workflow/line-status.js';
 import { recordActivity } from '../db/activity-log.js';
 import { serializeRequest } from './serialize.js';
-import { advisorOnly, badRequest, clientOnly, findRequest, notFound, REQUEST_REMOVED } from './scope.js';
+import { advisorOnly, badRequest, clientOnly, findRequest, notFound, REQUEST_REMOVED, requireOpenEngagement } from './scope.js';
 import { notifyAdvisors } from '../notify.js';
 import type { Request as RequestRow } from '../db/schema.js';
 
@@ -96,6 +96,7 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const request = await loadForAdvisor(req, res);
   if (!request) return;
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
 
   const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
@@ -119,6 +120,7 @@ const acceptSchema = z.object({
 router.post('/:id/accept', async (req, res) => {
   const request = await loadForAdvisor(req, res);
   if (!request) return;
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
 
   const parsed = acceptSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });
@@ -145,6 +147,7 @@ const correctionSchema = z.object({
 router.post('/:id/request-correction', async (req, res) => {
   const request = await loadForAdvisor(req, res);
   if (!request) return;
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
 
   const parsed = correctionSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -171,6 +174,7 @@ router.post('/:id/waive', async (req, res) => {
   const auth = req.auth!;
   const request = await loadForAdvisor(req, res);
   if (!request) return;
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
 
   const parsed = waiveSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -206,22 +210,13 @@ router.post('/:id/waive', async (req, res) => {
 router.post('/:id/reopen', async (req, res) => {
   const request = await loadForAdvisor(req, res);
   if (!request) return;
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
 
   const now = new Date();
   const updated = await reopenLine(db, request.id, now);
 
   res.json(await present(updated, now));
 });
-
-const ENGAGEMENT_CLOSED = 'This engagement is closed. Reopen it to change the checklist.';
-
-async function engagementClosed(request: RequestRow): Promise<boolean> {
-  const [engagement] = await db
-    .select({ status: schema.engagements.status })
-    .from(schema.engagements)
-    .where(eq(schema.engagements.id, request.engagementId));
-  return engagement?.status === 'closed';
-}
 
 /**
  * Take a line off the checklist: a template line that does not apply to this
@@ -239,7 +234,7 @@ router.post('/:id/remove', async (req, res) => {
   const auth = req.auth!;
   const request = await loadForAdvisor(req, res);
   if (!request) return;
-  if (await engagementClosed(request)) return badRequest(res, ENGAGEMENT_CLOSED, 'engagement_closed');
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
 
   const now = new Date();
   const outcome = await db.transaction(async (tx) => {
@@ -289,7 +284,7 @@ router.post('/:id/restore', async (req, res) => {
   const auth = req.auth!;
   const request = await loadForAdvisor(req, res);
   if (!request) return;
-  if (await engagementClosed(request)) return badRequest(res, ENGAGEMENT_CLOSED, 'engagement_closed');
+  if (!(await requireOpenEngagement(res, req.auth!, request.engagementId))) return;
   if (!request.archivedAt) return res.json(await present(request));
 
   const now = new Date();
@@ -331,6 +326,7 @@ router.post('/:id/respond', async (req, res) => {
   const request = await findRequest(auth, req.params.id);
   if (!request) return notFound(res);
   if (auth.kind !== 'client') return clientOnly(res);
+  if (!(await requireOpenEngagement(res, auth, request.engagementId))) return;
 
   const parsed = respondSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid input', issues: parsed.error.issues });

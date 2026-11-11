@@ -32,7 +32,7 @@ import { auditRequest } from '../db/audit.js';
 import { contentDisposition } from '../files/filename.js';
 import { serializeDocument, serializeDocumentWithDecision, serializeReview } from './serialize.js';
 import { notify, notifyAdvisors } from '../notify.js';
-import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, findRequest, isId, notFound } from './scope.js';
+import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, findRequest, isId, notFound, requireOpenEngagement } from './scope.js';
 import { lockDocument, refusalBody } from '../workflow/publish.js';
 import { announceDecision, latestDecisions, recordDecision, type Decision, type DecisionSubject } from '../workflow/decisions.js';
 import { reviveLine, settleLine } from '../workflow/line-status.js';
@@ -139,6 +139,7 @@ async function decide(req: Request, res: Response, decision: Decision) {
   const auth = req.auth!;
   const doc = await loadForAdvisor(req, res);
   if (!doc) return;
+  if (!(await requireOpenEngagement(res, auth, doc.engagementId))) return;
   if (doc.kind === 'deliverable') {
     return badRequest(res, 'A deliverable is your own material — there is nothing to review.', 'not_reviewable');
   }
@@ -303,19 +304,11 @@ router.post('/:id/withdraw', async (req, res) => {
   const doc = await findDocument(auth, req.params.id);
   if (!doc) return notFound(res);
   if (auth.kind !== 'client') return clientOnly(res);
+  if (!(await requireOpenEngagement(res, auth, doc.engagementId))) return;
   if (doc.kind !== 'client_upload' || !doc.requestId) {
     return badRequest(res, 'Only a file you sent for an item on your list can be withdrawn. Ask your accountant about this one.', 'not_withdrawable');
   }
   if (doc.archivedAt) return res.json(serializeDocument(doc));
-  if (doc.engagementId) {
-    const [engagement] = await db
-      .select({ status: schema.engagements.status })
-      .from(schema.engagements)
-      .where(eq(schema.engagements.id, doc.engagementId));
-    if (engagement?.status === 'closed') {
-      return badRequest(res, 'That work has been closed. Ask your accountant to reopen it.', 'engagement_closed');
-    }
-  }
 
   const now = new Date();
   const outcome = await db.transaction(async (tx) => {
