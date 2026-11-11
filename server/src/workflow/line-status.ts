@@ -1,0 +1,139 @@
+/**
+ * A checklist line's status, and the only module that moves it.
+ *
+ *   requested ──upload──▶ submitted ──accept──────────▶ accepted
+ *       ▲                     │                            │
+ *       │                     └──request-correction──▶ needs_correction
+ *       │                                                  │
+ *       └──────────── reopen ◀── waived ◀──waive──── (any) ─┘
+ *                                                     (upload again → submitted)
+ *
+ * Before the 2026-11-11 audit the status column had six writers in three files,
+ * and each rule about it ("a file leaving its line settles the line", "a closed
+ * engagement takes no decision") had to be repeated at every one of them, and
+ * was not. Every move is here now, each taking the caller's transaction so the
+ * move and whatever caused it are one fact. A test in `hardening.test.ts` fails
+ * when any other file under `src/` writes the column.
+ *
+ * Creating a line is not a move: it starts at the column's default,
+ * `requested`, wherever it is inserted.
+ */
+import { and, desc, eq, inArray } from 'drizzle-orm';
+import { db, schema } from '../db/client.js';
+import type { Document, Request as RequestRow } from '../db/schema.js';
+import { attachmentsForRequest, documentsForRequest } from './attachments.js';
+import type { Tx } from './publish.js';
+
+type Writer = Tx | typeof db;
+
+/** Accept or request-correction: the advisor's ruling on what is on the line. */
+export async function decideLine(
+  tx: Writer,
+  requestId: string,
+  status: 'accepted' | 'needs_correction',
+  now: Date
+): Promise<void> {
+  await tx.update(schema.requests).set({ status, updatedAt: now }).where(eq(schema.requests.id, requestId));
+}
+
+/** Waive, with the reason that stays on the file and who gave it. */
+export async function waiveLine(
+  tx: Writer,
+  requestId: string,
+  waiver: { reason: string; byId: string },
+  now: Date
+): Promise<RequestRow> {
+  const [updated] = await tx
+    .update(schema.requests)
+    .set({ status: 'waived', waivedReason: waiver.reason, waivedAt: now, waivedById: waiver.byId, updatedAt: now })
+    .where(eq(schema.requests.id, requestId))
+    .returning();
+  return updated;
+}
+
+/** Puts a decided line back in play: `submitted` if an answer is on file, `requested` if not. */
+export async function reopenLine(tx: Writer, requestId: string, now: Date): Promise<RequestRow> {
+  const documents = await documentsForRequest(requestId, tx);
+  const [updated] = await tx
+    .update(schema.requests)
+    .set({
+      status: documents.some((d) => d.currentVersionId) ? 'submitted' : 'requested',
+      waivedReason: null,
+      waivedAt: null,
+      waivedById: null,
+      updatedAt: now,
+    })
+    .where(eq(schema.requests.id, requestId))
+    .returning();
+  return updated;
+}
+
+/**
+ * A new answer means the advisor has to look again, whatever they decided last
+ * time — and whichever path the answer arrived by. The old review row is left
+ * exactly as it was: reviews are history, not current state.
+ *
+ * A waived line stays waived: the advisor closed it deliberately, and a late
+ * upload is not an argument.
+ *
+ * Answers whether the line had been accepted, which is what the caller tells
+ * the advisor ("reopened an accepted item").
+ */
+export async function resetLine(tx: Tx, requestId: string | null, now: Date): Promise<boolean> {
+  if (!requestId) return false;
+  const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId));
+  if (!request || request.status === 'waived') return false;
+
+  await tx
+    .update(schema.requests)
+    .set({
+      status: 'submitted',
+      // A fresh submission also clears a stale "I don't have this".
+      clientResponseKind: null,
+      clientResponseNote: null,
+      clientResponseAt: null,
+      updatedAt: now,
+    })
+    .where(eq(schema.requests.id, request.id));
+
+  return request.status === 'accepted';
+}
+
+/**
+ * The line's status once a file has left it. No files left: back to
+ * `requested`. Every file left already ruled on: back to that ruling, so a
+ * stray upload on an accepted line, withdrawn, leaves it accepted. Anything
+ * else is still waiting for the advisor, as it was.
+ */
+export async function settleLine(tx: Tx, requestId: string, now: Date): Promise<void> {
+  const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId)).for('update');
+  if (!request || (request.status !== 'submitted' && request.status !== 'in_review')) return;
+
+  const remaining = await attachmentsForRequest(requestId, tx);
+  let status: 'requested' | 'accepted' | 'needs_correction' | null = null;
+  if (remaining.length === 0) {
+    status = 'requested';
+  } else if (remaining.every((a) => a.decided)) {
+    const versionIds = remaining.map((a) => a.currentVersion!.id);
+    const [latest] = await tx
+      .select({ decision: schema.reviews.decision })
+      .from(schema.reviews)
+      .where(inArray(schema.reviews.versionId, versionIds))
+      .orderBy(desc(schema.reviews.createdAt))
+      .limit(1);
+    if (latest) status = latest.decision;
+  }
+  if (status) await tx.update(schema.requests).set({ status, updatedAt: now }).where(eq(schema.requests.id, requestId));
+}
+
+/**
+ * A file the client withdrew, brought back: its line has something to review
+ * again, rather than saying it is waiting on the client.
+ */
+export async function reviveLine(tx: Writer, document: Document, now: Date): Promise<void> {
+  if (!document.requestId || document.kind !== 'client_upload' || !document.currentVersionId) return;
+  await tx
+    .update(schema.requests)
+    .set({ status: 'submitted', updatedAt: now })
+    .where(and(eq(schema.requests.id, document.requestId), eq(schema.requests.status, 'requested')));
+}

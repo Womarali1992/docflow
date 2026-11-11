@@ -793,4 +793,40 @@ describe('hardening', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  /* 2026-11-11 audit, R1: a line's status had six writers in three files, and a
+     rule about it had to be repeated at each. Now one module moves it. Creating
+     a line is not a move, so inserts are not checked. A `.set(x)` with a
+     computed argument cannot be read here, so each one is named with the reason
+     it cannot carry a status. */
+  it('nothing outside workflow/line-status.ts moves a line’s status', () => {
+    const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const owner = path.join('workflow', 'line-status.ts');
+    const computed: Record<string, string> = {
+      [`${path.join('routes', 'requests.ts')}:updates`]: 'PATCH builds it from patchSchema, which has no status field',
+    };
+    const updates = /\.update\(\s*schema\.requests\s*\)\s*\.set\(\s*/g;
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles(srcDir)) {
+      const relative = path.relative(srcDir, file);
+      if (relative === owner) continue;
+      const source = fs.readFileSync(file, 'utf8');
+      for (const match of source.matchAll(updates)) {
+        const from = (match.index ?? 0) + match[0].length;
+        const rest = source.slice(from, from + 800);
+        if (!rest.startsWith('{')) {
+          const argument = /^[A-Za-z_$][\w$]*/.exec(rest)?.[0] ?? rest.slice(0, 20);
+          if (!computed[`${relative}:${argument}`]) offenders.push(`${relative} @ char ${match.index}: set(${argument})`);
+          continue;
+        }
+        const end = rest.indexOf('})');
+        const body = end === -1 ? rest : rest.slice(0, end);
+        // `status: x` and the shorthand `{ status, … }` both write it.
+        if (/(?:^|[{,\s])status\s*[:,}]/.test(body)) offenders.push(`${relative} @ char ${match.index}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
 });

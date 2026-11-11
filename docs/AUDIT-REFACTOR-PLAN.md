@@ -13,8 +13,8 @@
 
 | Step | Commit | Status | Id | Notes |
 |---|---|---|---|---|
-| R0 | `test(audit): the 2026-11-11 findings as failing tests` | DONE | (next commit records it) | probe 11/11 reproduced; one correction (finding 10, `?limit=abc`); 22 `it.fails` rows = 30 tests; server 1006 / 27 files (976 before R0), frontend 71 / 12, lint 0 / 9 |
-| R1 | `refactor(workflow): one writer for a line's status` | NOT STARTED | | behaviour-identical move |
+| R0 | `test(audit): the 2026-11-11 findings as failing tests` | DONE, draft PR #3 | `0862be9` | probe 11/11 reproduced; one correction (finding 10, `?limit=abc`); 22 `it.fails` rows = 30 tests; server 1006 / 27 files (976 before R0), frontend 71 / 12, lint 0 / 9 |
+| R1 | `refactor(workflow): one writer for a line's status` | DONE | (next commit records it) | behaviour-identical move. `workflow/line-status.ts`: `decideLine`, `waiveLine`, `reopenLine`, `resetLine`, `settleLine`, `reviveLine`. Also moved: `db/demo.ts`'s two status writes (decide, waive), which the plan did not list. Guard in `hardening.test.ts` (updates only; inserts start at the default; PATCH's computed `set(updates)` named with its reason); run on the pre-R1 tree it finds all 8 writers. Server 1007 / 27, frontend 71 / 12, lint 0 / 9 |
 | R2 | `fix(review): one decision path, and the client hears about it` | NOT STARTED | | findings 1, 7 (accept half), smaller thing 5 |
 | R3 | `fix(workflow): a line settles when its file leaves` | NOT STARTED | | finding 7 (archive, quarantine) |
 | R4 | `fix(engagements): closed means closed on every route` | NOT STARTED | | finding 6 |

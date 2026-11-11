@@ -21,7 +21,7 @@
 import { type Request, type Response } from 'express';
 import { asyncRouter } from './async-router.js';
 import fs from 'node:fs';
-import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/client.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
@@ -33,8 +33,8 @@ import { contentDisposition } from '../files/filename.js';
 import { serializeDocument, serializeReview } from './serialize.js';
 import { notify, notifyAdvisors } from '../notify.js';
 import { advisorOnly, badRequest, clientOnly, findDocument, findEngagement, isId, notFound } from './scope.js';
-import { decidableVersion, lockDocument, refusalBody, type Tx } from '../workflow/publish.js';
-import { attachmentsForRequest } from '../workflow/attachments.js';
+import { decidableVersion, lockDocument, refusalBody } from '../workflow/publish.js';
+import { reviveLine, settleLine } from '../workflow/line-status.js';
 import type { Document } from '../db/schema.js';
 
 const router = asyncRouter();
@@ -262,43 +262,9 @@ router.post('/:id/unarchive', async (req, res) => {
     .set({ archivedAt: null, updatedAt: now })
     .where(eq(schema.documents.id, doc.id))
     .returning();
-  /* A file the client withdrew, brought back: its line has something to
-     review again, rather than saying it is waiting on the client. */
-  if (updated.requestId && updated.kind === 'client_upload' && updated.currentVersionId) {
-    await db
-      .update(schema.requests)
-      .set({ status: 'submitted', updatedAt: now })
-      .where(and(eq(schema.requests.id, updated.requestId), eq(schema.requests.status, 'requested')));
-  }
+  await reviveLine(db, updated, now);
   res.json(serializeDocument(updated));
 });
-
-/**
- * The line's status once a file has left it. No files left: back to
- * `requested`. Every file left already ruled on: back to that ruling, so a
- * stray upload on an accepted line, withdrawn, leaves it accepted. Anything
- * else is still waiting for the advisor, as it was.
- */
-async function settleAfterWithdrawal(tx: Tx, requestId: string, now: Date): Promise<void> {
-  const [request] = await tx.select().from(schema.requests).where(eq(schema.requests.id, requestId)).for('update');
-  if (!request || (request.status !== 'submitted' && request.status !== 'in_review')) return;
-
-  const remaining = await attachmentsForRequest(requestId, tx);
-  let status: 'requested' | 'accepted' | 'needs_correction' | null = null;
-  if (remaining.length === 0) {
-    status = 'requested';
-  } else if (remaining.every((a) => a.decided)) {
-    const versionIds = remaining.map((a) => a.currentVersion!.id);
-    const [latest] = await tx
-      .select({ decision: schema.reviews.decision })
-      .from(schema.reviews)
-      .where(inArray(schema.reviews.versionId, versionIds))
-      .orderBy(desc(schema.reviews.createdAt))
-      .limit(1);
-    if (latest) status = latest.decision;
-  }
-  if (status) await tx.update(schema.requests).set({ status, updatedAt: now }).where(eq(schema.requests.id, requestId));
-}
 
 /**
  * "I sent the wrong file." The client takes back a file they sent for a
@@ -349,7 +315,7 @@ router.post('/:id/withdraw', async (req, res) => {
       .set({ archivedAt: now, updatedAt: now })
       .where(eq(schema.documents.id, locked.id))
       .returning();
-    await settleAfterWithdrawal(tx, locked.requestId!, now);
+    await settleLine(tx, locked.requestId!, now);
     await auditRequest(
       req,
       { action: 'document.withdrawn', targetType: 'document', targetId: locked.id, clientId: locked.clientId, meta: { requestId: locked.requestId } },
