@@ -8,6 +8,7 @@
  */
 import type { Document, DocumentVersion, Engagement, Request as RequestRow, RequestTemplate, Review } from '../db/schema.js';
 import type { RequestCorrection } from '../workflow/corrections.js';
+import type { LatestDecision } from '../workflow/decisions.js';
 
 /** A request is overdue when it is still outstanding and its deadline has passed. Never stored. */
 export function isOverdue(row: Pick<RequestRow, 'status' | 'dueDate'>, now = new Date()): boolean {
@@ -203,6 +204,15 @@ export function serializeDocument(doc: Document) {
     /* Convenience for the client portal: a deliverable is only visible once shared. */
     shared: doc.sharedAt !== null,
   };
+}
+
+/**
+ * A document with the ruling on its current version, for the screens that say
+ * where a file stands: "Accepted", or "Another copy needed" with the note
+ * (2026-11-11 audit, finding 1). Null when nobody has decided on it yet.
+ */
+export function serializeDocumentWithDecision(doc: Document, latestDecision: LatestDecision | null) {
+  return { ...serializeDocument(doc), latestDecision };
 }
 
 export function serializeTemplate(t: RequestTemplate) {

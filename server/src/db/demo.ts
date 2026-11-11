@@ -327,7 +327,9 @@ async function main() {
             note: 'note' in item.state ? item.state.note ?? null : null,
             createdAt: decidedAt,
           });
-          await decideLine(db, request.id, item.state.kind, decidedAt);
+          if (!(await decideLine(db, request.id, item.state.kind, decidedAt))) {
+            throw new Error(`demo: "${item.title}" has no file to decide on`);
+          }
         }
       }
 
