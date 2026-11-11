@@ -12,7 +12,7 @@
  * passwords, nothing a client wrote.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { desc } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '../src/db/client.js';
 import { app, loginAs, passwordLogin, request, seedFixture, PASSWORD, type Fixture } from './helpers.js';
 
@@ -173,5 +173,99 @@ describe('audit coverage', () => {
     expect(blob).not.toContain('Bank Statement');
     expect(blob).not.toContain('.pdf');
     expect(rows.some((r) => r.action === 'document.shared' && r.targetId === fx.client1a.deliverable)).toBe(true);
+  });
+});
+
+/*
+ * The 2026-11-11 engineering audit, findings 2 and 8, as the behaviour the
+ * refactor plan asks for (docs/AUDIT-REFACTOR-PLAN.md). Every row starts as
+ * `it.fails` and the step named in it flips it to `it`.
+ */
+describe('2026-11-11 audit: what the record misses', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it.fails('F2 (R6): an advisor cannot choose a client password', async () => {
+    const colleague = await loginAs(fx, 'colleague1');
+    const passwordOf = async () =>
+      (await db.select({ hash: schema.clients.passwordHash }).from(schema.clients).where(eq(schema.clients.id, fx.client1a.id)))[0].hash;
+    const before = await passwordOf();
+
+    const patch = await request(app)
+      .patch(`/api/clients/${fx.client1a.id}`)
+      .set('Cookie', colleague)
+      .send({ password: 'chosen-by-the-advisor-1' });
+    expect(patch.status).toBe(400);
+    expect(await passwordOf()).toBe(before);
+
+    const create = await request(app)
+      .post('/api/clients')
+      .set('Cookie', colleague)
+      .send({ name: 'New Client', email: 'new-client@example.test', password: 'chosen-by-the-advisor-1' });
+    expect(create.status).toBe(400);
+  });
+
+  it.fails('F2 (R7): handing an advisor a client reset link is on the record', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const res = await request(app).post(`/api/clients/${fx.client1a.id}/password-reset`).set('Cookie', advisor);
+    expect(res.status).toBe(200);
+    const rows = await rowsFor('client.reset_link_created');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actorKind: 'provider', actorId: fx.provider1.id, clientId: fx.client1a.id });
+    expect(JSON.stringify(rows[0].meta ?? {})).not.toContain(res.body.link);
+  });
+
+  it.fails('F8 (R7): a client signing in is on the record, as an advisor is', async () => {
+    await passwordLogin(fx, 'client1a');
+    const rows = await rowsFor('auth.login');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ targetType: 'client', targetId: fx.client1a.id, actorKind: 'client', actorId: fx.client1a.id });
+  });
+
+  it.fails('F8 (R7): reopening a waived line is on the record', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const line = `/api/requests/${fx.client1a.request}`;
+    expect((await request(app).post(`${line}/waive`).set('Cookie', advisor).send({ reason: 'Not this year.' })).status).toBe(200);
+    expect((await request(app).post(`${line}/reopen`).set('Cookie', advisor)).status).toBe(200);
+    expect(await rowsFor('request.reopened')).toHaveLength(1);
+  });
+
+  it.fails('F8 (R7): reopening an engagement is on the record', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const engagement = `/api/engagements/${fx.client1a.engagement}`;
+    expect((await request(app).post(`${engagement}/close`).set('Cookie', advisor)).status).toBe(200);
+    expect((await request(app).post(`${engagement}/reopen`).set('Cookie', advisor)).status).toBe(200);
+    expect(await rowsFor('engagement.reopened')).toHaveLength(1);
+  });
+
+  it.fails('F8 (R3): bringing back an archived file is on the record', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const doc = `/api/documents/${fx.client1a.upload}`;
+    expect((await request(app).post(`${doc}/archive`).set('Cookie', advisor)).status).toBe(200);
+    expect((await request(app).post(`${doc}/unarchive`).set('Cookie', advisor)).status).toBe(200);
+    expect(await rowsFor('document.unarchived')).toHaveLength(1);
+  });
+
+  it.fails('F8 (R7): editing a line or an engagement is on the record, naming fields but not values', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const lineTitle = 'Homeowner insurance policy, renamed';
+    const engagementTitle = '1A 2026 Return, renamed';
+    expect(
+      (await request(app).patch(`/api/requests/${fx.client1a.request}`).set('Cookie', advisor).send({ title: lineTitle })).status
+    ).toBe(200);
+    expect(
+      (await request(app).patch(`/api/engagements/${fx.client1a.engagement}`).set('Cookie', advisor).send({ title: engagementTitle }))
+        .status
+    ).toBe(200);
+
+    const edits = [...(await rowsFor('request.edited')), ...(await rowsFor('engagement.edited'))];
+    expect(edits).toHaveLength(2);
+    const blob = JSON.stringify(edits);
+    expect(blob).toContain('title');
+    expect(blob).not.toContain(lineTitle);
+    expect(blob).not.toContain(engagementTitle);
   });
 });

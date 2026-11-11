@@ -9,7 +9,8 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import type { Test } from 'supertest';
+import { and, eq } from 'drizzle-orm';
 import { db, pool, schema } from '../src/db/client.js';
 import { recordNewVersion } from '../src/workflow/versions.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
@@ -953,5 +954,166 @@ describe('search', () => {
     expect(hit.body.documents.length).toBe(2);
     const miss = await request(app).get('/api/search?q=Bank&year=1999').set('Cookie', advisor);
     expect(miss.body.documents).toEqual([]);
+  });
+});
+
+/*
+ * The 2026-11-11 engineering audit (docs/audit/2026-11-11-engineering-audit.md),
+ * reproduced against the real API and written as the behaviour the refactor
+ * plan asks for (docs/AUDIT-REFACTOR-PLAN.md). Every row starts as `it.fails`:
+ * vitest runs it, expects it to throw, and fails the suite the day it passes.
+ * The step that fixes a finding flips its own rows to `it`. A row's name gives
+ * the finding (F1 …, S5 for the fifth "smaller thing") and the step (R2 …).
+ */
+describe('2026-11-11 audit: the review loop', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it.fails('F1 (R2): a correction on an ad-hoc upload reaches the client', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const note = 'This is the wrong month. Please send December.';
+    const res = await request(app)
+      .post(`/api/documents/${fx.client1a.upload}/request-correction`)
+      .set('Cookie', advisor)
+      .send({ versionId: fx.client1a.uploadVersion, note });
+    expect(res.status).toBe(200);
+
+    const notices = await db
+      .select()
+      .from(schema.notifications)
+      .where(and(eq(schema.notifications.userKind, 'client'), eq(schema.notifications.userId, fx.client1a.id)));
+    expect(notices.map((n) => n.type)).toContain('request.correction');
+    // The note is a question to the client, so it goes in the file's thread.
+    const thread = await db.select().from(schema.messages).where(eq(schema.messages.documentId, fx.client1a.upload));
+    expect(thread.some((m) => m.senderKind === 'provider' && m.content.includes(note))).toBe(true);
+  });
+
+  it.fails('F7 (R2): accept refuses a line with nothing on it', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    // "Submitted" with no live file behind it: what archive and quarantine leave today.
+    await db.update(schema.requests).set({ status: 'submitted' }).where(eq(schema.requests.id, fx.client1a.request));
+
+    const res = await request(app).post(`/api/requests/${fx.client1a.request}/accept`).set('Cookie', advisor).send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('nothing_submitted');
+    expect(await db.select().from(schema.reviews).where(eq(schema.reviews.requestId, fx.client1a.request))).toEqual([]);
+  });
+
+  it.fails('S5 (R2): accepting a checklist file through its document moves the line', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const { version } = await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+
+    const res = await request(app)
+      .post(`/api/documents/${fx.client1a.request}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionId: version.id });
+    expect(res.status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('accepted');
+  });
+
+  it.fails('F7 (R3): archiving the only file on a submitted line sends it back to the client', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+
+    const res = await request(app).post(`/api/documents/${fx.client1a.request}/archive`).set('Cookie', advisor);
+    expect(res.status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('requested');
+  });
+});
+
+describe('2026-11-11 audit: a closed engagement takes no changes', () => {
+  let fx: Fixture;
+  let advisor: string;
+  let client: string;
+  let versionId: string;
+  const lateCopy = Buffer.concat([PDF_BYTES, Buffer.from('\n% sent after the year was closed\n')]);
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+    advisor = await loginAs(fx, 'provider1');
+    client = await loginAs(fx, 'client1a');
+    versionId = (await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id })).version.id;
+    const closed = await request(app).post(`/api/engagements/${fx.client1a.engagement}/close`).set('Cookie', advisor);
+    expect(closed.status).toBe(200);
+  });
+
+  const line = () => `/api/requests/${fx.client1a.request}`;
+  const adHoc = () => `/api/documents/${fx.client1a.upload}`;
+  const refused: [string, () => Test][] = [
+    [
+      'a client adding a version to a file',
+      () => request(app).post(`${adHoc()}/versions`).set('Cookie', client).attach('file', lateCopy, { filename: 'late.pdf' }),
+    ],
+    ['accepting a line', () => request(app).post(`${line()}/accept`).set('Cookie', advisor).send({ versionId })],
+    [
+      'asking for a correction on a line',
+      () => request(app).post(`${line()}/request-correction`).set('Cookie', advisor).send({ versionId, note: 'Too late.' }),
+    ],
+    ['waiving a line', () => request(app).post(`${line()}/waive`).set('Cookie', advisor).send({ reason: 'Not needed.' })],
+    ['reopening a line', () => request(app).post(`${line()}/reopen`).set('Cookie', advisor)],
+    ['editing a line', () => request(app).patch(line()).set('Cookie', advisor).send({ title: 'Renamed after closing' })],
+    [
+      'a client answering "I do not have this"',
+      () => request(app).post(`${line()}/respond`).set('Cookie', client).send({ kind: 'not_applicable' }),
+    ],
+    [
+      'accepting an ad-hoc upload',
+      () => request(app).post(`${adHoc()}/accept`).set('Cookie', advisor).send({ versionId: fx.client1a.uploadVersion }),
+    ],
+    [
+      'asking for a correction on an ad-hoc upload',
+      () =>
+        request(app)
+          .post(`${adHoc()}/request-correction`)
+          .set('Cookie', advisor)
+          .send({ versionId: fx.client1a.uploadVersion, note: 'Too late.' }),
+    ],
+  ];
+
+  for (const [name, send] of refused) {
+    it.fails(`F6 (R4): ${name} is refused`, async () => {
+      const res = await send();
+      expect(res.status, JSON.stringify(res.body)).toBe(400);
+      expect(res.body.code).toBe('engagement_closed');
+    });
+  }
+});
+
+describe('2026-11-11 audit: search', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it.fails('S2 (R9): the year filter finds a match older than the newest fifty', async () => {
+    const advisor = await loginAs(fx, 'provider1');
+    const c = fx.client1a;
+    const [earlier] = await db
+      .insert(schema.engagements)
+      .values({ firmId: c.firmId, clientId: c.id, title: '1A 2024 Individual Tax Return', kind: 'individual_tax', taxYear: 2024, status: 'open' })
+      .returning({ id: schema.engagements.id });
+    const doc = {
+      clientId: c.id,
+      firmId: c.firmId,
+      category: 'Uploads',
+      kind: 'client_upload' as const,
+      uploadedByKind: 'client' as const,
+      uploadedById: c.id,
+    };
+    await db
+      .insert(schema.documents)
+      .values({ ...doc, name: '1A 2024 W-2.pdf', engagementId: earlier.id, uploadedAt: new Date('2025-02-01T12:00:00Z') });
+    await db
+      .insert(schema.documents)
+      .values(Array.from({ length: 55 }, (_, i) => ({ ...doc, name: `1A 2026 receipt ${i}.pdf`, engagementId: c.engagement })));
+
+    const res = await request(app).get('/api/search?year=2024').set('Cookie', advisor);
+    expect(res.status).toBe(200);
+    expect((res.body.documents as { name: string }[]).map((d) => d.name)).toContain('1A 2024 W-2.pdf');
   });
 });

@@ -282,3 +282,49 @@ describe('the legacy download still works', () => {
     expect(res.body.error).toBe('No file attached');
   });
 });
+
+/*
+ * The 2026-11-11 engineering audit, finding 5, as the behaviour the refactor
+ * plan asks for (docs/AUDIT-REFACTOR-PLAN.md, R5): the older route is the one
+ * the portal's "Shared with you" page and the advisor's deliverables list use,
+ * so it has to be the same delivery as the per-version route. Both rows start
+ * as `it.fails`; R5 flips them.
+ */
+describe('2026-11-11 audit: one delivery path', () => {
+  let fx: Fixture;
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+  });
+
+  it.fails('F5 (R5): a download through /documents/:id/download is on the record', async () => {
+    const client = await loginAs(fx, 'client1a');
+    const res = await request(app)
+      .get(`/api/documents/${fx.client1a.deliverable}/download?disposition=attachment`)
+      .set('Cookie', client);
+    expect(res.status).toBe(200);
+
+    const rows = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, 'document.downloaded'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actorKind: 'client', actorId: fx.client1a.id, targetId: fx.client1a.deliverableVersion });
+  });
+
+  it.fails('F5 (R5): an inline answer is sandboxed and typed from the bytes', async () => {
+    const client = await loginAs(fx, 'client1a');
+    // A row that lies: the file on disk is a PDF, the row says it is a spreadsheet.
+    await db
+      .update(schema.documentVersions)
+      .set({ mimeType: 'application/vnd.ms-excel' })
+      .where(eq(schema.documentVersions.id, fx.client1a.uploadVersion));
+
+    const res = await request(app)
+      .get(`/api/documents/${fx.client1a.upload}/download`)
+      .set('Cookie', client)
+      .buffer(true)
+      .parse(binaryParser);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toMatch(/^inline;/);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-security-policy']).toBe('sandbox');
+  });
+});
