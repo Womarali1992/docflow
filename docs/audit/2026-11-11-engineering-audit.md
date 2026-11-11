@@ -23,7 +23,7 @@ finding 12 is as npm reports it.
 | 4 | Client feed listed `provider: uploaded: SECRET draft return.pdf` for a deliverable missing from the client's document list | `authz.test.ts` F4 (R9) |
 | 5 | `/documents/:id/download`: no `document.downloaded` row (the per-version route wrote one), the app-wide CSP instead of `sandbox`, and the row's type (`application/vnd.ms-excel`) for PDF bytes | `delivery.test.ts` F5 (R5) ×2 |
 | 6 | Closed engagement: `/requests/:id/uploads` refused (400 `engagement_closed`), `/documents/:id/versions` took the file (202). Waive, reopen, edit, respond, accept and request a correction (line and ad-hoc) all answered 200 | `workflow.test.ts` F6 (R4) ×9 |
-| 7 | Archiving the only file left the line `submitted` with 0 attachments shown; accept answered 200 and marked it `accepted` with 0 review rows | `workflow.test.ts` F7 (R2), F7 (R3) |
+| 7 | Archiving the only file left the line `submitted` with 0 attachments shown; accept answered 200 and marked it `accepted` with 0 review rows. The re-scan half does not happen (see the correction under finding 7) | `workflow.test.ts` F7 (R2), F7 (R3) |
 | 8 | Only the advisor's sign-in wrote `auth.login`. Reopening a line or an engagement, unarchiving, creating a reset link and editing a line or an engagement wrote nothing | `audit.test.ts` F8 ×5 |
 | 9 | Confirmed from the code (`auth/passwords.ts:42` returns before bcrypt when there is no hash). Not timed: the tests hash at cost 4 | none yet; R8 adds one |
 | 10 | 500 for a malformed id on `GET /clients/:id`, `POST /clients/:id/deactivate`, and `clientId`/`documentId` on messages, engagements and activities. `?limit=abc`: 200 with every row (see the correction) | `authz.test.ts` F10 (R9) ×3 |
@@ -157,11 +157,18 @@ Not checked:
 line has no documents. `POST /requests/:id/accept` (`routes/requests.ts:228-271`) only
 refuses lines in `requested` or `waived`. So if the advisor archives the only file on a
 submitted line (`POST /documents/:id/archive` does not touch the line's status,
-`routes/documents.ts:241-254`), or a re-scan quarantines it, the line stays `submitted`
+`routes/documents.ts:241-254`), the line stays `submitted`
 with no attachment: the client is told it is with the accountant, the work queue lists
 it with nothing to open, and "accept" succeeds with zero review rows. The client-side
-withdraw already settles the line (`settleAfterWithdrawal`); archive and quarantine
-should use the same step, and accept should refuse an empty line.
+withdraw already settles the line (`settleAfterWithdrawal`); archive should use the
+same step, and accept should refuse an empty line.
+
+*Correction (R3, 2026-11-12):* the draft also said "or a re-scan quarantines it". That
+does not happen: `scan_retry` skips a version that is already clean, only a clean version
+can be current, and a line only moves when a version is published. So a re-scan never
+takes away the file a line is showing. A related case is real: archive the readable file
+on a line whose other file the scanner refused, and the line stays `submitted` with
+nothing to open, because the settle step counted the refused file as still there.
 
 ### 8. Gaps in the audit trail
 

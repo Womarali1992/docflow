@@ -241,7 +241,7 @@ describe('2026-11-11 audit: what the record misses', () => {
     expect(await rowsFor('engagement.reopened')).toHaveLength(1);
   });
 
-  it.fails('F8 (R3): bringing back an archived file is on the record', async () => {
+  it('F8 (R3): bringing back an archived file is on the record', async () => {
     const advisor = await loginAs(fx, 'provider1');
     const doc = `/api/documents/${fx.client1a.upload}`;
     expect((await request(app).post(`${doc}/archive`).set('Cookie', advisor)).status).toBe(200);

@@ -13,6 +13,7 @@ import type { Test } from 'supertest';
 import { and, eq } from 'drizzle-orm';
 import { db, pool, schema } from '../src/db/client.js';
 import { recordNewVersion } from '../src/workflow/versions.js';
+import { quarantineVersion } from '../src/workflow/publish.js';
 import { ensureKeyDir, newStorageKey } from '../src/files/store.js';
 import { FIXTURES } from './fixtures.js';
 import { PDF_BYTES, app, loginAs, request, seedFixture, type Fixture } from './helpers.js';
@@ -1069,13 +1070,109 @@ describe('2026-11-11 audit: the review loop', () => {
     expect(await thread()).toBe(before);
   });
 
-  it.fails('F7 (R3): archiving the only file on a submitted line sends it back to the client', async () => {
+  it('F7 (R3): archiving the only file on a submitted line sends it back to the client', async () => {
     const advisor = await loginAs(fx, 'provider1');
     await submitVersion(fx.client1a.request, { kind: 'client', id: fx.client1a.id });
     expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
 
     const res = await request(app).post(`/api/documents/${fx.client1a.request}/archive`).set('Cookie', advisor);
     expect(res.status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('requested');
+  });
+});
+
+describe('2026-11-11 audit: a line settles when its file leaves', () => {
+  let fx: Fixture;
+  let advisor: string;
+  const client = () => ({ kind: 'client' as const, id: fx.client1a.id });
+
+  beforeEach(async () => {
+    fx = await seedFixture();
+    advisor = await loginAs(fx, 'provider1');
+  });
+
+  /** Another document on the same line, as a client's second upload makes one. */
+  async function anotherFileOnTheLine(name: string): Promise<string> {
+    const c = fx.client1a;
+    const [doc] = await db
+      .insert(schema.documents)
+      .values({
+        clientId: c.id,
+        firmId: c.firmId,
+        engagementId: c.engagement,
+        requestId: c.request,
+        name,
+        category: 'Documents',
+        kind: 'client_upload',
+        uploadedByKind: 'client',
+        uploadedById: c.id,
+      })
+      .returning({ id: schema.documents.id });
+    return doc.id;
+  }
+
+  const archive = (documentId: string) => request(app).post(`/api/documents/${documentId}/archive`).set('Cookie', advisor);
+
+  it('F7 (R3): archiving one of two files leaves the line with the advisor', async () => {
+    await submitVersion(fx.client1a.request, client());
+    await submitVersion(await anotherFileOnTheLine('page two.pdf'), client());
+
+    expect((await archive(fx.client1a.request)).status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+  });
+
+  it('F7 (R3): deleting the only file settles the line as archiving it does', async () => {
+    await submitVersion(fx.client1a.request, client());
+    const res = await request(app).delete(`/api/documents/${fx.client1a.request}`).set('Cookie', advisor);
+    expect(res.status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('requested');
+  });
+
+  it('F7 (R3): a refused file does not hold a line open', async () => {
+    await submitVersion(fx.client1a.request, client());
+    const [refused] = await db.select().from(schema.documents).where(eq(schema.documents.id, await anotherFileOnTheLine('refused.pdf')));
+    const storageKey = newStorageKey(new Date(), 'pdf');
+    fs.writeFileSync(ensureKeyDir(storageKey), PDF_BYTES);
+    await recordNewVersion({
+      document: refused,
+      originalFilename: 'refused.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: PDF_BYTES.length,
+      sha256: 'b'.repeat(64),
+      storageKey,
+      uploadedByKind: 'client',
+      uploadedById: fx.client1a.id,
+      scanStatus: 'infected',
+    });
+
+    expect((await archive(fx.client1a.request)).status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('requested');
+  });
+
+  it('F7 (R3): a file brought back to a line that settled on its ruling puts the line in front of the advisor again', async () => {
+    const first = await submitVersion(fx.client1a.request, client());
+    const accepted = await request(app)
+      .post(`/api/requests/${fx.client1a.request}/accept`)
+      .set('Cookie', advisor)
+      .send({ versionId: first.version.id });
+    expect(accepted.status).toBe(200);
+
+    const late = await anotherFileOnTheLine('late receipt.pdf');
+    await submitVersion(late, client());
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+
+    expect((await archive(late)).status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('accepted');
+
+    expect((await request(app).post(`/api/documents/${late}/unarchive`).set('Cookie', advisor)).status).toBe(200);
+    expect((await requestRow(fx.client1a.request)).status).toBe('submitted');
+  });
+
+  it('F7 (R3): a re-scan that condemns the file a line shows settles the line', async () => {
+    await submitVersion(fx.client1a.request, client());
+    const [doc] = await db.select().from(schema.documents).where(eq(schema.documents.id, fx.client1a.request));
+
+    await db.transaction((tx) => quarantineVersion(tx, { versionId: doc.currentVersionId!, detail: 'Test-Signature' }));
     expect((await requestRow(fx.client1a.request)).status).toBe('requested');
   });
 });

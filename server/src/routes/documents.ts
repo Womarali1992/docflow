@@ -238,31 +238,52 @@ router.post('/:id/unshare', async (req, res) => {
   res.json(serializeDocument(updated));
 });
 
+/**
+ * Archive (and DELETE, which is the same act): the advisor takes a file off
+ * the front page. A client's file leaving its checklist line settles the line
+ * in the same transaction, as a withdrawal does (2026-11-11 audit, finding 7):
+ * the only file gone, the line is the client's to answer again; the rest
+ * already ruled on, it goes back to that ruling. The document is locked first,
+ * as withdraw and every decision lock it, so an archive and an accept on the
+ * same file cannot both win.
+ */
+async function archiveDocument(req: Request, doc: Document): Promise<Document> {
+  const now = new Date();
+  return db.transaction(async (tx) => {
+    const locked = (await lockDocument(tx, doc.id)) ?? doc;
+    const [updated] = await tx
+      .update(schema.documents)
+      .set({ archivedAt: locked.archivedAt ?? now, updatedAt: now })
+      .where(eq(schema.documents.id, doc.id))
+      .returning();
+    if (updated.requestId && updated.kind === 'client_upload') await settleLine(tx, updated.requestId, now);
+    await auditRequest(req, { action: 'document.archived', targetType: 'document', targetId: doc.id, clientId: doc.clientId }, tx);
+    return updated;
+  });
+}
+
 router.post('/:id/archive', async (req, res) => {
   const doc = await loadForAdvisor(req, res);
   if (!doc) return;
-
-  const now = new Date();
-  const [updated] = await db
-    .update(schema.documents)
-    .set({ archivedAt: doc.archivedAt ?? now, updatedAt: now })
-    .where(eq(schema.documents.id, doc.id))
-    .returning();
-
-  await auditRequest(req, { action: 'document.archived', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
-  res.json(serializeDocument(updated));
+  res.json(serializeDocument(await archiveDocument(req, doc)));
 });
 
 router.post('/:id/unarchive', async (req, res) => {
   const doc = await loadForAdvisor(req, res);
   if (!doc) return;
   const now = new Date();
-  const [updated] = await db
-    .update(schema.documents)
-    .set({ archivedAt: null, updatedAt: now })
-    .where(eq(schema.documents.id, doc.id))
-    .returning();
-  await reviveLine(db, updated, now);
+  const updated = await db.transaction(async (tx) => {
+    await lockDocument(tx, doc.id);
+    const [row] = await tx
+      .update(schema.documents)
+      .set({ archivedAt: null, updatedAt: now })
+      .where(eq(schema.documents.id, doc.id))
+      .returning();
+    await reviveLine(tx, row, now);
+    // Bringing a file back changes what the record shows (finding 8).
+    await auditRequest(req, { action: 'document.unarchived', targetType: 'document', targetId: doc.id, clientId: doc.clientId }, tx);
+    return row;
+  });
   res.json(serializeDocument(updated));
 });
 
@@ -559,13 +580,7 @@ router.delete('/:id', async (req, res) => {
   const doc = await loadForAdvisor(req, res);
   if (!doc) return;
 
-  const now = new Date();
-  await db
-    .update(schema.documents)
-    .set({ archivedAt: doc.archivedAt ?? now, updatedAt: now })
-    .where(eq(schema.documents.id, doc.id));
-
-  await auditRequest(req, { action: 'document.archived', targetType: 'document', targetId: doc.id, clientId: doc.clientId });
+  await archiveDocument(req, doc);
   res.json({ ok: true, archived: true });
 });
 

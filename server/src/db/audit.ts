@@ -64,6 +64,8 @@ export type AuditAction =
   | 'document.shared'
   | 'document.unshared'
   | 'document.archived'
+  /* An archived file brought back by an advisor (2026-11-11 audit, finding 8). */
+  | 'document.unarchived'
   /* The client took back a file they sent, before the advisor decided on it (2026-10-28 audit). */
   | 'document.withdrawn'
   | 'admin.action'
